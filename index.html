@@ -516,7 +516,7 @@ function toast(m,dur) {
 // ══════════════════════════════════════════════
 // SETTINGS
 // ══════════════════════════════════════════════
-const MODELS = ['claude-sonnet-4-6','claude-opus-4-6','claude-haiku-4-5-20251001'];
+const MODELS = ['claude-sonnet-4-6','claude-opus-4-7','claude-haiku-4-5-20251001'];
 
 
 function getKey() { return (localStorage.getItem('mp_key')||'').trim(); }
@@ -2544,7 +2544,7 @@ function renderEvalTxt(txt) {
         // Flush table
         h += '<div style="overflow-x:auto;margin:8px 0"><table style="border-collapse:collapse;font-size:12px;width:100%">';
         tableRows.forEach(function(row,ri) {
-          h += '<tr style="background:'+(ri===0?'rgba(26,42,114,.07)':'')+'border-bottom:1px solid var(--bor)">';
+          h += '<tr style="background:'+(ri===0?'rgba(26,42,114,.07)':'')+';border-bottom:1px solid var(--bor)">';
           row.forEach(function(cell){
             var tag = ri===0 ? 'th' : 'td';
             h += '<'+tag+' style="padding:5px 10px;text-align:left;border:1px solid var(--bor)">'+renderInline(cell.trim())+'</'+tag+'>';
@@ -2570,7 +2570,7 @@ function renderEvalTxt(txt) {
     if(inTable && !lt.startsWith('|')) {
       h += '<div style="overflow-x:auto;margin:8px 0"><table style="border-collapse:collapse;font-size:12px;width:100%">';
       tableRows.forEach(function(row,ri) {
-        h += '<tr style="'+(ri===0?'background:rgba(26,42,114,.07)':'')+'border-bottom:1px solid var(--bor)">';
+        h += '<tr style="'+(ri===0?'background:rgba(26,42,114,.07);':'')+'border-bottom:1px solid var(--bor)">';
         row.forEach(function(cell){
           var tag = ri===0 ? 'th' : 'td';
           h += '<'+tag+' style="padding:5px 10px;text-align:left;border:1px solid var(--bor)">'+renderInline(cell.trim())+'</'+tag+'>';
@@ -2899,6 +2899,8 @@ function openCase(id) { window._currentCaseId = id;
         if(flc) renderFL_C(id);
       }).catch(function(e){
         console.warn('[openCase] IndexedDB load failed:', e.message);
+        var flc = document.getElementById('fl_c');
+        if(flc) renderFL_C(id);
       });
     }
   } else {
@@ -5255,7 +5257,7 @@ function renderSet() {
   html+='<div class="fg"><label>Your Name</label><input id="s_n" value="'+esc(s.name)+'" placeholder="Your name"></div>';
   html+='<div class="fg"><label>Claude Model</label><select id="s_m">';
   html+='<option value="claude-sonnet-4-6"'+(s.mod==='claude-sonnet-4-6'?' selected':'')+'>Claude Sonnet 4.6 &mdash; Recommended</option>';
-  html+='<option value="claude-opus-4-6"'+(s.mod==='claude-opus-4-6'?' selected':'')+'>Claude Opus 4.6 &mdash; Most Powerful</option>';
+  html+='<option value="claude-opus-4-7"'+(s.mod==='claude-opus-4-7'?' selected':'')+'>Claude Opus 4.7 &mdash; Most Powerful</option>';
   html+='<option value="claude-haiku-4-5-20251001"'+(s.mod==='claude-haiku-4-5-20251001'?' selected':'')+'>Claude Haiku 4.5 &mdash; Fastest</option>';
   html+='</select></div></div>';
   html+='<div class="fg" style="margin-bottom:14px"><label>Anthropic API Key</label>';
