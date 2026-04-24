@@ -2772,7 +2772,14 @@ function renderDash() {
   const tClaim=CASES.reduce((s,c)=>s+(parseFloat(c.amountClaimed)||0),0);
   const tAppr=CASES.reduce((s,c)=>s+(parseFloat(c.amountApproved)||0),0);
 
-  let html = '<div class="sg">';
+  var fbConnected = typeof FB_READY !== 'undefined' && FB_READY;
+  var fbColor = fbConnected ? '#059669' : '#dc2626';
+  let html = '<div style="display:flex;align-items:center;gap:10px;padding:8px 14px;background:var(--card);border:1px solid var(--bor);border-radius:8px;margin-bottom:12px;font-size:12px">'
+    + '<span style="font-weight:600;color:var(--tx3)">Team Sync:</span>'
+    + '<span id="fb_status_dash" style="color:'+fbColor+';font-weight:600">'+(fbConnected?'🟢 Connected':'🔴 Not connected')+'</span>'
+    + '<button class="tbtn" style="margin-left:auto;font-size:11px;padding:4px 10px" onclick="forceSyncNow()">⟳ Sync Now</button>'
+    + '</div>';
+  html += '<div class="sg">';
   html += '<div class="sc bl"><div class="sl">Total Cases</div><div class="sv">'+total+'</div><div class="ss">'+open+' open</div></div>';
   html += '<div class="sc gr"><div class="sl">Approved</div><div class="sv">'+appr+'</div><div class="ss">'+(total?Math.round(appr/total*100):0)+'% rate</div></div>';
   html += '<div class="sc rd"><div class="sl">Critical</div><div class="sv">'+crit+'</div><div class="ss">Urgent action</div></div>';
@@ -6425,6 +6432,18 @@ function refreshPolicyLibraryUI() {
 }
 
 // Pull ALL cases from Firebase (initial load)
+function forceSyncNow() {
+  if(!FB_READY || !FB_DB) {
+    toast('⚠ Firebase not connected — check Settings → Team Sync', 4000);
+    // Try to reconnect
+    if(typeof autoInitFirebase==='function') autoInitFirebase();
+    return;
+  }
+  setFBStatus('sync', 'Syncing...');
+  syncPoliciesFromFirebase();
+  pullAllFromFirebase();
+}
+
 function pullAllFromFirebase() {
   if(!FB_READY || !FB_DB) return;
   if(!FB_COLLECTION) { console.warn('[Firebase] pullAllFromFirebase: FB_COLLECTION is empty'); return; }
@@ -6464,11 +6483,16 @@ function pullAllFromFirebase() {
 
 // Status indicator in Settings
 function setFBStatus(type, msg) {
-  var el = document.getElementById('fb_status');
-  if(!el) return;
   var colors = {ok:'#059669', sync:'#d97706', err:'#dc2626', off:'#8090b0'};
   var icons = {ok:'🟢', sync:'🔄', err:'🔴', off:'⚪'};
-  el.innerHTML = '<span style="font-size:12px;font-weight:600;color:'+( colors[type]||'#6b7280')+'">'+(icons[type]||'⚪')+' '+msg+'</span>';
+  var html = '<span style="font-size:12px;font-weight:600;color:'+( colors[type]||'#6b7280')+'">'+(icons[type]||'⚪')+' '+msg+'</span>';
+  var el = document.getElementById('fb_status');
+  if(el) el.innerHTML = html;
+  // Also update floating card status and dashboard status bar
+  var elf = document.getElementById('fb_status_f');
+  if(elf) elf.innerHTML = '<span style="font-size:11px;color:'+(colors[type]||'#6b7280')+'">'+(icons[type]||'⚪')+' '+msg+'</span>';
+  var eld = document.getElementById('fb_status_dash');
+  if(eld) eld.innerHTML = (icons[type]||'⚪')+' '+msg;
 }
 
 console.log('[Firebase Sync] Module loaded');
@@ -6521,11 +6545,13 @@ async function autoInitFirebase() {
   if(!cfg || !cfg.projectId) return;
   var sdkOk = await loadFirebaseSDK();
   if(!sdkOk) {
-    setFBStatus('err','Firebase SDK blocked by network — try different browser/network');
+    setFBStatus('err','Sync unavailable — check network');
+    toast('⚠ Firebase sync unavailable — check network/browser settings', 5000);
     return;
   }
   var ok = typeof initFirebase==='function' ? initFirebase(cfg) : false;
   if(ok) {
+    setFBStatus('ok', 'Connected — syncing...');
     startFirebaseSync();
     // Auto-pull policy library on every startup — ensures fresh browser/PC gets
     // full shared policy library without any manual action by the user.
