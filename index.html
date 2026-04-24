@@ -6393,6 +6393,7 @@ function syncPoliciesFromFirebase() {
   FB_DB.collection(FB_POLICIES_KEY).get().then(function(snapshot){
     if(snapshot.empty) {
       console.log('[Firebase] No policies in Firebase yet');
+      toast('No policies in Firebase yet — open the app on the PC that has policies and click ⟳ Sync Now', 6000);
       return;
     }
     var remotePolicies = [];
@@ -6435,13 +6436,17 @@ function refreshPolicyLibraryUI() {
 function forceSyncNow() {
   if(!FB_READY || !FB_DB) {
     toast('⚠ Firebase not connected — check Settings → Team Sync', 4000);
-    // Try to reconnect
     if(typeof autoInitFirebase==='function') autoInitFirebase();
     return;
   }
   setFBStatus('sync', 'Syncing...');
-  syncPoliciesFromFirebase();
-  pullAllFromFirebase();
+  // Push this device's data first, then pull from Firebase
+  CASES.forEach(function(c){ if(typeof syncCaseToFirestore==='function') syncCaseToFirestore(c); });
+  if(typeof pushPoliciesToFirebase==='function') pushPoliciesToFirebase(true);
+  setTimeout(function(){
+    syncPoliciesFromFirebase();
+    pullAllFromFirebase();
+  }, 1500);
 }
 
 function pullAllFromFirebase() {
