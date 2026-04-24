@@ -6350,7 +6350,11 @@ function pushPoliciesToFirebase(silent) {
   var policiesKey = 'mp_policies';
   var policies = [];
   try { policies = JSON.parse(localStorage.getItem(policiesKey)||'[]'); } catch(e){}
-  if(!policies.length) return;
+  if(!policies.length) {
+    console.log('[Firebase] pushPoliciesToFirebase: no local policies to push');
+    return;
+  }
+  console.log('[Firebase] Pushing', policies.length, 'policies to Firestore...');
 
   // First clear old policies from Firebase, then push current ones
   // This ensures Firebase matches exactly what you have locally
@@ -6362,19 +6366,32 @@ function pushPoliciesToFirebase(silent) {
     });
     Promise.all(batch).then(function(){
       // Now push current local policies
+      var pushPromises = [];
       policies.forEach(function(pol){
         if(!pol.id) pol.id = 'pol_'+Date.now()+'_'+Math.random().toString(36).slice(2,6);
         var lean = Object.assign({}, pol, {
           wording: (pol.wording||'').substring(0, 50000)
         });
-        FB_DB.collection(FB_POLICIES_KEY).doc(pol.id).set(lean)
-          .catch(function(e){ console.warn('[Firebase] Policy push failed:', e.message); });
+        pushPromises.push(FB_DB.collection(FB_POLICIES_KEY).doc(pol.id).set(lean)
+          .catch(function(e){ console.warn('[Firebase] Policy push failed:', e.message); throw e; }));
       });
-      console.log('[Firebase] Policies replaced:', policies.length);
-      if(!silent) toast('✓ '+policies.length+' policies pushed to all team members');
+      Promise.all(pushPromises).then(function(){
+        console.log('[Firebase] Policies replaced:', policies.length);
+        if(!silent) toast('✓ '+policies.length+' policies pushed to all team members');
+        else toast('✓ '+policies.length+' policies uploaded to Firebase');
+      }).catch(function(e){
+        toast('⚠ Policy upload failed: ' + e.message, 5000);
+        setFBStatus('err', 'Write blocked: ' + e.message.substring(0,30));
+      });
+    }).catch(function(e){
+      toast('⚠ Firebase write error: ' + e.message, 5000);
+      setFBStatus('err', 'Write blocked: ' + e.message.substring(0,30));
     });
   }).catch(function(e){
     // Fallback: just push without clearing
+    console.warn('[Firebase] Fallback push (no clear):', e.message);
+    toast('⚠ Firebase error: ' + e.message, 5000);
+    setFBStatus('err', e.message.substring(0,40));
     policies.forEach(function(pol){
       if(!pol.id) pol.id = 'pol_'+Date.now()+'_'+Math.random().toString(36).slice(2,6);
       var lean = Object.assign({}, pol, { wording: (pol.wording||'').substring(0, 50000) });
@@ -6415,7 +6432,8 @@ function syncPoliciesFromFirebase() {
     }
   }).catch(function(e){
     console.warn('[Firebase] Policy sync failed:', e.message);
-    toast('Policy sync failed — check Firebase connection');
+    toast('⚠ Policy sync error: ' + e.message, 6000);
+    setFBStatus('err', e.message.substring(0,40));
   });
 }
 
