@@ -1476,7 +1476,7 @@ async function autoExtractFinance(caseId, files) {
 // Build invoice breakdown text for evaluation prompt
 
 function fEUR(n){return n==null?'—':'€'+parseFloat(n).toLocaleString('en',{minimumFractionDigits:2,maximumFractionDigits:2});}
-var INV_PROMPT = 'You are an expert IPMI medical invoice analyst. ACCURACY IS CRITICAL — these are real insurance claims and any invented or guessed amounts can cause wrongful payment decisions. ZERO HALLUCINATION RULES: (1) Copy every amount EXACTLY as printed digit-by-digit — NEVER calculate, estimate, or reconstruct a total. (2) If an amount is missing or unreadable, use 0 — NEVER guess. (3) Copy every line item description verbatim in original language, then translate. (4) If the currency is not stated, use null — NEVER guess from country context. (5) Mark any uncertain value with [UNCERTAIN]. Read this invoice/receipt/bill completely — any language, any format. Translate all descriptions to English. Copy amounts EXACTLY as printed including decimals. Identify the EXACT currency from the document (look for currency symbols, codes, or country context — but only if explicitly shown). For European format: 1.500,00 = one thousand five hundred. For US format: 1,500.00 = one thousand five hundred. Read ALL line items including small charges, taxes, stamps, and annotations. Return ONLY raw JSON:\n{"provider_name":null,"provider_type":"hospital|clinic|pharmacy|lab|radiology|dental|physio|ambulance|other","provider_address":null,"provider_tax_id":null,"invoice_number":null,"invoice_date":null,"patient_name":null,"currency":"EXACT 3-letter ISO code ONLY if explicitly shown in document — null if not stated","line_items":[{"description":"in English","original_description":"exact original language text — copy verbatim","category":"consultation|surgery|anesthesia|room_board|nursing|medication|lab|radiology|physiotherapy|ambulance|consumables|implant|prosthesis|dental|vaccination|other","quantity":1,"unit_price":0,"total":0,"date":"service date if shown — null if not stated","ipmi_eligibility":"eligible|excluded|requires_review","eligibility_reason":"brief reason"}],"subtotal":0,"tax":0,"discount":0,"total":0,"deposit_paid":0,"outstanding":0,"total_eligible":0,"total_excluded":0,"payment_method":null,"notes":"any stamps, handwritten amounts, annotations, or important details. Flag any amounts that were unclear with [UNCERTAIN]","extraction_warnings":["one sentence per uncertain or approximated value — empty array if all values were clearly legible"]}';
+var INV_PROMPT = 'You are an expert IPMI medical invoice analyst. ACCURACY IS CRITICAL — these are real insurance claims and any invented or guessed amounts can cause wrongful payment decisions.\n\nZERO HALLUCINATION RULES:\n(1) Copy every amount EXACTLY as printed digit-by-digit — NEVER calculate, estimate, or reconstruct a total.\n(2) If an amount is missing or unreadable, use 0 — NEVER guess.\n(3) Copy every line item description verbatim in original language, then translate to English.\n(4) If the currency is not stated, use null — NEVER guess from country context.\n(5) Mark any uncertain value with [UNCERTAIN].\n(6) EXTRACT EVERY SINGLE LINE ITEM — do not skip, summarise, or merge any rows.\n\nCURRENCY RECOGNITION — identify the correct ISO code from these common symbols and codes:\n• EUR or € = EUR\n• USD or $ = USD\n• GBP or £ = GBP\n• INR or ₹ or Rs. or Rs = INR (Indian Rupees — common on Amazon.in, Indian hospitals, Indian pharmacies)\n• THB or ฿ = THB (Thai Baht)\n• AED or د.إ = AED\n• SGD or S$ = SGD\n• TRY or ₺ = TRY\n• CHF = CHF\n• JPY or ¥ = JPY\n• CNY or 元 = CNY\n• MYR or RM = MYR\n• PHP or ₱ = PHP\n• IDR or Rp = IDR\n• HKD or HK$ = HKD\nIf the currency symbol or code is printed anywhere on the document, use it.\n\nNUMBER FORMAT RULES:\n• European: 1.500,00 = one thousand five hundred (dot=thousands, comma=decimal)\n• US/UK: 1,500.00 = one thousand five hundred (comma=thousands, dot=decimal)\n• Indian: 1,23,456.00 = one hundred twenty-three thousand four hundred fifty-six (grouping at 2 digits after first 3 — do NOT treat commas as decimals)\n• If the total printed on the document does not match the sum of line items, always trust the printed total.\n\nRead this invoice/receipt/bill completely — any language, any country, any format. Extract EVERY line item including small charges, taxes, stamps, service fees, and annotations.\n\nReturn ONLY raw JSON (no markdown, no explanation):\n{"provider_name":null,"provider_type":"hospital|clinic|pharmacy|lab|radiology|dental|physio|ambulance|other","provider_address":null,"provider_tax_id":null,"invoice_number":null,"invoice_date":null,"patient_name":null,"currency":"EXACT 3-letter ISO code from the document — null if not shown","line_items":[{"description":"English translation","original_description":"verbatim original text","category":"consultation|surgery|anesthesia|room_board|nursing|medication|lab|radiology|physiotherapy|ambulance|consumables|implant|prosthesis|dental|vaccination|other","quantity":1,"unit_price":0,"total":0,"date":"service date or null","ipmi_eligibility":"eligible|excluded|requires_review","eligibility_reason":"brief reason"}],"subtotal":0,"tax":0,"discount":0,"total":0,"deposit_paid":0,"outstanding":0,"total_eligible":0,"total_excluded":0,"payment_method":null,"notes":"stamps, handwritten amounts, annotations, unclear items","extraction_warnings":[]}';
 function buildInvoiceBreakdown(caseId) {
   var invs = getInvoices(caseId);
   if(!invs || !invs.length) return '';
@@ -4937,7 +4937,7 @@ async function extractInvoiceData(fd) {
   mc.push({type:'text', text:INV_PROMPT});
 
   try {
-    const raw = await apiCall([{role:'user', content:mc}], null, 1500);
+    const raw = await apiCall([{role:'user', content:mc}], null, 4000);
     const cleaned = raw.trim().replace(/^```json\s*/,'').replace(/^```/,'').replace(/```$/,'').trim();
     const parsed = JSON.parse(cleaned);
     console.log('[Invoice] Extracted from', fd.name, ':', JSON.stringify(parsed).substring(0,100));
@@ -6062,7 +6062,10 @@ var FX = {
 function toEUR(amount, cur) {
   if(!amount || isNaN(parseFloat(amount))) return 0;
   if(!cur) return parseFloat(amount);
-  var key = (cur+'').toUpperCase().trim().replace(/[^A-Z]/g,'');
+  var raw = (cur+'').trim();
+  // Map common currency symbols and aliases to ISO codes
+  var symMap = {'₹':'INR','RS':'INR','RS.':'INR','฿':'THB','£':'GBP','€':'EUR','$':'USD','¥':'JPY','₺':'TRY','₱':'PHP','元':'CNY','RM':'MYR','RP':'IDR','HK$':'HKD','S$':'SGD','د.إ':'AED'};
+  var key = symMap[raw] || symMap[raw.toUpperCase()] || raw.toUpperCase().trim().replace(/[^A-Z]/g,'');
   var r = FX[key];
   if(!r) {
     // Try partial match for common aliases
@@ -10164,7 +10167,14 @@ async function extractFromNewFile(fd) {
     var safeNum = function(v) {
       if(v === null || v === undefined) return 0;
       if(typeof v === 'object') return 0;
-      return parseFloat(String(v).replace(/[^0-9.]/g,'')) || 0;
+      var s = String(v).trim();
+      // Detect European format: 1.500,00 — last separator is comma
+      if(/\d+\.\d{3},\d{2}$/.test(s)) s = s.replace(/\./g,'').replace(',','.');
+      // Detect Indian format: 1,23,456 or 12,34,567 — groups of 2 after first 3
+      else if(/^\d{1,3}(,\d{2})+,\d{3}(\.\d+)?$/.test(s) || /^\d{1,2},\d{2},\d{3}/.test(s)) s = s.replace(/,/g,'');
+      // Standard: remove thousands commas, keep decimal dot
+      else s = s.replace(/,(?=\d{3}(\D|$))/g,'');
+      return parseFloat(s.replace(/[^0-9.]/g,'')) || 0;
     };
 
     // Rebuild info with safe values — this prevents any object being used as a string
