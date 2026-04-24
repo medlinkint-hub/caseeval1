@@ -6337,7 +6337,7 @@ function deleteCaseFromFirestore(caseId) {
 }
 
 // Push all policies to Firebase
-function pushPoliciesToFirebase() {
+function pushPoliciesToFirebase(silent) {
   if(!FB_READY || !FB_DB) return;
   if(!FB_POLICIES_KEY) { console.warn('[Firebase] pushPoliciesToFirebase: FB_POLICIES_KEY is empty'); return; }
   var policiesKey = 'mp_policies';
@@ -6350,7 +6350,7 @@ function pushPoliciesToFirebase() {
   FB_DB.collection(FB_POLICIES_KEY).get().then(function(snapshot){
     // Delete all old policies from Firebase
     var batch = [];
-    snapshot.forEach(function(doc){ 
+    snapshot.forEach(function(doc){
       batch.push(FB_DB.collection(FB_POLICIES_KEY).doc(doc.id).delete());
     });
     Promise.all(batch).then(function(){
@@ -6364,7 +6364,7 @@ function pushPoliciesToFirebase() {
           .catch(function(e){ console.warn('[Firebase] Policy push failed:', e.message); });
       });
       console.log('[Firebase] Policies replaced:', policies.length);
-      toast('✓ '+policies.length+' policies pushed to all team members');
+      if(!silent) toast('✓ '+policies.length+' policies pushed to all team members');
     });
   }).catch(function(e){
     // Fallback: just push without clearing
@@ -6536,7 +6536,11 @@ async function autoInitFirebase() {
       setTimeout(function(){ pullAllFromFirebase(); }, 1500);
     }
     setTimeout(function(){
+      // Push local cases to Firebase so teammates always have the latest
       CASES.forEach(function(c){ syncCaseToFirestore(c); });
+      // Push local policies silently — ensures Firebase has them even if they
+      // were created before Firebase was first connected on this device
+      if(typeof pushPoliciesToFirebase==='function') pushPoliciesToFirebase(true);
     }, 2000);
   }
 }
