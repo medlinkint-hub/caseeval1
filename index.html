@@ -502,7 +502,7 @@ const genCN = () => {
     });
   }
   n = n + 1;
-  localStorage.setItem('mp_cn', n);
+  try { localStorage.setItem('mp_cn', n); } catch(e) { console.warn('[nextCaseNum] Storage write failed:', e.message); }
   return 'MAP-' + String(n).padStart(4,'0');
 };
 function toast(m,dur) {
@@ -516,7 +516,7 @@ function toast(m,dur) {
 // ══════════════════════════════════════════════
 // SETTINGS
 // ══════════════════════════════════════════════
-const MODELS = ['claude-sonnet-4-6','claude-opus-4-6','claude-haiku-4-5-20251001'];
+const MODELS = ['claude-sonnet-4-6','claude-opus-4-7','claude-haiku-4-5-20251001'];
 
 
 function getKey() { return (localStorage.getItem('mp_key')||'').trim(); }
@@ -2421,9 +2421,11 @@ async function sendCaseChat(presetText, caseId) {
     }
 
     // ── Persist to case record ──
-    chatHistory.push({role: 'user', content: question});
-    chatHistory.push({role: 'assistant', content: fullAnswer});
-    updC(id, {chatHistory: chatHistory});
+    if(fullAnswer.trim()) {
+      chatHistory.push({role: 'user', content: question});
+      chatHistory.push({role: 'assistant', content: fullAnswer});
+      updC(id, {chatHistory: chatHistory});
+    }
 
     // ── Auto-save Q&A to timeline silently ──
     var shortQ = question.length > 80 ? question.substring(0,77)+'...' : question;
@@ -2544,7 +2546,7 @@ function renderEvalTxt(txt) {
         // Flush table
         h += '<div style="overflow-x:auto;margin:8px 0"><table style="border-collapse:collapse;font-size:12px;width:100%">';
         tableRows.forEach(function(row,ri) {
-          h += '<tr style="background:'+(ri===0?'rgba(26,42,114,.07)':'')+'border-bottom:1px solid var(--bor)">';
+          h += '<tr style="background:'+(ri===0?'rgba(26,42,114,.07)':'')+';border-bottom:1px solid var(--bor)">';
           row.forEach(function(cell){
             var tag = ri===0 ? 'th' : 'td';
             h += '<'+tag+' style="padding:5px 10px;text-align:left;border:1px solid var(--bor)">'+renderInline(cell.trim())+'</'+tag+'>';
@@ -2570,7 +2572,7 @@ function renderEvalTxt(txt) {
     if(inTable && !lt.startsWith('|')) {
       h += '<div style="overflow-x:auto;margin:8px 0"><table style="border-collapse:collapse;font-size:12px;width:100%">';
       tableRows.forEach(function(row,ri) {
-        h += '<tr style="'+(ri===0?'background:rgba(26,42,114,.07)':'')+'border-bottom:1px solid var(--bor)">';
+        h += '<tr style="'+(ri===0?'background:rgba(26,42,114,.07);':'')+'border-bottom:1px solid var(--bor)">';
         row.forEach(function(cell){
           var tag = ri===0 ? 'th' : 'td';
           h += '<'+tag+' style="padding:5px 10px;text-align:left;border:1px solid var(--bor)">'+renderInline(cell.trim())+'</'+tag+'>';
@@ -2899,6 +2901,8 @@ function openCase(id) { window._currentCaseId = id;
         if(flc) renderFL_C(id);
       }).catch(function(e){
         console.warn('[openCase] IndexedDB load failed:', e.message);
+        var flc = document.getElementById('fl_c');
+        if(flc) renderFL_C(id);
       });
     }
   } else {
@@ -4929,7 +4933,7 @@ async function extractInvoiceData(fd) {
 }
 
 function getInvoices(caseId) { try { return JSON.parse(localStorage.getItem('invs_'+caseId)||'[]'); } catch(e) { return []; } }
-function saveInvoices(caseId, arr) { localStorage.setItem('invs_'+caseId, JSON.stringify(arr)); }
+function saveInvoices(caseId, arr) { try { localStorage.setItem('invs_'+caseId, JSON.stringify(arr)); } catch(e) { console.warn('[saveInvoices] Storage write failed:', e.message); toast('Storage full — invoice data could not be saved'); } }
 
 async function extractAllInvoices(caseId) {
   const c = getC(caseId); if(!c) { toast('Case not found'); return; }
@@ -5255,7 +5259,7 @@ function renderSet() {
   html+='<div class="fg"><label>Your Name</label><input id="s_n" value="'+esc(s.name)+'" placeholder="Your name"></div>';
   html+='<div class="fg"><label>Claude Model</label><select id="s_m">';
   html+='<option value="claude-sonnet-4-6"'+(s.mod==='claude-sonnet-4-6'?' selected':'')+'>Claude Sonnet 4.6 &mdash; Recommended</option>';
-  html+='<option value="claude-opus-4-6"'+(s.mod==='claude-opus-4-6'?' selected':'')+'>Claude Opus 4.6 &mdash; Most Powerful</option>';
+  html+='<option value="claude-opus-4-7"'+(s.mod==='claude-opus-4-7'?' selected':'')+'>Claude Opus 4.7 &mdash; Most Powerful</option>';
   html+='<option value="claude-haiku-4-5-20251001"'+(s.mod==='claude-haiku-4-5-20251001'?' selected':'')+'>Claude Haiku 4.5 &mdash; Fastest</option>';
   html+='</select></div></div>';
   html+='<div class="fg" style="margin-bottom:14px"><label>Anthropic API Key</label>';
@@ -5329,7 +5333,7 @@ function renderSet() {
   html += '<div class="card" style="margin-bottom:12px">';
   html += '<div class="ct">🌐 Γλώσσα Αξιολόγησης / Evaluation Language</div>';
   html += '<div class="fg"><label>Γλώσσα αξιολόγησης / Evaluation report language</label>';
-  html += '<select id="st_lang" onchange="localStorage.setItem(\'mp_eval_lang\',this.value);toast(\'✓ Γλώσσα αποθηκεύτηκε\')" style="width:100%;padding:8px;border:1px solid var(--bor);border-radius:6px;font-size:13px">';
+  html += '<select id="st_lang" onchange="saveLang1(this.value)" style="width:100%;padding:8px;border:1px solid var(--bor);border-radius:6px;font-size:13px">';
   html += '<option value="el"'+(_lang==='el'?' selected':'')+'>🇬🇷 Ελληνικά (Greek) — Προεπιλογή</option>';
   html += '<option value="en"'+(_lang==='en'?' selected':'')+'>🇬🇧 English</option>';
   html += '<option value="auto"'+(_lang==='auto'?' selected':'')+'>🔄 Auto (follows policy language)</option>';
@@ -5433,12 +5437,14 @@ function renderSet() {
   if(typeof FB_READY !== 'undefined' && FB_READY) setFBStatus('ok','Connected — live sync active');
   else if(getFBConfig()&&getFBConfig().projectId) setFBStatus('off','Config saved — click Connect to activate');
     var bSG=document.getElementById('btn_save_gist');
-  if(bSG)bSG.onclick=async function(){var tok=(document.getElementById('gist_token').value||'').trim();var gid=(document.getElementById('gist_id').value||'').trim();localStorage.setItem('mp_gist_token',tok);localStorage.setItem('mp_gist_id',gid);var st=document.getElementById('gist_status');if(!tok){toast('Enter your GitHub token');return;}if(!gid){if(st)st.textContent='Creating...';if(typeof createGist1==='function')await createGist1();}else{if(st)st.textContent='Testing...';if(typeof pullFromGist1==='function'){var ok=await pullFromGist1(false);if(ok&&st)st.innerHTML='Connected! Share Gist ID <b>'+gid+'</b> with your team';}}};
+  if(bSG)bSG.onclick=saveGistSettings1;
   var bP=document.getElementById('btn_pull_gist');if(bP)bP.onclick=function(){if(typeof pullFromGist1==='function')pullFromGist1(false);};
   var bPu=document.getElementById('btn_push_gist');if(bPu)bPu.onclick=function(){if(typeof pushToGist1==='function')pushToGist1(false);};
 }
 function cleanStorage1(){freeStorage();renderSet();toast('Storage cleaned');}
 function aggressiveCleanup1(){var keys=[];for(var i=0;i<localStorage.length;i++){var k=localStorage.key(i);if(k)keys.push(k);}var freed=0;keys.forEach(function(k){if(k.startsWith('fd_')||k.startsWith('fdtmp_')||k.startsWith('invs_')){localStorage.removeItem(k);freed++;}});toast('Freed '+freed+' items');renderSet();}
+function saveLang1(v){try{localStorage.setItem('mp_eval_lang',v);toast('✓ Γλώσσα αποθηκεύτηκε');}catch(e){toast('Storage full — language preference not saved');}}
+async function saveGistSettings1(){var tok=(document.getElementById('gist_token').value||'').trim();var gid=(document.getElementById('gist_id').value||'').trim();try{localStorage.setItem('mp_gist_token',tok);localStorage.setItem('mp_gist_id',gid);}catch(e){toast('Storage full — Gist settings not saved');return;}var st=document.getElementById('gist_status');if(!tok){toast('Enter your GitHub token');return;}if(!gid){if(st)st.textContent='Creating...';if(typeof createGist1==='function')await createGist1();if(typeof startAutoSync1==='function')startAutoSync1();}else{if(st)st.textContent='Testing...';if(typeof pullFromGist1==='function'){var ok=await pullFromGist1(false);if(ok){if(st)st.innerHTML='Connected! Share Gist ID <b>'+gid+'</b> with your team';if(typeof startAutoSync1==='function')startAutoSync1();}}}}
 
 const cntW = t => (t||'').trim().split(/\s+/).filter(Boolean).length;
 
@@ -5448,10 +5454,16 @@ function saveSet() {
   const pol  = localStorage.getItem('mp_pol')||'';
   const name = (G('s_n')||{}).value||'Team Member';
   if(!MODELS.includes(mod)) { toast('Invalid model selected'); return; }
-  localStorage.setItem('mp_key', key);
-  localStorage.setItem('mp_mod', mod);
-  localStorage.setItem('mp_pol', pol);
-  localStorage.setItem('mp_name', name);
+  try {
+    localStorage.setItem('mp_key', key);
+    localStorage.setItem('mp_mod', mod);
+    localStorage.setItem('mp_pol', pol);
+    localStorage.setItem('mp_name', name);
+  } catch(e) {
+    toast('Storage full — settings could not be saved');
+    console.warn('[saveSet] Storage write failed:', e.message);
+    return;
+  }
   updBadges();
   toast('Settings saved! Key: '+(key?key.substring(0,12)+'...':'EMPTY'));
   console.log('[Settings] Saved - key starts:', key.substring(0,12), 'model:', mod);
@@ -6518,6 +6530,11 @@ async function autoInitFirebase() {
     // Auto-pull policy library on every startup — ensures fresh browser/PC gets
     // full shared policy library without any manual action by the user.
     if(typeof syncPoliciesFromFirebase==='function') syncPoliciesFromFirebase();
+    // Auto-pull all cases on startup — critical for a second PC that has no
+    // local data yet; the merge logic is safe when CASES already has entries.
+    if(typeof pullAllFromFirebase==='function') {
+      setTimeout(function(){ pullAllFromFirebase(); }, 1500);
+    }
     setTimeout(function(){
       CASES.forEach(function(c){ syncCaseToFirestore(c); });
     }, 2000);
@@ -7647,6 +7664,10 @@ initStorage();
 autoInitFirebase();
 updBadges();
 renderDash();
+// Auto-start Gist sync if the user already has credentials stored on this device
+setTimeout(function(){
+  if(typeof gistReady1==='function' && gistReady1() && typeof startAutoSync1==='function') startAutoSync1();
+}, 3000);
 setTimeout(function(){
   var key=getKey();
   if(!key) toast('Welcome to CaseEval 1! Add your API key in Settings.',5000);
@@ -7669,7 +7690,13 @@ function getPolicies1() {
 }
 function savePolicies1(arr) {
   // Always write to localStorage first (instant, synchronous)
-  localStorage.setItem('mp_policies', JSON.stringify(arr));
+  try {
+    localStorage.setItem('mp_policies', JSON.stringify(arr));
+  } catch(e) {
+    console.warn('[savePolicies1] Storage write failed:', e.message);
+    toast('Storage full — policy library could not be saved');
+    return;
+  }
   // Immediately push to Firebase — no setTimeout delay.
   // A deferred push risks being lost if the user closes the tab before 1 second elapses.
   // Firebase push is also lightweight (only changed docs), so immediate is safe.
@@ -11013,7 +11040,7 @@ async function checkPassword() {
   if(hash === PW_HASH) {
     // Correct — store session and reveal the app
     PW_ATTEMPTS = 0;
-    sessionStorage.setItem(PW_SESSION_KEY, '1');
+    try { sessionStorage.setItem(PW_SESSION_KEY, '1'); } catch(e) { console.warn('[login] sessionStorage write failed:', e.message); }
     var screen = document.getElementById('pw-screen');
     if(screen) {
       screen.style.transition = 'opacity .4s';
