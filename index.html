@@ -4119,12 +4119,13 @@ async function processExtractQueue() {
   }
   
   window._extracting = false;
-  
+
   // Process next in queue after short delay
   if(window._extractQueue && window._extractQueue.length > 0) {
     setTimeout(processExtractQueue, 800);
   } else {
-    // All done
+    // All done — force _pendingReads to 0 in case a FileReader stalled
+    window._pendingReads = 0;
     if(stEl) {
       stEl.innerHTML = '<div style="padding:8px 12px;background:#d1fae5;border-radius:6px;border-left:3px solid #059669;font-size:12px;color:#065f46">'
         + '✅ All documents read — ' + (window._newCaseFiles||[]).length + ' files ready. Check fields above and click Create Case.</div>';
@@ -4234,6 +4235,15 @@ function handleNewFiles(fileList) {
     };
     r.readAsDataURL(file);
   });
+
+  // Safety net: if any FileReader stalls, unlock the button after 30s
+  setTimeout(function() {
+    if(window._pendingReads > 0) {
+      console.warn('[handleNewFiles] FileReader timeout — forcing _pendingReads to 0');
+      window._pendingReads = 0;
+      updateCreateButton();
+    }
+  }, 30000);
 }
 
 function renderNew() {
