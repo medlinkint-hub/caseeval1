@@ -6153,6 +6153,11 @@ var FB_SYNCING = false;
 var FB_COLLECTION = 'cases';
 var FB_POLICIES_KEY = 'policies';
 
+function ensureFBKeys() {
+  if(!FB_COLLECTION) FB_COLLECTION = 'cases';
+  if(!FB_POLICIES_KEY) FB_POLICIES_KEY = 'policies';
+}
+
 function getFBConfig() {
   try {
     var raw = localStorage.getItem('hw_fb_config');
@@ -6192,6 +6197,7 @@ function initFirebase(config) {
 // Start real-time listener — updates CASES array when any teammate changes a case
 function startFirebaseSync() {
   if(!FB_READY || !FB_DB) return;
+  ensureFBKeys();
   // Guard: ensure collection paths are non-empty strings before any collection() call
   if(!FB_COLLECTION || !FB_POLICIES_KEY) {
     console.warn('[Firebase] startFirebaseSync aborted — collection path is empty');
@@ -6315,6 +6321,7 @@ function startFirebaseSync() {
 // Push a single case to Firebase (called on every save)
 function syncCaseToFirestore(caseObj) {
   if(!FB_READY || !FB_DB || !caseObj || !caseObj.id) return;
+  ensureFBKeys();
   if(!FB_COLLECTION) { console.warn('[Firebase] syncCaseToFirestore: FB_COLLECTION is empty'); return; }
 
   // Strip file data before syncing (files stay local in IndexedDB)
@@ -6346,6 +6353,7 @@ function deleteCaseFromFirestore(caseId) {
 // Push all policies to Firebase
 function pushPoliciesToFirebase(silent) {
   if(!FB_READY || !FB_DB) return;
+  ensureFBKeys();
   if(!FB_POLICIES_KEY) { console.warn('[Firebase] pushPoliciesToFirebase: FB_POLICIES_KEY is empty'); return; }
   var policiesKey = 'mp_policies';
   var policies = [];
@@ -6406,6 +6414,7 @@ function pushPoliciesToFirebase(silent) {
 // Pull policies from Firebase
 function syncPoliciesFromFirebase() {
   if(!FB_READY || !FB_DB) return;
+  ensureFBKeys();
   if(!FB_POLICIES_KEY) { console.warn('[Firebase] syncPoliciesFromFirebase: FB_POLICIES_KEY is empty'); return; }
   FB_DB.collection(FB_POLICIES_KEY).get().then(function(snapshot){
     if(snapshot.empty) {
@@ -6469,6 +6478,7 @@ function forceSyncNow() {
 
 function pullAllFromFirebase() {
   if(!FB_READY || !FB_DB) return;
+  ensureFBKeys();
   if(!FB_COLLECTION) { console.warn('[Firebase] pullAllFromFirebase: FB_COLLECTION is empty'); return; }
   setFBStatus('sync', 'Loading from Firebase...');
   FB_DB.collection(FB_COLLECTION).get().then(function(snapshot){
