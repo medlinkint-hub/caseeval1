@@ -2420,18 +2420,18 @@ async function sendCaseChat(presetText, caseId) {
       if(allBubbles.length) allBubbles[allBubbles.length-1].innerHTML = _renderChatText(fullAnswer);
     }
 
-    // ── Persist to case record ──
+    // ── Persist to case record + timeline ──
     if(fullAnswer.trim()) {
       chatHistory.push({role: 'user', content: question});
       chatHistory.push({role: 'assistant', content: fullAnswer});
       updC(id, {chatHistory: chatHistory});
-    }
 
-    // ── Auto-save Q&A to timeline silently ──
-    var shortQ = question.length > 80 ? question.substring(0,77)+'...' : question;
-    var shortA = fullAnswer.replace(/\*\*/g,'').replace(/#{1,3}\s/g,'');
-    shortA = shortA.length > 120 ? shortA.substring(0,117)+'...' : shortA;
-    addTL(id, '💬 Q: ' + shortQ + ' → A: ' + shortA);
+      // Auto-save Q&A to timeline silently
+      var shortQ = question.length > 80 ? question.substring(0,77)+'...' : question;
+      var shortA = fullAnswer.replace(/\*\*/g,'').replace(/#{1,3}\s/g,'');
+      shortA = shortA.length > 120 ? shortA.substring(0,117)+'...' : shortA;
+      addTL(id, '💬 Q: ' + shortQ + ' → A: ' + shortA);
+    }
 
     msgs.scrollTop = msgs.scrollHeight;
 
@@ -4237,12 +4237,15 @@ function handleNewFiles(fileList) {
   });
 
   // Safety net: if any FileReader stalls, unlock the button after 30s
-  setTimeout(function() {
+  // Store timer ID so renderNew() can cancel it if the user navigates away
+  if(window._pendingReadsTimeout) clearTimeout(window._pendingReadsTimeout);
+  window._pendingReadsTimeout = setTimeout(function() {
     if(window._pendingReads > 0) {
       console.warn('[handleNewFiles] FileReader timeout — forcing _pendingReads to 0');
       window._pendingReads = 0;
       updateCreateButton();
     }
+    window._pendingReadsTimeout = null;
   }, 30000);
 }
 
@@ -4250,6 +4253,8 @@ function renderNew() {
   window._currentCaseId = null;
   window._newCaseFiles = [];
   window._pendingReads = 0;
+  // Cancel any stale FileReader safety-net timer from a previous visit to this page
+  if(window._pendingReadsTimeout) { clearTimeout(window._pendingReadsTimeout); window._pendingReadsTimeout = null; }
   window._extractQueue = [];
   window._extracting = false;
   window.FILES = []; // Clear any files from previously opened case
@@ -6480,13 +6485,45 @@ function forceSyncNow() {
     return;
   }
   setFBStatus('sync', 'Syncing...');
-  // Push this device's data first, then pull from Firebase
+  // Push cases immediately (individual doc writes, fast)
   CASES.forEach(function(c){ if(typeof syncCaseToFirestore==='function') syncCaseToFirestore(c); });
-  if(typeof pushPoliciesToFirebase==='function') pushPoliciesToFirebase(true);
-  setTimeout(function(){
+  // Push policies then pull — chained so pull only starts after push completes
+  if(typeof pushPoliciesToFirebase==='function' && FB_READY && FB_DB) {
+    ensureFBKeys();
+    var policies = [];
+    try { policies = JSON.parse(localStorage.getItem('mp_policies')||'[]'); } catch(e){}
+    if(policies.length) {
+      // Push policies and wait for completion before pulling
+      var pushDone = FB_DB.collection(FB_POLICIES_KEY).get().then(function(snap){
+        var dels = [];
+        snap.forEach(function(d){ dels.push(FB_DB.collection(FB_POLICIES_KEY).doc(d.id).delete()); });
+        return Promise.all(dels);
+      }).then(function(){
+        var writes = policies.map(function(pol){
+          if(!pol.id) pol.id = 'pol_'+Date.now()+'_'+Math.random().toString(36).slice(2,6);
+          return FB_DB.collection(FB_POLICIES_KEY).doc(pol.id).set(Object.assign({},pol,{wording:(pol.wording||'').substring(0,50000)}));
+        });
+        return Promise.all(writes);
+      }).then(function(){
+        toast('✓ '+policies.length+' policies uploaded to Firebase');
+        syncPoliciesFromFirebase();
+        pullAllFromFirebase();
+      }).catch(function(e){
+        toast('⚠ Policy upload failed: '+e.message, 5000);
+        setFBStatus('err', e.message.substring(0,40));
+        // Still pull even if push failed
+        syncPoliciesFromFirebase();
+        pullAllFromFirebase();
+      });
+    } else {
+      // No local policies — just pull
+      syncPoliciesFromFirebase();
+      pullAllFromFirebase();
+    }
+  } else {
     syncPoliciesFromFirebase();
     pullAllFromFirebase();
-  }, 1500);
+  }
 }
 
 function pullAllFromFirebase() {
