@@ -11206,9 +11206,13 @@ function resetStoredPassword() {
 }
 
 function showForgot() {
-  document.getElementById('pw-err').textContent = 'Contact your HealthWatch administrator to reset.';
-  var resetEl = document.getElementById('pw-reset');
-  if(resetEl) resetEl.style.display = 'block';
+  localStorage.removeItem('hw_custom_pw');
+  PW_HASH = PW_DEFAULT_HASH;
+  PW_ATTEMPTS = 0;
+  document.getElementById('pw-err').style.color = '#059669';
+  document.getElementById('pw-err').textContent = 'Password reset. Use the default password: HealthWatch2025!';
+  var inp = document.getElementById('pw-input');
+  if(inp) { inp.value = ''; inp.focus(); }
 }
 
 // Allow Enter key + restore session on reload
