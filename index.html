@@ -429,7 +429,14 @@ function emailDocFromSidebar(){
 function confirmClearAll(){if(confirm('Delete ALL data? Cannot be undone.'))clearAll();}
 
 function delFileNew(i){FILES.splice(i,1);renderFL_N();}
-function delFileCur(i){FILES.splice(i,1);updC(CURID,{filesData:FILES});renderFL_C(CURID);}
+function delFileCur(i){
+  if(_filesForCaseId && _filesForCaseId !== CURID) {
+    console.warn('[delFileCur] FILES owned by',_filesForCaseId,'not',CURID,'— abort delete');
+    toast('Error: wrong case context. Please reopen the case and try again.');
+    return;
+  }
+  FILES.splice(i,1);updC(CURID,{filesData:FILES.map(function(f){return {name:f.name,size:f.size,type:f.type||'',ext:f.ext,_key:f._key||null};})});renderFL_C(CURID);
+}
 function toggleDT(el){var b=el.parentElement.querySelector('.dtb');if(b)b.classList.toggle('open');}
 function goNew(){navTo('new')}
 function goDash(){navTo('dash')}
@@ -5006,13 +5013,15 @@ async function extractAllInvoices(caseId) {
       const d = localStorage.getItem(meta._key);
       if(d) { files.push({...meta, data:d}); continue; }
     }
-    // Fallback: check FILES global by name
-    const mem = FILES.find(f=>f.name===meta.name&&f.data);
-    if(mem) files.push({...mem});
+    // Fallback: check FILES global by name — only if FILES belongs to this case
+    if(_filesForCaseId === caseId) {
+      const mem = FILES.find(f=>f.name===meta.name&&f.data);
+      if(mem) files.push({...mem});
+    }
   }
 
-  // Last resort: FILES global directly
-  if(!files.length) {
+  // Last resort: FILES global directly — only if FILES belongs to this case
+  if(!files.length && _filesForCaseId === caseId) {
     files = FILES.filter(f=>f.data&&SUPPORTED.includes(f.ext));
   }
 
@@ -10149,6 +10158,12 @@ async function extractAndMerge(fd, caseId) {
 // ── addFiles: store + auto-extract ALL supported types ────────
 function addFiles(list, caseId) {
   var EXTRACTABLE = ['img','heic','pdf','doc','xls','rtf','eml','html','txt'];
+  // If FILES belongs to a different case, reset before adding (prevents cross-case bleed)
+  if(_filesForCaseId !== caseId) {
+    console.warn('[addFiles] FILES belonged to', _filesForCaseId, '— resetting for', caseId);
+    FILES = [];
+    _filesForCaseId = caseId;
+  }
   list.forEach(function(f){
     var r = new FileReader();
     r.onload = function(e){
@@ -10549,6 +10564,12 @@ function reuploadCaseFiles(caseId) {
   input.multiple = true;
   input.accept = '.pdf,.doc,.docx,.xls,.xlsx,.jpg,.jpeg,.png,.heic,.eml,.txt,.rtf,.html';
   input.onchange = function(e) {
+    // If FILES belongs to a different case, reset so we don't mix data
+    if(_filesForCaseId !== caseId) {
+      console.warn('[reuploadCaseFiles] FILES owned by',_filesForCaseId,'— resetting for',caseId);
+      FILES = [];
+      _filesForCaseId = caseId;
+    }
     var files = Array.from(e.target.files);
     var matched = 0, unmatched = 0;
     var pending = files.length;
@@ -10637,6 +10658,7 @@ function handleCaseFiles(fileList, caseId) {
 
 function clearSessionFiles(caseId) {
   window.FILES = [];
+  window._filesForCaseId = null;
   toast('Files cleared');
 }
 
@@ -10651,6 +10673,7 @@ function clearCaseDocuments(caseId) {
   // Clear filesData
   updC(caseId, {filesData: []});
   window.FILES = [];
+  window._filesForCaseId = null;
   renderFL_C(caseId);
   toast('✓ Documents cleared — you can now re-upload the correct files');
 }
@@ -10783,15 +10806,21 @@ function saveEvalAsDocument(caseId, evalText, decision) {
   };
 
   // Remove any previous eval report for this case (keep only the latest)
-  FILES = FILES.filter(function(f){ return !f._isEvalReport; });
-  FILES.push(evalFileEntry);
+  // Guard: only touch FILES if it belongs to this case
+  if(_filesForCaseId === caseId) {
+    FILES = FILES.filter(function(f){ return !f._isEvalReport; });
+    FILES.push(evalFileEntry);
+  }
 
-  // Persist to IndexedDB
+  // Persist to IndexedDB — merge eval report into whatever is stored for this case
   var idbKey = 'casefiles_' + caseId;
-  idbSet(idbKey, FILES.map(function(f){
-    return {name:f.name, ext:f.ext, size:f.size, type:f.type||'', data:f.data||null,
-      _key:f._key||null, _isEvalReport:f._isEvalReport||false, _decision:f._decision||'', _evalDate:f._evalDate||''};
-  })).then(function(){
+  var filesToSave = (_filesForCaseId === caseId)
+    ? FILES.map(function(f){
+        return {name:f.name, ext:f.ext, size:f.size, type:f.type||'', data:f.data||null,
+          _key:f._key||null, _isEvalReport:f._isEvalReport||false, _decision:f._decision||'', _evalDate:f._evalDate||''};
+      })
+    : [evalFileEntry]; // FILES belongs to a different case — save only the eval report
+  idbSet(idbKey, filesToSave).then(function(){
     console.log('[saveEvalAsDocument] Evaluation saved as document:', fileName);
   }).catch(function(e){ console.warn('[saveEvalAsDocument] IDB save failed:', e.message); });
 
