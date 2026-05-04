@@ -627,6 +627,7 @@ const addTL = (id,action) => {
 };
 
 let FILES = [];
+var _filesForCaseId = null; // tracks which case the FILES array belongs to — prevents cross-case bleed
 // ── Layer 1 session cache (fastest read path) ──────────────────────────────
 // Keyed by "caseId_filename". Populated on every upload and IDB load.
 // Always checked before IndexedDB to avoid async overhead on hot paths.
@@ -1550,10 +1551,12 @@ async function runEval(caseId) {
   }
   
   // ── Auto-load files from IndexedDB if not in memory ──
-  // Fires when: FILES is empty, OR all entries are metadata-only (no .data)
+  // Fires when: FILES belongs to a different case, is empty, or all entries are metadata-only
   var c0 = getC(caseId);
   var needsIDBLoad = c0 && c0.filesData && c0.filesData.length > 0 &&
-    (FILES.length === 0 || FILES.every(function(f){ return !f.data || f.data.length <= 100; }));
+    (_filesForCaseId !== caseId ||
+     FILES.length === 0 ||
+     FILES.every(function(f){ return !f.data || f.data.length <= 100; }));
 
   if(needsIDBLoad) {
     setEvSt('run', '⏳ Loading documents from storage...');
@@ -1569,9 +1572,10 @@ async function runEval(caseId) {
       try {
         var idbFiles0 = await idbGet(_idbKeys[_ki]);
         if(idbFiles0 && Array.isArray(idbFiles0) && idbFiles0.length > 0) {
-          FILES = idbFiles0.map(function(f){ 
+          FILES = idbFiles0.map(function(f){
             return Object.assign({}, f, {ext: (f.ext && f.ext.length <= 4 && ['pdf','doc','img','xls','rtf','eml','txt','html','heic','other'].indexOf(f.ext)!==-1) ? f.ext : fxt(f.name||'')});
           });
+          _filesForCaseId = caseId; // mark these files as belonging to caseId
           loaded = true;
           console.log('[runEval] Loaded', FILES.length, 'files from IDB key:', _idbKeys[_ki]);
         }
@@ -1592,6 +1596,7 @@ async function runEval(caseId) {
       });
       if(loaded) {
         FILES = recovered;
+        _filesForCaseId = caseId; // mark these files as belonging to caseId
         console.log('[runEval] Recovered', FILES.filter(function(f){return f.data;}).length, 'files from localStorage fallback');
       }
     }
@@ -2872,27 +2877,29 @@ function openCase(id) { window._currentCaseId = id;
   CURID = id;
   const c = getC(id); if(!c) return;
   
-  // Check if FILES already has data for THIS case (just created)
-  var currentFilesAreForThisCase = FILES.length > 0 && 
-    c.filesData && c.filesData.length > 0 &&
-    FILES[0] && c.filesData[0] && FILES[0].name === c.filesData[0].name;
-  
+  // Check if FILES already loaded for exactly THIS case (by case ID, not filename)
+  var currentFilesAreForThisCase = (_filesForCaseId === id) && FILES.length > 0 &&
+    FILES.some(function(f){ return f.data && f.data.length > 100; });
+
   if(!currentFilesAreForThisCase) {
-    // Different case - load from IndexedDB
+    // Different case (or no data loaded) — clear and reload from IndexedDB
     FILES = [];
+    _filesForCaseId = id; // claim ownership immediately so concurrent openCase() calls don't double-load
     if(c.filesData && c.filesData.length) {
       var _idbKey = c._idbKey || ('casefiles_' + id);
-      // Show metadata immediately
+      // Show metadata immediately so UI renders file names while data loads
       FILES = c.filesData.map(function(meta){ return Object.assign({}, meta); });
       // Load actual data from IDB
       idbGet(_idbKey).then(function(idbFiles) {
+        // Guard: user may have navigated to a different case while we were loading
+        if(_filesForCaseId !== id) { console.warn('[openCase] Case switched during IDB load — discarding', id); return; }
         if(idbFiles && Array.isArray(idbFiles) && idbFiles.length > 0) {
           FILES = idbFiles.map(function(f){ return Object.assign({}, f); });
           // Populate _FILE_CACHE so subsequent reads (runEval, docManifest) are instant
           FILES.forEach(function(f) {
             if(f.data) _FILE_CACHE[id + '_' + f.name] = f;
           });
-          console.log('[openCase] Loaded', FILES.length, 'files from IndexedDB — _FILE_CACHE:', Object.keys(_FILE_CACHE).length);
+          console.log('[openCase] Loaded', FILES.length, 'files from IndexedDB for case', id);
         } else {
           // Try localStorage fallback
           FILES = c.filesData.map(function(meta) {
@@ -2913,7 +2920,7 @@ function openCase(id) { window._currentCaseId = id;
       });
     }
   } else {
-    console.log('[openCase] Using existing FILES array -', FILES.length, 'files already loaded');
+    console.log('[openCase] Using existing FILES array for case', id, '-', FILES.length, 'files already loaded');
   }
   document.querySelectorAll('.ni').forEach(n=>n.classList.remove('on'));
   const el = document.querySelector('.ni[data-p="cases"]'); if(el) el.classList.add('on');
@@ -3852,15 +3859,28 @@ async function extractInvoicesFromCase(caseId) {
   const c = getC(caseId);
   const SUPPORTED = ['img','pdf','doc','txt'];
 
+  // If FILES belongs to a different case, reload from IDB for this case first
+  if(_filesForCaseId !== caseId && c && c.filesData && c.filesData.length > 0) {
+    setS('Loading documents…', 'run');
+    var _idbKeyExt = c._idbKey || ('casefiles_' + caseId);
+    try {
+      var idbFilesExt = await idbGet(_idbKeyExt);
+      if(idbFilesExt && Array.isArray(idbFilesExt) && idbFilesExt.length > 0) {
+        FILES = idbFilesExt;
+        _filesForCaseId = caseId;
+      }
+    } catch(e) { console.warn('[extractInvoices] IDB load failed:', e.message); }
+  }
+
   // Build file list from ALL available sources
   let readyFiles = [];
 
-  // Source 1: FILES in memory WITH data (just uploaded this session)
-  const fromMemory = FILES.filter(f => f.data && SUPPORTED.includes(f.ext));
+  // Source 1: FILES in memory WITH data (verified for this case)
+  const fromMemory = (_filesForCaseId === caseId ? FILES : []).filter(f => f.data && SUPPORTED.includes(f.ext));
   readyFiles = [...fromMemory];
 
   // Source 2: metadata-only FILES - reload data from localStorage
-  const noData = FILES.filter(f => !f.data && SUPPORTED.includes(f.ext));
+  const noData = (_filesForCaseId === caseId ? FILES : []).filter(f => !f.data && SUPPORTED.includes(f.ext));
   for(const meta of noData) {
     if(meta._key) {
       const stored = localStorage.getItem(meta._key);
@@ -4258,6 +4278,7 @@ function renderNew() {
   window._extractQueue = [];
   window._extracting = false;
   window.FILES = []; // Clear any files from previously opened case
+  window._filesForCaseId = null; // no case owns FILES now
   setTop('New Case','Create a new case','');
   var pols = typeof getPolicies1==='function' ? getPolicies1() : [];
   var html = '';
@@ -4428,6 +4449,7 @@ function createCase() {
   }
   // Reset FILES first to prevent previous case files bleeding in
   window.FILES = [];
+  window._filesForCaseId = null; // clear case ownership while we set up
   // Transfer ALL new case files to FILES array (data in memory - no localStorage limit)
   if(window._newCaseFiles && window._newCaseFiles.length) {
     window.FILES = window._newCaseFiles.slice();
@@ -4488,11 +4510,13 @@ function createCase() {
   });
   updC(id, {filesData: allMeta, _idbKey: idbKey});
   toast('Case '+cn+' created! Saving documents...');
+  // Mark FILES as belonging to this new case so openCase() won't re-load from IDB
+  window._filesForCaseId = id;
   idbSet(idbKey, filesForIDB).then(function(){
     console.log('[createCase] Saved '+FILES.length+' files to IndexedDB');
     toast('✅ Case '+cn+' ready — '+FILES.length+' documents saved');
     openCase(id);
-  }).catch(function(e){ 
+  }).catch(function(e){
     console.warn('[createCase] IndexedDB save failed:', e.message);
     // Fallback to localStorage for small files
     FILES.forEach(function(fd, fi) {
@@ -10565,6 +10589,7 @@ function handleCaseFiles(fileList, caseId) {
   if(!fileList || !fileList.length) return;
   // IMPORTANT: Reset FILES for this case to prevent bleed
   window.FILES = [];
+  window._filesForCaseId = caseId; // claim ownership for this case
   var total = fileList.length;
   var loaded = 0;
   var el = G('fl_c');
