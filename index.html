@@ -414,9 +414,9 @@ label.dz,div.dz{border:2px dashed var(--bor2);border-radius:var(--r);padding:24p
 
 // ── ONCLICK HELPERS (avoid quote nesting issues) ──
 
-function copyCaseEmail(){const b=G('f_eb');if(b)navigator.clipboard.writeText(b.value).then(()=>toast('Copied'));}
+function copyCaseEmail(){const b=G('f_eb');if(b)navigator.clipboard.writeText(b.value).then(()=>toast('Copied')).catch(()=>toast('Copy failed — please select and copy manually'));}
 
-function copyDoc(){navigator.clipboard.writeText(LDOC).then(()=>toast('Copied!'));}
+function copyDoc(){navigator.clipboard.writeText(LDOC).then(()=>toast('Copied!')).catch(()=>toast('Copy failed — please select and copy manually'));}
 function downloadDoc(){var a=document.createElement('a');a.href=URL.createObjectURL(new Blob([LDOC],{type:'text/plain'}));a.download='document.txt';a.click();}
 function emailDocFromSidebar(){
   var c = getC(DCID); if(!c||!LDOC) { toast('Generate a letter first'); return; }
@@ -3709,7 +3709,7 @@ function renderCD(c) {
   var bGen=document.getElementById('btn_gen_reply');
   if(bGen)bGen.onclick=function(){generatePatientReply1(cid);};
   var bCopyR=document.getElementById('btn_copy_reply');
-  if(bCopyR)bCopyR.onclick=function(){var r=document.getElementById('reply_output');if(r)navigator.clipboard.writeText(r.value).then(function(){toast('Copied!');});};
+  if(bCopyR)bCopyR.onclick=function(){var r=document.getElementById('reply_output');if(r)navigator.clipboard.writeText(r.value).then(function(){toast('Copied!');}).catch(function(){toast('Copy failed — please select and copy manually');});};
   var bUse=document.getElementById('btn_use_reply');
   if(bUse)bUse.onclick=function(){
     var r=document.getElementById('reply_output');var b=document.getElementById('f_eb');
@@ -5739,7 +5739,7 @@ function wireDetectIntent(text) {
 }
 
 function copyEmail(){
-  var b=G('f_eb');if(b)navigator.clipboard.writeText(b.value).then(function(){toast('Copied!');});
+  var b=G('f_eb');if(b)navigator.clipboard.writeText(b.value).then(function(){toast('Copied!');}).catch(function(){toast('Copy failed — please select and copy manually');});
 }
 var copyEmail = copyEmail1; // alias used by email tab Copy button
 
@@ -6171,7 +6171,7 @@ async function changePassword() {
   var newHash = await hashString(newPw);
   // Update in-memory hash and localStorage
   PW_HASH = newHash;
-  localStorage.setItem('hw_custom_pw', newHash);
+  try { localStorage.setItem('hw_custom_pw', newHash); } catch(e) { toast('⚠ Password changed (memory only) — storage full'); }
   toast('✓ Password changed successfully');
   document.getElementById('pw_current').value='';
   document.getElementById('pw_new').value='';
@@ -6209,7 +6209,7 @@ function getFBConfig() {
 }
 
 function saveFBConfig(cfg) {
-  localStorage.setItem('hw_fb_config', JSON.stringify(cfg));
+  try { localStorage.setItem('hw_fb_config', JSON.stringify(cfg)); } catch(e) { toast('⚠ Firebase config not saved — storage full'); }
 }
 
 // Initialize Firebase with user-supplied config
@@ -7790,12 +7790,12 @@ initStorage();
 // Pre-configured Firebase — healthwatch-tpa | europe-west3 (Frankfurt)
 (function(){
   if(!localStorage.getItem('hw_fb_config')) {
-    localStorage.setItem('hw_fb_config', JSON.stringify({
+    try { localStorage.setItem('hw_fb_config', JSON.stringify({
       apiKey:     "AIzaSyAddLDolMMI5bF3rn6fSr2iCsyPHJPBUwE",
       authDomain: "healthwatch-tpa.firebaseapp.com",
       projectId:  "healthwatch-tpa",
       appId:      "1:532713351910:web:04bf75af94942c91e96927"
-    }));
+    })); } catch(e) { console.warn('[init] Could not save default FB config:', e.message); }
   }
 })();
 autoInitFirebase();
@@ -8104,7 +8104,7 @@ async function pullFromGist1(silent){
     });
     CASES.forEach(function(c){if(!remoteIds.has(c.id))merged.push(c);});
     CASES=merged;save();updBadges();
-    if(parsed.policies&&parsed.policies.length) localStorage.setItem('mp_policies',JSON.stringify(parsed.policies));
+    if(parsed.policies&&parsed.policies.length) try { localStorage.setItem('mp_policies',JSON.stringify(parsed.policies)); } catch(e) { console.warn('[pullFromGist] policies not saved to localStorage:', e.message); }
     GIST1_LAST_SYNC=new Date();
     if(!silent)toast('Cases synced — '+CASES.length+' total');
     return true;
@@ -10722,7 +10722,7 @@ function saveEvalAsDocument(caseId, evalText, decision) {
     + '</head><body><div class="page">'
     + '<div class="no-print">'
     + '<button class="btn-print" onclick="window.print()">🖨 Print / Save as PDF</button>'
-    + '<button class="btn-copy" onclick="navigator.clipboard.writeText(document.getElementById(\'evaltext\').innerText).then(function(){alert(\'Copied to clipboard!\')})">📋 Copy Text</button>'
+    + '<button class="btn-copy" onclick="navigator.clipboard.writeText(document.getElementById(\'evaltext\').innerText).then(function(){alert(\'Copied to clipboard!\')}).catch(function(){alert(\'Copy failed — please select and copy manually\')})">📋 Copy Text</button>'
     + '<button class="btn-email" onclick="sendEvalEmail()">✉ Send by Email</button>'
     + '</div>'
     + '<div class="header">'
