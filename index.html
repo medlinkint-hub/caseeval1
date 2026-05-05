@@ -2099,10 +2099,27 @@ async function runEval(caseId) {
       });
       if(evalHist.length > 5) evalHist = evalHist.slice(0, 5); // keep last 5
     }
-    updC(caseId, {eval: evalHeader + finalResult, status: finalStatus, 
+    // Extract approved amount from the evaluation text and auto-save to amountApproved
+    var _approvedFromEval = null;
+    var _approvedPatterns = [
+      /APPROVED\s+AMOUNT\s*:?\s*EUR\s*([\d,\.]+)/i,
+      /net payable amount\s+of\s+EUR\s*([\d,\.]+)/i,
+      /payable\s+amount\s*(?:of|:)?\s*EUR\s*([\d,\.]+)/i,
+      /EUR\s*([\d,\.]+)\s+(?:is\s+)?(?:payable|reimbursable|approved)/i,
+      /reimburse(?:ment\s+of)?\s+EUR\s*([\d,\.]+)/i,
+      /net\s+amount\s*(?:of|:)?\s*EUR\s*([\d,\.]+)/i,
+    ];
+    for(var _ai = 0; _ai < _approvedPatterns.length && !_approvedFromEval; _ai++) {
+      var _am = finalResult.match(_approvedPatterns[_ai]);
+      if(_am) { var _av = parseFloat(_am[1].replace(/,/g,'')); if(_av > 0) _approvedFromEval = _av.toFixed(2); }
+    }
+
+    var _evalSave = {eval: evalHeader + finalResult, status: finalStatus,
       lastDecision: savedDecision, evalHistory: evalHist,
-      pseudoMap: pseudoMapSnapshot || {} // GDPR: identifier mapping for re-identification
-    });
+      pseudoMap: pseudoMapSnapshot || {}
+    };
+    if(_approvedFromEval) _evalSave.amountApproved = _approvedFromEval;
+    updC(caseId, _evalSave);
     addTL(caseId, 'AI evaluation completed — ' + savedDecision);
     // Show verdict toast
     var verdictColors = {declined:'#e8231a', approved:'#16a34a', partial:'#f59e0b', reviewing:'#1a2a72'};
@@ -2974,6 +2991,27 @@ function exportEvalPDF(caseId) {
     : (parseFloat(c.amountClaimed||0)).toLocaleString('en',{minimumFractionDigits:2,maximumFractionDigits:2});
   var amountLabel = invHasData ? 'Amount Claimed (from invoices)' : 'Amount Claimed';
 
+  // ── Extract approved amount: stored field first, then parse eval text ──
+  var approvedAmtStr = null;
+  var _approvedNum = parseFloat(c.amountApproved || 0);
+  if(_approvedNum > 0) {
+    approvedAmtStr = _approvedNum.toLocaleString('en',{minimumFractionDigits:2,maximumFractionDigits:2});
+  } else {
+    var _pdfEval = c.eval || '';
+    var _pdfPatterns = [
+      /APPROVED\s+AMOUNT\s*:?\s*EUR\s*([\d,\.]+)/i,
+      /net payable amount\s+of\s+EUR\s*([\d,\.]+)/i,
+      /payable\s+amount\s*(?:of|:)?\s*EUR\s*([\d,\.]+)/i,
+      /EUR\s*([\d,\.]+)\s+(?:is\s+)?(?:payable|reimbursable|approved)/i,
+      /reimburse(?:ment\s+of)?\s+EUR\s*([\d,\.]+)/i,
+      /net\s+amount\s*(?:of|:)?\s*EUR\s*([\d,\.]+)/i,
+    ];
+    for(var _pi2=0; _pi2<_pdfPatterns.length && !approvedAmtStr; _pi2++) {
+      var _pm2 = _pdfEval.match(_pdfPatterns[_pi2]);
+      if(_pm2) { var _pv2=parseFloat(_pm2[1].replace(/,/g,'')); if(_pv2>0) approvedAmtStr=_pv2.toLocaleString('en',{minimumFractionDigits:2,maximumFractionDigits:2}); }
+    }
+  }
+
   // ── Build invoice & payment table HTML ──
   var invTableHtml = '';
   if(invs.length > 0) {
@@ -3108,11 +3146,11 @@ function exportEvalPDF(caseId) {
     + '.header{border-bottom:3px solid #1a2a72;padding-bottom:16px;margin-bottom:20px}'
     + '.logo{font-size:22px;font-weight:800;color:#1a2a72}'
     + '.logo span{color:#e05a3a}'
-    + '.meta{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin:16px 0;padding:12px;background:#f8fafc;border-radius:8px}'
+    + '.meta{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:16px 0;padding:12px;background:#f8fafc;border-radius:8px}'
     + '.meta-item label{font-size:9px;text-transform:uppercase;letter-spacing:.06em;color:#64748b;display:block}'
     + '.meta-item span{font-size:12px;font-weight:600}'
-    + '.verdict-box{padding:12px 16px;border-radius:8px;border:2px solid '+verdictColor+';background:'+verdictColor+'15;margin:16px 0;display:flex;align-items:center;gap:12px}'
-    + '.verdict-label{font-size:18px;font-weight:800;color:'+verdictColor+'}'
+    + '.verdict-box{padding:12px 16px;border-radius:8px;border:2px solid '+verdictColor+';background:'+verdictColor+'15;margin:16px 0;display:flex;align-items:center;gap:12px;flex-wrap:wrap}'
+    + '.verdict-label{font-size:18px;font-weight:800;color:'+verdictColor+';flex:1}'
     + '.eval-body{font-size:11.5px;line-height:1.7}'
     + '.footer{border-top:1px solid #e5e7eb;padding-top:12px;margin-top:20px;font-size:10px;color:#64748b;display:flex;justify-content:space-between}'
     + '@media print{body{padding:10px}.no-print{display:none}@page{margin:15mm}}'
@@ -3128,10 +3166,14 @@ function exportEvalPDF(caseId) {
     + '<div class="meta-item"><label>Date of Loss</label><span>' + (c.dol||'—') + '</span></div>'
     + '<div class="meta-item"><label>Country</label><span>' + esc(c.country||'—') + '</span></div>'
     + '<div class="meta-item"><label>' + amountLabel + '</label><span>€' + displayedAmount + '</span></div>'
+    + (approvedAmtStr
+        ? '<div class="meta-item" style="border:2px solid '+verdictColor+';border-radius:6px;background:'+verdictColor+'12;padding:8px 10px"><label style="color:'+verdictColor+'">Amount Approved</label><span style="color:'+verdictColor+';font-size:14px">€' + approvedAmtStr + '</span></div>'
+        : '')
     + '</div>'
     + invTableHtml
     + '<div class="verdict-box">'
     + '<div class="verdict-label">DECISION: ' + esc(verdict) + '</div>'
+    + (approvedAmtStr ? '<div style="text-align:right"><div style="font-size:9px;text-transform:uppercase;letter-spacing:.06em;color:'+verdictColor+';opacity:.8">Amount Approved</div><div style="font-size:20px;font-weight:900;color:'+verdictColor+';font-family:monospace">€'+approvedAmtStr+'</div></div>' : '')
     + '</div>'
     + '<div class="eval-body">' + evalText + '</div>'
     + '<div class="footer">'
