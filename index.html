@@ -1828,11 +1828,18 @@ async function runEval(caseId) {
   // without actual wording, no policy logic can be applied.
   var policyAbsent = !policyWording && !inlinePolicyDetected;
 
-  if(policyWording&&policyWording.trim()){var pw=policyWording.trim();if(pw.length>30000)pw=pw.substring(0,30000)+'\n[...]';sys='=== POLICY: '+policySource+' ==='+nl+pw+nl+'=== END POLICY ==='+nl+nl+'IMPORTANT: Quote specific clauses in your decision.'+nl+nl+sys;setEvSt('run','📋 '+policySource+' policy loaded ('+Math.round(pw.length/1000)+'KB) — evaluating...');
-    console.log('[runEval] Policy matched:', policySource, pw.length, 'chars');
+  if(policyWording&&policyWording.trim()){var pw=policyWording.trim();if(pw.length>30000)pw=pw.substring(0,30000)+'\n[...]';
+    // Detect if a full policy PDF is also attached as a case file — it may be more complete than the library version
+    var _policyKeywordsRx = /policy|wording|insurance|terms|conditions|certificate|coverage|benefits/i;
+    var _hasUploadedPolicyFile = FILES.some(function(f){ return f.data && (_policyKeywordsRx.test(f.name||'') || f.ext==='pdf'); });
+    var _policyImportant = _hasUploadedPolicyFile
+      ? 'CRITICAL — FULL POLICY DOCUMENT ATTACHED: One or more uploaded files in this message is the complete policy document. It is the AUTHORITATIVE version and takes precedence over the library text above for ALL exclusion clauses, benefit limits, general exclusions, and specific terms. The library text may be an incomplete summary. You MUST read the attached document(s) and apply their actual wording. If the attached document contains a clause not present in the library text above, apply the attached document clause.'
+      : 'IMPORTANT: Quote specific clauses in your decision.';
+    sys='=== POLICY: '+policySource+' ==='+nl+pw+nl+'=== END POLICY ==='+nl+nl+_policyImportant+nl+nl+sys;setEvSt('run','📋 '+policySource+' policy loaded ('+Math.round(pw.length/1000)+'KB)'+(_hasUploadedPolicyFile?' + full PDF attached':'') +' — evaluating...');
+    console.log('[runEval] Policy matched:', policySource, pw.length, 'chars', _hasUploadedPolicyFile ? '(+ uploaded policy file)' : '');
   } else if(inlinePolicyDetected) {
     // Inline policy file present — Claude will read it from msgContent attachments
-    sys = '=== POLICY: '+policySource+' ===\nThe policy document is attached to this message. Read it directly and quote specific clauses in your decision.\n=== END POLICY ===\n\n' + sys;
+    sys = '=== POLICY: '+policySource+' ===\nThe FULL policy document is attached to this message. Read ALL sections including General Exclusions carefully and quote specific clauses in your decision. The attached file is the authoritative policy — apply its actual wording including all exclusion lists.\n=== END POLICY ===\n\n' + sys;
     console.log('[runEval] Inline policy file mode:', policySource);
   } else {
     // POLICY-ABSENT MODE — no policy from any source
