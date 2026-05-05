@@ -1504,6 +1504,7 @@ async function autoExtractFinance(caseId, files) {
   const total = extracted.reduce((s,e)=>s+e.totalEUR, 0);
   // Update amount claimed if not already set
   const c = getC(caseId);
+  if(!c) return;
   if(!c.amountClaimed || parseFloat(c.amountClaimed)===0) {
     updC(caseId, {amountClaimed: total.toFixed(2)});
     const el = G('f_ac'); if(el) el.value = total.toFixed(2);
@@ -5557,10 +5558,10 @@ function renderSet() {
   var btnFBConnect = document.getElementById('btn_fb_connect');
   if(btnFBConnect) btnFBConnect.onclick = function(){
     var cfg = {
-      projectId:  (document.getElementById('fb_project_id')||{}).value.trim(),
-      apiKey:     (document.getElementById('fb_api_key')||{}).value.trim(),
-      appId:      (document.getElementById('fb_app_id')||{}).value.trim(),
-      authDomain: (document.getElementById('fb_auth_domain')||{}).value.trim()
+      projectId:  ((document.getElementById('fb_project_id')||{}).value||'').trim(),
+      apiKey:     ((document.getElementById('fb_api_key')||{}).value||'').trim(),
+      appId:      ((document.getElementById('fb_app_id')||{}).value||'').trim(),
+      authDomain: ((document.getElementById('fb_auth_domain')||{}).value||'').trim()
     };
     if(!cfg.projectId || !cfg.apiKey || !cfg.appId) { toast('Enter Project ID, API Key and App ID'); return; }
     if(!cfg.authDomain) cfg.authDomain = cfg.projectId+'.firebaseapp.com';
@@ -5594,7 +5595,7 @@ function renderSet() {
 function cleanStorage1(){freeStorage();renderSet();toast('Storage cleaned');}
 function aggressiveCleanup1(){var keys=[];for(var i=0;i<localStorage.length;i++){var k=localStorage.key(i);if(k)keys.push(k);}var freed=0;keys.forEach(function(k){if(k.startsWith('fd_')||k.startsWith('fdtmp_')||k.startsWith('invs_')){localStorage.removeItem(k);freed++;}});toast('Freed '+freed+' items');renderSet();}
 function saveLang1(v){try{localStorage.setItem('mp_eval_lang',v);toast('✓ Γλώσσα αποθηκεύτηκε');}catch(e){toast('Storage full — language preference not saved');}}
-async function saveGistSettings1(){var tok=(document.getElementById('gist_token').value||'').trim();var gid=(document.getElementById('gist_id').value||'').trim();try{localStorage.setItem('mp_gist_token',tok);localStorage.setItem('mp_gist_id',gid);}catch(e){toast('Storage full — Gist settings not saved');return;}var st=document.getElementById('gist_status');if(!tok){toast('Enter your GitHub token');return;}if(!gid){if(st)st.textContent='Creating...';if(typeof createGist1==='function')await createGist1();if(typeof startAutoSync1==='function')startAutoSync1();}else{if(st)st.textContent='Testing...';if(typeof pullFromGist1==='function'){var ok=await pullFromGist1(false);if(ok){if(st)st.innerHTML='Connected! Share Gist ID <b>'+gid+'</b> with your team';if(typeof startAutoSync1==='function')startAutoSync1();}}}}
+async function saveGistSettings1(){var tok=((document.getElementById('gist_token')||{}).value||'').trim();var gid=((document.getElementById('gist_id')||{}).value||'').trim();try{localStorage.setItem('mp_gist_token',tok);localStorage.setItem('mp_gist_id',gid);}catch(e){toast('Storage full — Gist settings not saved');return;}var st=document.getElementById('gist_status');if(!tok){toast('Enter your GitHub token');return;}if(!gid){if(st)st.textContent='Creating...';if(typeof createGist1==='function')await createGist1();if(typeof startAutoSync1==='function')startAutoSync1();}else{if(st)st.textContent='Testing...';if(typeof pullFromGist1==='function'){var ok=await pullFromGist1(false);if(ok){if(st)st.innerHTML='Connected! Share Gist ID <b>'+gid+'</b> with your team';if(typeof startAutoSync1==='function')startAutoSync1();}}}}
 
 const cntW = t => (t||'').trim().split(/\s+/).filter(Boolean).length;
 
@@ -6277,8 +6278,8 @@ async function changePassword() {
   PW_HASH = newHash;
   try { localStorage.setItem('hw_custom_pw', newHash); } catch(e) { toast('⚠ Password changed (memory only) — storage full'); }
   toast('✓ Password changed successfully');
-  document.getElementById('pw_current').value='';
-  document.getElementById('pw_new').value='';
+  var _pwc=document.getElementById('pw_current'); if(_pwc) _pwc.value='';
+  var _pwn=document.getElementById('pw_new'); if(_pwn) _pwn.value='';
 }
 
 
@@ -7774,11 +7775,12 @@ function showICDLookup(fieldId) {
         + '</div>';
     });
     if(!results.length) html = '<div style="text-align:center;padding:20px;color:var(--tx3);font-size:12px">No codes found</div>';
-    document.getElementById('icd_results').innerHTML = html;
+    var icdRes = document.getElementById('icd_results');
+    if(icdRes) icdRes.innerHTML = html;
   }
   
-  document.getElementById('icd_search_input').oninput = function(){ renderICDResults(this.value); };
-  document.getElementById('icd_search_input').focus();
+  var icdInp = document.getElementById('icd_search_input');
+  if(icdInp) { icdInp.oninput = function(){ renderICDResults(this.value); }; icdInp.focus(); }
   renderICDResults('');
   
   // Close on outside click
@@ -7797,7 +7799,8 @@ function selectICD(code, desc, fieldId) {
     // Trigger change
     el.dispatchEvent(new Event('input'));
   }
-  document.getElementById('icd_lookup_popup').remove();
+  var icdPop = document.getElementById('icd_lookup_popup');
+  if(icdPop) icdPop.remove();
   toast('✓ Added ICD-10: '+code+' — '+desc);
 }
 
@@ -10262,6 +10265,10 @@ function addFiles(list, caseId) {
   list.forEach(function(f){
     var r = new FileReader();
     r.onload = function(e){
+      if(_filesForCaseId !== caseId) {
+        console.warn('[addFiles] Case switched during file load — discarding', f.name);
+        return;
+      }
       var fd = {name:f.name, size:f.size, type:f.type, ext:fxt(f.name), data:e.target.result};
       var fileKey = 'fd_'+caseId+'_'+Date.now()+'_'+FILES.length;
       fd._key = fileKey;
@@ -10671,6 +10678,10 @@ function reuploadCaseFiles(caseId) {
     files.forEach(function(file) {
       var r = new FileReader();
       r.onload = function(ev) {
+        if(_filesForCaseId !== caseId) {
+          console.warn('[reuploadCaseFiles] Case switched during file load — discarding', file.name);
+          return;
+        }
         var data = ev.target.result;
         var ext = file.name.split('.').pop().toLowerCase();
         // Match to existing FILES by name
@@ -11291,14 +11302,16 @@ async function hashString(str) {
 async function checkPassword() {
   // Re-read PW_HASH each call — corrects stale localStorage in browsers like Edge
   PW_HASH = localStorage.getItem('hw_custom_pw') || PW_DEFAULT_HASH;
+  var pwInput = document.getElementById('pw-input');
+  var pwErr   = document.getElementById('pw-err');
   var now = Date.now();
   if(PW_LOCKED_UNTIL > now) {
     var secs = Math.ceil((PW_LOCKED_UNTIL - now)/1000);
-    document.getElementById('pw-err').textContent = 'Too many attempts. Wait '+secs+' seconds.';
+    if(pwErr) pwErr.textContent = 'Too many attempts. Wait '+secs+' seconds.';
     return;
   }
-  var input = document.getElementById('pw-input').value.trim();
-  if(!input) { document.getElementById('pw-err').textContent = 'Please enter the password.'; return; }
+  var input = pwInput ? pwInput.value.trim() : '';
+  if(!input) { if(pwErr) pwErr.textContent = 'Please enter the password.'; return; }
   var hash;
   try {
     hash = await hashString(input);
@@ -11330,14 +11343,13 @@ async function checkPassword() {
     var resetEl = document.getElementById('pw-reset');
     if(PW_ATTEMPTS >= 5) {
       PW_LOCKED_UNTIL = Date.now() + 30000;
-      document.getElementById('pw-err').textContent = 'Too many attempts. Locked for 30 seconds.';
-      if(resetEl) resetEl.style.display = 'block'; // show reset link after lockout
+      if(pwErr) pwErr.textContent = 'Too many attempts. Locked for 30 seconds.';
+      if(resetEl) resetEl.style.display = 'block';
     } else {
-      document.getElementById('pw-err').textContent = 'Incorrect password. (' + (5 - PW_ATTEMPTS) + ' attempts remaining)';
-      if(PW_ATTEMPTS >= 2 && resetEl) resetEl.style.display = 'block'; // show reset link after 2 failures
+      if(pwErr) pwErr.textContent = 'Incorrect password. (' + (5 - PW_ATTEMPTS) + ' attempts remaining)';
+      if(PW_ATTEMPTS >= 2 && resetEl) resetEl.style.display = 'block';
     }
-    document.getElementById('pw-input').value = '';
-    document.getElementById('pw-input').focus();
+    if(pwInput) { pwInput.value = ''; pwInput.focus(); }
   }
 }
 
@@ -11347,11 +11359,12 @@ function resetStoredPassword() {
   PW_HASH = PW_DEFAULT_HASH;
   PW_ATTEMPTS = 0;
   PW_LOCKED_UNTIL = 0;
-  document.getElementById('pw-err').textContent = 'Saved password cleared. Enter the default password.';
+  var pwErr = document.getElementById('pw-err');
+  if(pwErr) pwErr.textContent = 'Saved password cleared. Enter the default password.';
   var resetEl = document.getElementById('pw-reset');
   if(resetEl) resetEl.style.display = 'none';
-  document.getElementById('pw-input').value = '';
-  document.getElementById('pw-input').focus();
+  var pwInput = document.getElementById('pw-input');
+  if(pwInput) { pwInput.value = ''; pwInput.focus(); }
 }
 
 function showForgot() {
