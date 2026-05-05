@@ -294,6 +294,30 @@ label.dz,div.dz{border:2px dashed var(--bor2);border-radius:var(--r);padding:24p
   cursor:pointer; text-decoration:underline;
 }
 
+/* Medical Coding & Pricing */
+.mcd-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:9999;align-items:center;justify-content:center;padding:16px;box-sizing:border-box}
+.mcd-box{background:#fff;border-radius:16px;width:100%;max-width:880px;max-height:92vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,.35);overflow:hidden}
+.mcd-head{background:linear-gradient(135deg,#1a2f5e,#1a2a72);padding:18px 24px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0}
+.mcd-body{flex:1;overflow-y:auto;padding:24px}
+.mcd-foot{padding:14px 24px;border-top:1px solid #e8ecf4;background:#f8f9fc;flex-shrink:0;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.mcd-tab-row{display:flex;gap:0;border-bottom:2px solid #e8ecf4;margin-bottom:20px;overflow-x:auto;flex-shrink:0}
+.mcd-tab-btn{padding:10px 18px;border:none;background:none;font-family:'DM Sans',sans-serif;font-size:13px;font-weight:500;color:#7080a0;border-bottom:3px solid transparent;margin-bottom:-2px;cursor:pointer;white-space:nowrap;transition:all .15s}
+.mcd-tab-btn.active{font-weight:700;color:#1a2f5e;border-bottom-color:#d4a847}
+.mcd-country-grid-top{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:20px}
+.mcd-country-btn-top{padding:16px 8px;border:2px solid #d4a847;border-radius:12px;background:linear-gradient(135deg,#fffbf0,#fef9ec);cursor:pointer;font-family:'DM Sans',sans-serif;transition:all .15s;display:flex;flex-direction:column;align-items:center;gap:6px}
+.mcd-country-btn-top:hover{background:linear-gradient(135deg,#fef3c7,#fde68a);transform:translateY(-2px)}
+.mcd-country-btn-rest{padding:9px 10px;border:1px solid #e0e5ef;border-radius:9px;background:#f8f9fc;cursor:pointer;font-family:'DM Sans',sans-serif;transition:all .15s;display:flex;align-items:center;gap:8px;text-align:left}
+.mcd-country-btn-rest:hover{background:#eef0f8;border-color:#1a2f5e}
+.mcd-code-block{border:1px solid #e8ecf4;border-radius:10px;overflow:hidden;margin-bottom:16px}
+.mcd-code-row{display:flex;align-items:center;gap:12px;padding:9px 14px;border-bottom:1px solid #e8ecf4}
+.mcd-code-row:last-child{border-bottom:none}
+.mcd-code-row:nth-child(even){background:#fafbfd}
+.mcd-badge{font-family:'Courier New',monospace;font-size:11px;font-weight:700;background:#1a2f5e;color:#fff;padding:3px 8px;border-radius:5px;white-space:nowrap}
+.mcd-pill{font-size:10px;font-weight:700;padding:2px 8px;border-radius:20px;white-space:nowrap}
+.btn-gold{padding:9px 18px;background:#d4a847;color:#1a2f5e;border:none;border-radius:8px;font-weight:700;cursor:pointer;font-size:13px;font-family:'DM Sans',sans-serif;display:inline-flex;align-items:center;gap:6px;transition:all .15s;white-space:nowrap}
+.btn-gold:hover{background:#c49a35;transform:translateY(-1px);box-shadow:0 4px 12px rgba(212,168,71,.3)}
+@keyframes mcd-spin{to{transform:rotate(360deg)}}
+.mcd-spinner{width:52px;height:52px;border:4px solid #e0e5ef;border-top-color:#d4a847;border-radius:50%;animation:mcd-spin 1s linear infinite;margin:0 auto 20px}
 </style>
 </head>
 <body>
@@ -3623,6 +3647,13 @@ function renderCD(c) {
   html += '<button class="btn bs" id="bClear">Clear</button>';
   html += '<button class="btn bs" id="bExportEval" style="margin-left:auto" onclick="exportEvalPDF(window._currentCaseId)"><svg viewBox="0 0 24 24" style="width:14px;height:14px;stroke:currentColor;fill:none;stroke-width:2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/></svg>&nbsp;Save PDF</button>';
   html += '</div>';
+
+  // ── Medical Coding & Pricing button ──
+  if((c.type === 'medclaim' || c.type === 'ipmi_medical') && c.eval && c.eval.length > 50) {
+    html += '<div style="margin-top:12px">';
+    html += '<button class="btn-gold" onclick="openMedicalCoder(\''+esc(c.id)+'\')"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="#1a2f5e" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>Medical Coding &amp; Pricing</button>';
+    html += '</div>';
+  }
 
   // ── Case Chat Assistant ──
   if(c.eval) {
@@ -11359,6 +11390,648 @@ document.addEventListener('DOMContentLoaded', function() {
     if(overlay) overlay.style.display = 'none';
   }
 });
+
+</script>
+
+<script>
+// ── Medical Coding & Pricing ──────────────────────────────────────────────
+var _mcdCaseId = null;
+var _mcdCountry = null;
+var _mcdData = { codes: null, pricing: null, raw1: '', raw2: '' };
+
+var MCD_COUNTRIES = [
+  { code: 'GR', name: 'Greece', flag: '🇬🇷' },
+  { code: 'TR', name: 'Turkey', flag: '🇹🇷' },
+  { code: 'EG', name: 'Egypt', flag: '🇪🇬' },
+  { code: 'US', name: 'USA', flag: '🇺🇸' },
+  { code: 'AE', name: 'UAE', flag: '🇦🇪' },
+  { code: 'AT', name: 'Austria', flag: '🇦🇹' },
+  { code: 'BH', name: 'Bahrain', flag: '🇧🇭' },
+  { code: 'BE', name: 'Belgium', flag: '🇧🇪' },
+  { code: 'CY', name: 'Cyprus', flag: '🇨🇾' },
+  { code: 'CZ', name: 'Czech Republic', flag: '🇨🇿' },
+  { code: 'FR', name: 'France', flag: '🇫🇷' },
+  { code: 'DE', name: 'Germany', flag: '🇩🇪' },
+  { code: 'HU', name: 'Hungary', flag: '🇭🇺' },
+  { code: 'IN', name: 'India', flag: '🇮🇳' },
+  { code: 'IT', name: 'Italy', flag: '🇮🇹' },
+  { code: 'JO', name: 'Jordan', flag: '🇯🇴' },
+  { code: 'KW', name: 'Kuwait', flag: '🇰🇼' },
+  { code: 'LB', name: 'Lebanon', flag: '🇱🇧' },
+  { code: 'MT', name: 'Malta', flag: '🇲🇹' },
+  { code: 'MA', name: 'Morocco', flag: '🇲🇦' },
+  { code: 'NL', name: 'Netherlands', flag: '🇳🇱' },
+  { code: 'OM', name: 'Oman', flag: '🇴🇲' },
+  { code: 'PL', name: 'Poland', flag: '🇵🇱' },
+  { code: 'PT', name: 'Portugal', flag: '🇵🇹' },
+  { code: 'QA', name: 'Qatar', flag: '🇶🇦' },
+  { code: 'RO', name: 'Romania', flag: '🇷🇴' },
+  { code: 'SA', name: 'Saudi Arabia', flag: '🇸🇦' },
+  { code: 'RS', name: 'Serbia', flag: '🇷🇸' },
+  { code: 'ES', name: 'Spain', flag: '🇪🇸' },
+  { code: 'TN', name: 'Tunisia', flag: '🇹🇳' },
+  { code: 'GB', name: 'UK', flag: '🇬🇧' }
+];
+
+function openMedicalCoder(caseId) {
+  _mcdCaseId = caseId;
+  _mcdData = { codes: null, pricing: null, raw1: '', raw2: '' };
+  if(!document.getElementById('mcdOverlay')) _buildMcdOverlay();
+  document.getElementById('mcdOverlay').style.display = 'flex';
+  _mcdShowCountrySelector();
+}
+
+function closeMedicalCoder() {
+  var el = document.getElementById('mcdOverlay');
+  if(el) el.style.display = 'none';
+}
+
+function _buildMcdOverlay() {
+  var div = document.createElement('div');
+  div.id = 'mcdOverlay';
+  div.className = 'mcd-overlay';
+  div.innerHTML =
+    '<div class="mcd-box">'
+    +'<div class="mcd-head">'
+    +'<div style="display:flex;align-items:center;gap:12px">'
+    +'<div style="width:38px;height:38px;background:#d4a847;border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:20px">🏥</div>'
+    +'<div><div style="color:#fff;font-size:16px;font-weight:700;font-family:\'DM Sans\',sans-serif">Medical Code Finder &amp; Grouper</div>'
+    +'<div style="color:#a0b0d0;font-size:11px;margin-top:1px">ICD-10 · CPT · DRG · SNOMED · LOINC · APC · HCC</div></div>'
+    +'</div>'
+    +'<button onclick="closeMedicalCoder()" style="background:none;border:none;color:#fff;font-size:22px;cursor:pointer;line-height:1;opacity:.7;padding:4px 8px;font-family:inherit">✕</button>'
+    +'</div>'
+    +'<div class="mcd-body" id="mcdBody"></div>'
+    +'<div class="mcd-foot" id="mcdFoot" style="display:none"></div>'
+    +'</div>';
+  div.addEventListener('click', function(e){ if(e.target === div) closeMedicalCoder(); });
+  document.body.appendChild(div);
+}
+
+function _mcdShowCountrySelector() {
+  var body = document.getElementById('mcdBody');
+  var foot = document.getElementById('mcdFoot');
+  if(!body) return;
+  if(foot) foot.style.display = 'none';
+
+  var priority = MCD_COUNTRIES.slice(0, 4);
+  var rest = MCD_COUNTRIES.slice(4).sort(function(a,b){ return a.name.localeCompare(b.name); });
+
+  var html = '<div style="text-align:center;margin-bottom:24px">'
+    +'<div style="font-size:17px;font-weight:700;color:#1a2f5e;margin-bottom:6px">Select Treatment Country</div>'
+    +'<div style="font-size:12px;color:#7080a0">Pricing benchmarks will be calibrated to the selected country\'s healthcare market</div>'
+    +'</div>';
+
+  html += '<div class="mcd-country-grid-top">';
+  priority.forEach(function(c){
+    html += '<button class="mcd-country-btn-top" onclick="_mcdSelectCountry(\''+c.code+'\',\''+c.name+'\')">'
+      +'<span style="font-size:28px">'+c.flag+'</span>'
+      +'<span style="font-size:12px;font-weight:700;color:#1a2f5e">'+c.name+'</span>'
+      +'</button>';
+  });
+  html += '</div>';
+
+  html += '<div style="font-size:11px;font-weight:700;text-transform:uppercase;color:#9098b0;letter-spacing:.5px;margin-bottom:10px">Other Countries</div>';
+  html += '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:8px">';
+  rest.forEach(function(c){
+    html += '<button class="mcd-country-btn-rest" onclick="_mcdSelectCountry(\''+c.code+'\',\''+c.name+'\')">'
+      +'<span style="font-size:18px">'+c.flag+'</span>'
+      +'<span style="font-size:12px;font-weight:600;color:#1a2f5e">'+c.name+'</span>'
+      +'</button>';
+  });
+  html += '</div>';
+
+  body.innerHTML = html;
+}
+
+function _mcdSelectCountry(code, name) {
+  _mcdCountry = { code: code, name: name, flag: (MCD_COUNTRIES.find(function(c){ return c.code===code; })||{}).flag||'' };
+  _mcdRunAnalysis();
+}
+
+async function _mcdRunAnalysis() {
+  var body = document.getElementById('mcdBody');
+  var foot = document.getElementById('mcdFoot');
+  if(!body) return;
+  if(foot) foot.style.display = 'none';
+
+  body.innerHTML = '<div style="text-align:center;padding:60px 24px">'
+    +'<div class="mcd-spinner"></div>'
+    +'<div style="font-size:15px;font-weight:700;color:#1a2f5e;margin-bottom:8px">Analysing medical codes…</div>'
+    +'<div id="mcdStatus" style="font-size:12px;color:#7080a0">Extracting ICD-10 and procedure codes</div>'
+    +'</div>';
+
+  var c = getC(_mcdCaseId);
+  if(!c) { _mcdShowError('Case not found.'); return; }
+
+  var statusEl = function(t){ var el=document.getElementById('mcdStatus'); if(el) el.textContent=t; };
+
+  var caseContext = 'CASE NUMBER: '+(c.caseNum||'—')+'\n'
+    +'PATIENT: '+(c.patient||'—')+'\n'
+    +'DATE OF LOSS: '+(c.dol||'—')+'\n'
+    +'COUNTRY OF TREATMENT: '+(_mcdCountry.name)+'\n'
+    +'DIAGNOSIS / DESCRIPTION:\n'+(c.desc||'—')+'\n\n'
+    +'EVALUATION TEXT:\n'+(c.eval||'No evaluation yet')+'\n\n'
+    +'AMOUNT CLAIMED: '+(c.amountClaimed ? 'EUR '+c.amountClaimed : '—')+'\n'
+    +'AMOUNT APPROVED: '+(c.amountApproved ? 'EUR '+c.amountApproved : '—');
+
+  var codePrompt = [{ role: 'user', content: caseContext+'\n\n---\nExtract ALL applicable medical codes from the case above. Return ONLY valid JSON (no markdown, no explanation) with this exact structure:\n{\n  "icd10_primary": [{"code":"A00.0","description":"Cholera due to Vibrio cholerae 01","confidence":"high"}],\n  "icd10_secondary": [],\n  "cpt": [{"code":"99213","description":"Office visit established patient","confidence":"medium"}],\n  "drg": [{"code":"291","description":"Heart failure and shock with MCC","weight":1.5}],\n  "snomed": [{"code":"73211009","description":"Diabetes mellitus"}],\n  "loinc": [{"code":"2160-0","description":"Creatinine [Mass/volume] in Serum or Plasma"}],\n  "apc": [{"code":"5641","description":"Level 1 Minor Procedures"}],\n  "hcc": [{"code":"18","description":"Diabetes with chronic complications","raf_weight":0.318}],\n  "summary": "One-paragraph clinical summary and coding rationale."\n}' }];
+
+  var codeSys = 'You are a senior medical coder (CPC, CCS certified) with expertise in ICD-10-CM/PCS, CPT, DRG, SNOMED CT, LOINC, APC, and HCC. Extract all relevant codes supported by documented evidence. Flag ambiguous codes with confidence "low". Return ONLY valid JSON — no markdown fences, no explanation.';
+
+  statusEl('Extracting ICD-10, CPT, DRG codes…');
+  var raw1 = '';
+  try {
+    raw1 = await apiCall(codePrompt, codeSys, 4000);
+    _mcdData.raw1 = raw1;
+  } catch(e) {
+    _mcdShowError('Code extraction failed: '+e.message);
+    return;
+  }
+
+  var codes = null;
+  try {
+    var jsonStr = raw1.replace(/^```json\s*/,'').replace(/^```\s*/,'').replace(/```\s*$/,'').trim();
+    codes = JSON.parse(jsonStr);
+  } catch(e) {
+    var jMatch = raw1.match(/\{[\s\S]*\}/);
+    if(jMatch) { try { codes = JSON.parse(jMatch[0]); } catch(e2) {} }
+  }
+  if(!codes) { _mcdShowError('Could not parse code JSON.\n\nRaw response:\n'+raw1); return; }
+  _mcdData.codes = codes;
+
+  statusEl('Calculating fair pricing for '+_mcdCountry.name+'…');
+
+  var pricingContext = 'COUNTRY: '+_mcdCountry.name+' ('+_mcdCountry.code+')\n'
+    +'CLAIMED AMOUNT: '+(c.amountClaimed ? 'EUR '+c.amountClaimed : '—')+'\n'
+    +'APPROVED AMOUNT: '+(c.amountApproved ? 'EUR '+c.amountApproved : '—')+'\n\n'
+    +'EXTRACTED CODES:\n'+JSON.stringify(codes, null, 2)+'\n\n'
+    +'CASE DESCRIPTION:\n'+(c.desc||'—')+'\n'
+    +'EVALUATION:\n'+(c.eval||'—');
+
+  var pricingPrompt = [{ role: 'user', content: pricingContext+'\n\n---\nProvide a comprehensive fair pricing analysis for '+_mcdCountry.name+'. Return ONLY valid JSON:\n{\n  "country": "'+_mcdCountry.name+'",\n  "currency": "EUR",\n  "line_items": [\n    {\n      "description": "Service name",\n      "code": "code",\n      "claimed_amount": 0,\n      "fair_low": 0,\n      "fair_high": 0,\n      "fair_mid": 0,\n      "flag": "ok|high|low|very_high",\n      "flag_reason": "explanation if flagged"\n    }\n  ],\n  "totals": {\n    "total_claimed": 0,\n    "total_fair_mid": 0,\n    "total_fair_low": 0,\n    "total_fair_high": 0,\n    "overpayment_risk": 0,\n    "overpayment_pct": 0\n  },\n  "market_notes": "'+_mcdCountry.name+' healthcare pricing context",\n  "recommendation": "overall recommendation"\n}' }];
+
+  var pricingSys = 'You are a senior healthcare economist specialising in international medical pricing. Provide specific EUR pricing ranges based on DRG weights, UCR rates, and fair market benchmarks for the specified country. Flags: ok (within range), high (10-30% above UCR), very_high (>30% above), low (<30% below — possible under-coding). Return ONLY valid JSON.';
+
+  var raw2 = '';
+  try {
+    raw2 = await apiCall(pricingPrompt, pricingSys, 4000);
+    _mcdData.raw2 = raw2;
+  } catch(e) {
+    _mcdShowError('Pricing analysis failed: '+e.message);
+    return;
+  }
+
+  var pricing = null;
+  try {
+    var jsonStr2 = raw2.replace(/^```json\s*/,'').replace(/^```\s*/,'').replace(/```\s*$/,'').trim();
+    pricing = JSON.parse(jsonStr2);
+  } catch(e) {
+    var jMatch2 = raw2.match(/\{[\s\S]*\}/);
+    if(jMatch2) { try { pricing = JSON.parse(jMatch2[0]); } catch(e2) {} }
+  }
+  if(!pricing) { _mcdShowError('Could not parse pricing JSON.\n\nRaw response:\n'+raw2); return; }
+  _mcdData.pricing = pricing;
+
+  _mcdShowResults();
+}
+
+function _mcdShowError(msg) {
+  var body = document.getElementById('mcdBody');
+  var foot = document.getElementById('mcdFoot');
+  if(!body) return;
+  if(foot) foot.style.display = 'none';
+  var cc = _mcdCountry || { code:'GR', name:'Greece' };
+  body.innerHTML = '<div style="text-align:center;padding:40px 24px">'
+    +'<div style="font-size:40px;margin-bottom:16px">⚠️</div>'
+    +'<div style="font-size:15px;font-weight:700;color:#c0392b;margin-bottom:12px">Analysis Failed</div>'
+    +'<pre style="font-size:11px;color:#7080a0;text-align:left;background:#f4f5f8;padding:12px;border-radius:8px;overflow-x:auto;max-height:200px;overflow-y:auto;white-space:pre-wrap">'+esc(msg)+'</pre>'
+    +'<div style="display:flex;gap:10px;justify-content:center;margin-top:16px">'
+    +'<button onclick="_mcdSelectCountry(\''+cc.code+'\',\''+cc.name+'\')" class="btn-gold">🔄 Retry Analysis</button>'
+    +'<button onclick="_mcdShowCountrySelector()" style="padding:9px 18px;background:#f0f2f8;color:#1a2f5e;border:none;border-radius:8px;font-weight:600;cursor:pointer;font-size:13px;font-family:\'DM Sans\',sans-serif">← Change Country</button>'
+    +'</div></div>';
+}
+
+var _mcdActiveTab = 0;
+
+function _mcdShowResults() {
+  _mcdActiveTab = 0;
+  var body = document.getElementById('mcdBody');
+  var foot = document.getElementById('mcdFoot');
+  if(!body) return;
+
+  var tabs = ['🏷 Medical Codes', '💰 Fair Pricing', '🔍 Discrepancy', '📄 Full Report'];
+  var tabRow = '<div class="mcd-tab-row">';
+  tabs.forEach(function(lbl, i){
+    tabRow += '<button id="mcdTab'+i+'" class="mcd-tab-btn'+(i===0?' active':'')+'" onclick="mcdSwitchTab('+i+')">'+lbl+'</button>';
+  });
+  tabRow += '</div>';
+
+  var cc = _mcdCountry || { flag:'', name:'—' };
+  body.innerHTML = '<div style="margin-bottom:12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">'
+    +'<div style="font-size:11px;font-weight:700;text-transform:uppercase;color:#9098b0;letter-spacing:.5px">Country</div>'
+    +'<div style="font-size:13px;font-weight:700;color:#1a2f5e">'+cc.flag+' '+esc(cc.name)+'</div>'
+    +'<button onclick="_mcdShowCountrySelector()" style="font-size:11px;padding:4px 10px;background:#f0f2f8;border:1px solid #dde2ef;border-radius:6px;cursor:pointer;color:#1a2f5e;font-family:\'DM Sans\',sans-serif">Change</button>'
+    +'</div>'
+    +tabRow
+    +'<div id="mcdPanelWrap"></div>';
+
+  mcdSwitchTab(0);
+
+  if(foot) {
+    foot.style.display = 'flex';
+    foot.innerHTML = '<div style="font-size:11px;font-weight:700;color:#9098b0;text-transform:uppercase;letter-spacing:.5px;margin-right:4px">Export:</div>'
+      +'<button onclick="mcdExportPDF()" style="padding:8px 15px;background:#1a2f5e;color:#fff;border:none;border-radius:7px;font-weight:700;cursor:pointer;font-size:12px;font-family:\'DM Sans\',sans-serif;display:inline-flex;align-items:center;gap:5px"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="#fff" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>PDF</button>'
+      +'<button onclick="mcdExportWord()" style="padding:8px 15px;background:#2563eb;color:#fff;border:none;border-radius:7px;font-weight:700;cursor:pointer;font-size:12px;font-family:\'DM Sans\',sans-serif;display:inline-flex;align-items:center;gap:5px"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="#fff" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>Word</button>'
+      +'<button onclick="mcdSaveFirebase()" style="padding:8px 15px;background:#059669;color:#fff;border:none;border-radius:7px;font-weight:700;cursor:pointer;font-size:12px;font-family:\'DM Sans\',sans-serif;display:inline-flex;align-items:center;gap:5px"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="#fff" stroke-width="2"><path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>Save to Firebase</button>'
+      +'<div style="margin-left:auto;font-size:11px;color:#9098b0">Powered by Claude \xb7 '+esc(cc.name)+' market</div>';
+  }
+}
+
+function mcdSwitchTab(idx) {
+  _mcdActiveTab = idx;
+  for(var i=0;i<4;i++){
+    var btn=document.getElementById('mcdTab'+i);
+    if(btn){ btn.classList.toggle('active', i===idx); }
+  }
+  var wrap = document.getElementById('mcdPanelWrap');
+  if(!wrap) return;
+  if(idx===0) wrap.innerHTML = _mcdRenderCodes();
+  else if(idx===1) wrap.innerHTML = _mcdRenderPricing();
+  else if(idx===2) wrap.innerHTML = _mcdRenderDiscrepancy();
+  else wrap.innerHTML = _mcdRenderFullReport();
+}
+
+function _mcdRenderCodes() {
+  var codes = _mcdData.codes;
+  if(!codes) return '<p style="color:#7080a0">No code data available.</p>';
+  var html = '';
+
+  if(codes.summary) {
+    html += '<div style="background:linear-gradient(135deg,#f0f4ff,#e8edf8);border-radius:10px;padding:14px 16px;margin-bottom:18px;border-left:4px solid #1a2f5e">'
+      +'<div style="font-size:11px;font-weight:700;color:#1a2f5e;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">Clinical Summary</div>'
+      +'<div style="font-size:13px;color:#2c3e50;line-height:1.6">'+esc(codes.summary)+'</div>'
+      +'</div>';
+  }
+
+  function renderGroup(title, items, color) {
+    if(!items || !items.length) return '';
+    var h = '<div style="margin-bottom:18px">'
+      +'<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:'+color+';margin-bottom:8px">'+title+'</div>'
+      +'<div class="mcd-code-block">';
+    items.forEach(function(item){
+      var conf = item.confidence||'';
+      var cCol = conf==='high'?'#059669':conf==='medium'?'#d97706':'#7080a0';
+      h += '<div class="mcd-code-row">'
+        +'<span class="mcd-badge">'+esc(item.code||'—')+'</span>'
+        +'<span style="flex:1;font-size:13px;color:#2c3e50">'+esc(item.description||'—')+'</span>';
+      if(conf) h += '<span class="mcd-pill" style="background:'+cCol+'20;color:'+cCol+'">'+conf.toUpperCase()+'</span>';
+      if(item.weight!=null) h += '<span style="font-size:11px;color:#7080a0;white-space:nowrap">DRG w: <b>'+item.weight+'</b></span>';
+      if(item.raf_weight!=null) h += '<span style="font-size:11px;color:#7080a0;white-space:nowrap">RAF: <b>'+item.raf_weight+'</b></span>';
+      h += '</div>';
+    });
+    return h+'</div></div>';
+  }
+
+  html += renderGroup('ICD-10 — Primary Diagnoses', codes.icd10_primary, '#c0392b');
+  html += renderGroup('ICD-10 — Secondary / Comorbidities', codes.icd10_secondary, '#e67e22');
+  html += renderGroup('CPT — Procedures', codes.cpt, '#1a2f5e');
+  html += renderGroup('DRG — Diagnosis Related Groups', codes.drg, '#7c3aed');
+  html += renderGroup('SNOMED CT', codes.snomed, '#0891b2');
+  html += renderGroup('LOINC — Lab & Clinical Tests', codes.loinc, '#059669');
+  html += renderGroup('APC — Ambulatory Payment', codes.apc, '#d97706');
+  html += renderGroup('HCC — Risk Adjustment', codes.hcc, '#be185d');
+
+  return html || '<p style="color:#7080a0">No codes extracted.</p>';
+}
+
+function _mcdRenderPricing() {
+  var p = _mcdData.pricing;
+  if(!p) return '<p style="color:#7080a0">No pricing data available.</p>';
+
+  var flagColor = { ok:'#059669', high:'#d97706', very_high:'#c0392b', low:'#7080a0' };
+  var flagLabel = { ok:'✓ OK', high:'⚠ High', very_high:'🚩 Very High', low:'↓ Low' };
+  var html = '';
+
+  if(p.market_notes) {
+    var cc = _mcdCountry||{ flag:'', name:'' };
+    html += '<div style="background:#fef9ec;border:1px solid #fde68a;border-radius:10px;padding:12px 16px;margin-bottom:18px">'
+      +'<div style="font-size:11px;font-weight:700;color:#92400e;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px">'+cc.flag+' '+esc(cc.name)+' Market Context</div>'
+      +'<div style="font-size:12px;color:#78350f;line-height:1.5">'+esc(p.market_notes)+'</div>'
+      +'</div>';
+  }
+
+  if(p.line_items && p.line_items.length) {
+    html += '<div style="border:1px solid #e8ecf4;border-radius:10px;overflow:hidden;margin-bottom:18px">'
+      +'<div style="display:grid;grid-template-columns:1fr 90px 80px 90px 80px 90px;background:#f0f4ff;padding:8px 14px;font-size:11px;font-weight:700;text-transform:uppercase;color:#1a2f5e;letter-spacing:.3px">'
+      +'<span>Service</span><span style="text-align:right">Claimed</span><span style="text-align:right">Fair Low</span><span style="text-align:right">Fair Mid</span><span style="text-align:right">Fair High</span><span style="text-align:center">Status</span>'
+      +'</div>';
+    p.line_items.forEach(function(item, i){
+      var fc = flagColor[item.flag]||'#7080a0';
+      var fl = flagLabel[item.flag]||item.flag||'—';
+      html += '<div style="display:grid;grid-template-columns:1fr 90px 80px 90px 80px 90px;gap:8px;padding:10px 14px;border-top:1px solid #e8ecf4;background:'+(i%2===0?'#fff':'#fafbfd')+';align-items:center">'
+        +'<div><div style="font-size:13px;color:#2c3e50;font-weight:500">'+esc(item.description||'—')+'</div>'+(item.code?'<div style="font-size:10px;color:#9098b0">'+esc(item.code)+'</div>':'')+'</div>'
+        +'<div style="text-align:right;font-size:12px;font-weight:600;color:#1a2f5e">'+_mcdFmt(item.claimed_amount)+'</div>'
+        +'<div style="text-align:right;font-size:11px;color:#7080a0">'+_mcdFmt(item.fair_low,true)+'</div>'
+        +'<div style="text-align:right;font-size:13px;font-weight:700;color:#059669">'+_mcdFmt(item.fair_mid)+'</div>'
+        +'<div style="text-align:right;font-size:11px;color:#7080a0">'+_mcdFmt(item.fair_high,true)+'</div>'
+        +'<div style="text-align:center"><span class="mcd-pill" style="background:'+fc+'20;color:'+fc+'">'+fl+'</span></div>'
+        +'</div>';
+      if(item.flag_reason) html += '<div style="padding:2px 14px 10px;background:'+(i%2===0?'#fff':'#fafbfd')+';font-size:11px;color:#9098b0;font-style:italic">'+esc(item.flag_reason)+'</div>';
+    });
+    html += '</div>';
+  }
+
+  if(p.totals) {
+    var t = p.totals;
+    var over = Number(t.overpayment_risk||0);
+    html += '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:16px">'
+      +_mcdMetaBox('Total Claimed', 'EUR '+Number(t.total_claimed||0).toFixed(2), '#1a2f5e')
+      +_mcdMetaBox('Fair Market Mid', 'EUR '+Number(t.total_fair_mid||0).toFixed(2), '#059669')
+      +_mcdMetaBox('Overpayment Risk', 'EUR '+over.toFixed(2)+' ('+Number(t.overpayment_pct||0).toFixed(1)+'%)', over>0?'#c0392b':'#059669')
+      +'</div>';
+  }
+
+  if(p.recommendation) {
+    html += '<div style="background:#f0f4ff;border-radius:10px;padding:14px 16px;border-left:4px solid #1a2f5e">'
+      +'<div style="font-size:11px;font-weight:700;color:#1a2f5e;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">Recommendation</div>'
+      +'<div style="font-size:13px;color:#2c3e50;line-height:1.6">'+esc(p.recommendation)+'</div>'
+      +'</div>';
+  }
+  return html;
+}
+
+function _mcdFmt(v, noPrefix) {
+  if(v == null || v === '') return '—';
+  var n = Number(v);
+  return isNaN(n) ? esc(v) : (noPrefix ? n.toFixed(0) : 'EUR '+n.toFixed(2));
+}
+
+function _mcdMetaBox(label, value, color) {
+  return '<div style="background:#fff;border:1px solid #e8ecf4;border-radius:10px;padding:14px 16px;border-top:3px solid '+color+'">'
+    +'<div style="font-size:10px;font-weight:700;text-transform:uppercase;color:#9098b0;letter-spacing:.5px;margin-bottom:6px">'+esc(label)+'</div>'
+    +'<div style="font-size:18px;font-weight:800;color:'+color+'">'+esc(value)+'</div>'
+    +'</div>';
+}
+
+function _mcdRenderDiscrepancy() {
+  var pricing = _mcdData.pricing;
+  if(!pricing) return '<p style="color:#7080a0">Run analysis first.</p>';
+
+  var flagColor = { high:'#d97706', very_high:'#c0392b', low:'#7080a0' };
+  var flagLabel = { high:'⚠ High Billing', very_high:'🚩 Very High Billing', low:'↓ Possibly Under-coded' };
+
+  var flagged = (pricing.line_items||[]).filter(function(item){ return item.flag && item.flag !== 'ok'; });
+  var html = '<div style="margin-bottom:18px"><div style="font-size:15px;font-weight:700;color:#1a2f5e;margin-bottom:14px">Discrepancy Analysis</div>';
+
+  if(!flagged.length) {
+    html += '<div style="background:#f0fdf4;border:1px solid #86efac;border-radius:10px;padding:24px;text-align:center">'
+      +'<div style="font-size:28px;margin-bottom:8px">✅</div>'
+      +'<div style="font-size:14px;font-weight:700;color:#059669">No significant discrepancies found</div>'
+      +'<div style="font-size:12px;color:#7080a0;margin-top:4px">All billed amounts are within acceptable market ranges for '+esc((_mcdCountry||{}).name||'—')+'</div>'
+      +'</div>';
+  } else {
+    flagged.forEach(function(item){
+      var fc = flagColor[item.flag]||'#7080a0';
+      var fl = flagLabel[item.flag]||item.flag;
+      var claimed = Number(item.claimed_amount||0);
+      var fairMid = Number(item.fair_mid||0);
+      var diff = claimed - fairMid;
+      var pct = fairMid > 0 ? ((diff/fairMid)*100) : 0;
+      html += '<div style="border:1px solid '+fc+'40;border-left:4px solid '+fc+';border-radius:10px;padding:14px 16px;margin-bottom:12px;background:'+fc+'08">'
+        +'<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">'
+        +'<div style="font-size:13px;font-weight:700;color:#1a2f5e">'+esc(item.description||'—')+'</div>'
+        +'<span class="mcd-pill" style="background:'+fc+'20;color:'+fc+'">'+fl+'</span>'
+        +'</div>'
+        +'<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:8px">'
+        +'<div style="text-align:center;background:#fff;border-radius:8px;padding:8px"><div style="font-size:10px;color:#9098b0;margin-bottom:2px">Claimed</div><div style="font-size:15px;font-weight:800;color:#1a2f5e">EUR '+claimed.toFixed(2)+'</div></div>'
+        +'<div style="text-align:center;background:#fff;border-radius:8px;padding:8px"><div style="font-size:10px;color:#9098b0;margin-bottom:2px">Fair Market Mid</div><div style="font-size:15px;font-weight:800;color:#059669">EUR '+fairMid.toFixed(2)+'</div></div>'
+        +'<div style="text-align:center;background:#fff;border-radius:8px;padding:8px"><div style="font-size:10px;color:#9098b0;margin-bottom:2px">Difference</div><div style="font-size:15px;font-weight:800;color:'+fc+'">'+(diff>=0?'+':'')+diff.toFixed(2)+' ('+(pct>=0?'+':'')+pct.toFixed(1)+'%)</div></div>'
+        +'</div>';
+      if(item.flag_reason) html += '<div style="font-size:12px;color:#7080a0;font-style:italic">'+esc(item.flag_reason)+'</div>';
+      html += '</div>';
+    });
+  }
+  return html+'</div>';
+}
+
+function _mcdRenderFullReport() {
+  var codes = _mcdData.codes;
+  var pricing = _mcdData.pricing;
+  var c = getC(_mcdCaseId);
+  var cc = _mcdCountry||{ flag:'', name:'—' };
+
+  function listCodes(title, items) {
+    if(!items||!items.length) return '';
+    var s = '<p><b>'+title+':</b></p><ul style="margin:4px 0 12px;padding-left:20px">';
+    items.forEach(function(it){ s += '<li style="margin-bottom:3px"><code style="background:#1a2f5e;color:#fff;padding:1px 5px;border-radius:3px;font-size:11px">'+esc(it.code||'')+'</code> — '+esc(it.description||'')+(it.confidence?' <small style="color:#9098b0">['+it.confidence+']</small>':'')+'</li>'; });
+    return s+'</ul>';
+  }
+
+  var html = '<div style="font-family:Georgia,serif;font-size:13px;line-height:1.7;color:#1a1a2e">'
+    +'<h2 style="font-size:16px;border-bottom:2px solid #d4a847;padding-bottom:8px;color:#1a2f5e;font-family:\'DM Sans\',sans-serif">🏥 Medical Coding &amp; Pricing Report</h2>'
+    +'<p><b>Case:</b> '+esc(c?c.caseNum||'—':'—')+'&nbsp;&nbsp;|&nbsp;&nbsp;<b>Patient:</b> '+esc(c?c.patient||'—':'—')+'<br><b>Country:</b> '+cc.flag+' '+esc(cc.name)+'&nbsp;&nbsp;|&nbsp;&nbsp;<b>Date:</b> '+new Date().toLocaleDateString('en-GB')+'</p>';
+
+  if(codes && codes.summary) html += '<h3 style="color:#1a2f5e;font-family:\'DM Sans\',sans-serif">Clinical Summary</h3><p>'+esc(codes.summary)+'</p>';
+
+  if(codes) {
+    html += '<h3 style="color:#1a2f5e;font-family:\'DM Sans\',sans-serif">Medical Codes Extracted</h3>';
+    html += listCodes('ICD-10 Primary', codes.icd10_primary);
+    html += listCodes('ICD-10 Secondary', codes.icd10_secondary);
+    html += listCodes('CPT Procedures', codes.cpt);
+    html += listCodes('DRG Groups', codes.drg);
+    html += listCodes('SNOMED CT', codes.snomed);
+    html += listCodes('LOINC', codes.loinc);
+    html += listCodes('APC', codes.apc);
+    html += listCodes('HCC Risk Adjustment', codes.hcc);
+  }
+
+  if(pricing) {
+    html += '<h3 style="color:#1a2f5e;font-family:\'DM Sans\',sans-serif">Pricing Analysis — '+esc(cc.name)+'</h3>';
+    if(pricing.market_notes) html += '<p><i>'+esc(pricing.market_notes)+'</i></p>';
+    if(pricing.totals) {
+      var t = pricing.totals;
+      html += '<p><b>Total Claimed:</b> EUR '+Number(t.total_claimed||0).toFixed(2)+'<br>'
+        +'<b>Fair Market Mid:</b> EUR '+Number(t.total_fair_mid||0).toFixed(2)+'<br>'
+        +'<b>Overpayment Risk:</b> EUR '+Number(t.overpayment_risk||0).toFixed(2)+' ('+Number(t.overpayment_pct||0).toFixed(1)+'%)</p>';
+    }
+    if(pricing.recommendation) html += '<p><b>Recommendation:</b> '+esc(pricing.recommendation)+'</p>';
+  }
+
+  html += '<hr style="border:none;border-top:1px solid #dde2ef;margin:20px 0"><p style="font-size:10px;color:#9098b0">Generated by CaseEval 1 \xb7 HealthWatch Associates TPA \xb7 '+new Date().toISOString()+'</p></div>';
+  return html;
+}
+
+function mcdExportPDF() {
+  var c = getC(_mcdCaseId);
+  var caseNum = c ? (c.caseNum||'case') : 'case';
+  var codes = _mcdData.codes;
+  var pricing = _mcdData.pricing;
+  var cc = _mcdCountry||{ flag:'', name:'—' };
+  var flagColor = { ok:'#059669', high:'#d97706', very_high:'#c0392b', low:'#7080a0' };
+  var flagLabel = { ok:'OK', high:'HIGH', very_high:'VERY HIGH', low:'LOW' };
+
+  function listCodesHTML(title, items) {
+    if(!items||!items.length) return '';
+    var h = '<h3>'+title+'</h3><table><thead><tr><th>Code</th><th>Description</th><th>Info</th></tr></thead><tbody>';
+    items.forEach(function(it){ h+='<tr><td><code>'+esc(it.code||'')+'</code></td><td>'+esc(it.description||'')+'</td><td>'+esc(it.confidence||it.weight||it.raf_weight||'')+'</td></tr>'; });
+    return h+'</tbody></table>';
+  }
+
+  var codesHtml = codes ? (
+    (codes.summary ? '<div class="summ">'+esc(codes.summary)+'</div>' : '') +
+    listCodesHTML('ICD-10 Primary Diagnoses', codes.icd10_primary) +
+    listCodesHTML('ICD-10 Secondary Diagnoses', codes.icd10_secondary) +
+    listCodesHTML('CPT Procedures', codes.cpt) +
+    listCodesHTML('DRG Groups', codes.drg) +
+    listCodesHTML('SNOMED CT', codes.snomed) +
+    listCodesHTML('LOINC', codes.loinc) +
+    listCodesHTML('APC', codes.apc) +
+    listCodesHTML('HCC Risk Adjustment', codes.hcc)
+  ) : '<p>No code data</p>';
+
+  var pricingHtml = '';
+  if(pricing) {
+    if(pricing.market_notes) pricingHtml += '<div class="summ">'+esc(pricing.market_notes)+'</div>';
+    if(pricing.line_items&&pricing.line_items.length) {
+      pricingHtml += '<table><thead><tr><th>Service</th><th>Claimed (EUR)</th><th>Fair Mid (EUR)</th><th>Status</th></tr></thead><tbody>';
+      pricing.line_items.forEach(function(item){
+        var fc = flagColor[item.flag]||'#7080a0';
+        pricingHtml += '<tr><td>'+esc(item.description||'—')+(item.code?'<br><small>'+esc(item.code)+'</small>':'')+'</td>'
+          +'<td style="text-align:right">'+Number(item.claimed_amount||0).toFixed(2)+'</td>'
+          +'<td style="text-align:right;color:#059669">'+Number(item.fair_mid||0).toFixed(2)+'</td>'
+          +'<td style="color:'+fc+';font-weight:700">'+esc(flagLabel[item.flag]||item.flag||'—')+'</td></tr>';
+        if(item.flag_reason) pricingHtml += '<tr><td colspan="4" style="font-style:italic;font-size:11px;color:#888">'+esc(item.flag_reason)+'</td></tr>';
+      });
+      pricingHtml += '</tbody></table>';
+    }
+    if(pricing.totals) {
+      var t = pricing.totals;
+      pricingHtml += '<div class="totals">'
+        +'<span>Total Claimed: <b>EUR '+Number(t.total_claimed||0).toFixed(2)+'</b></span>'
+        +'<span>Fair Mid: <b>EUR '+Number(t.total_fair_mid||0).toFixed(2)+'</b></span>'
+        +'<span style="color:'+(Number(t.overpayment_risk||0)>0?'#c0392b':'#059669')+'">Overpayment Risk: <b>EUR '+Number(t.overpayment_risk||0).toFixed(2)+' ('+Number(t.overpayment_pct||0).toFixed(1)+'%)</b></span>'
+        +'</div>';
+    }
+    if(pricing.recommendation) pricingHtml += '<div class="summ"><b>Recommendation:</b> '+esc(pricing.recommendation)+'</div>';
+  }
+
+  var html = '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Medical Coding — '+esc(caseNum)+'</title>'
+    +'<style>body{font-family:Georgia,serif;max-width:900px;margin:30px auto;padding:0 24px;font-size:12px;color:#1a1a2e}'
+    +'h1{font-size:20px;color:#1a2f5e;border-bottom:3px solid #d4a847;padding-bottom:10px}'
+    +'h2{font-size:14px;color:#1a2f5e;border-bottom:1px solid #dde2ef;padding-bottom:6px;margin-top:28px;text-transform:uppercase;letter-spacing:.5px}'
+    +'h3{font-size:12px;color:#1a2f5e;margin-top:16px;font-weight:700}'
+    +'table{width:100%;border-collapse:collapse;margin:10px 0;font-size:11px}'
+    +'th{background:#1a2f5e;color:#fff;padding:7px 10px;text-align:left}'
+    +'td{padding:7px 10px;border-bottom:1px solid #eee}'
+    +'tr:nth-child(even) td{background:#f8f9fc}'
+    +'code{background:#1a2f5e;color:#fff;padding:2px 6px;border-radius:3px;font-size:10px}'
+    +'.summ{background:#f0f4ff;border-left:4px solid #1a2f5e;padding:10px 14px;margin:10px 0;font-size:12px;line-height:1.6;border-radius:0 6px 6px 0}'
+    +'.totals{display:flex;gap:24px;flex-wrap:wrap;background:#f8f9fc;padding:12px 16px;border-radius:8px;margin:10px 0;font-size:12px}'
+    +'.meta{display:grid;grid-template-columns:1fr 1fr;gap:8px;background:#f0f4ff;padding:12px;border-radius:8px;margin:14px 0;font-size:12px}'
+    +'.footer{margin-top:40px;border-top:1px solid #eee;padding-top:12px;font-size:10px;color:#9098b0}'
+    +'@media print{body{margin:0}}'
+    +'</style></head><body>'
+    +'<h1>🏥 Medical Coding &amp; Pricing Report</h1>'
+    +'<div class="meta">'
+    +'<div><b>Case:</b> '+esc(caseNum)+'</div>'
+    +'<div><b>Patient:</b> '+esc(c?c.patient||'—':'—')+'</div>'
+    +'<div><b>Country:</b> '+cc.flag+' '+esc(cc.name)+'</div>'
+    +'<div><b>Date:</b> '+new Date().toLocaleDateString('en-GB')+'</div>'
+    +'</div>'
+    +'<h2>Medical Codes</h2>'+codesHtml
+    +'<h2>Fair Pricing Analysis</h2>'+pricingHtml
+    +'<div class="footer">Generated by CaseEval 1 \xb7 HealthWatch Associates TPA \xb7 '+new Date().toISOString()+'</div>'
+    +'</body></html>';
+
+  var w = window.open('','_blank','width=920,height=700');
+  if(!w) { toast('Pop-up blocked — please allow pop-ups and try again'); return; }
+  w.document.write(html);
+  w.document.close();
+  setTimeout(function(){ w.print(); }, 800);
+}
+
+function mcdExportWord() {
+  var c = getC(_mcdCaseId);
+  var caseNum = c ? (c.caseNum||'case') : 'case';
+  var codes = _mcdData.codes;
+  var pricing = _mcdData.pricing;
+  var cc = _mcdCountry||{ name:'—' };
+
+  var body = '=== MEDICAL CODING & PRICING REPORT ===\n';
+  body += 'Case: '+caseNum+'  |  Patient: '+(c?c.patient||'—':'—')+'\n';
+  body += 'Country: '+cc.name+'  |  Date: '+new Date().toLocaleDateString('en-GB')+'\n\n';
+
+  if(codes) {
+    if(codes.summary) body += '--- CLINICAL SUMMARY ---\n'+codes.summary+'\n\n';
+    function appendCodes(title, items) {
+      if(!items||!items.length) return;
+      body += '--- '+title.toUpperCase()+' ---\n';
+      items.forEach(function(it){ body += (it.code||'—')+' | '+(it.description||'—')+(it.confidence?' ['+it.confidence+']':'')+(it.weight?' [DRG w:'+it.weight+']':'')+(it.raf_weight?' [RAF:'+it.raf_weight+']':'')+'\n'; });
+      body += '\n';
+    }
+    appendCodes('ICD-10 Primary', codes.icd10_primary);
+    appendCodes('ICD-10 Secondary', codes.icd10_secondary);
+    appendCodes('CPT Procedures', codes.cpt);
+    appendCodes('DRG Groups', codes.drg);
+    appendCodes('SNOMED CT', codes.snomed);
+    appendCodes('LOINC', codes.loinc);
+    appendCodes('APC', codes.apc);
+    appendCodes('HCC Risk Adjustment', codes.hcc);
+  }
+
+  if(pricing) {
+    body += '--- PRICING ANALYSIS ('+cc.name+') ---\n';
+    if(pricing.market_notes) body += pricing.market_notes+'\n\n';
+    (pricing.line_items||[]).forEach(function(item){
+      body += (item.description||'—')+(item.code?' ('+item.code+')':'')+'\n';
+      body += '  Claimed: EUR '+Number(item.claimed_amount||0).toFixed(2)
+        +'  Fair Mid: EUR '+Number(item.fair_mid||0).toFixed(2)
+        +'  Flag: '+(item.flag||'—')+'\n';
+      if(item.flag_reason) body += '  Note: '+item.flag_reason+'\n';
+      body += '\n';
+    });
+    if(pricing.totals) {
+      var t = pricing.totals;
+      body += 'TOTALS: Claimed EUR '+Number(t.total_claimed||0).toFixed(2)
+        +' | Fair EUR '+Number(t.total_fair_mid||0).toFixed(2)
+        +' | Overpayment Risk EUR '+Number(t.overpayment_risk||0).toFixed(2)+'\n\n';
+    }
+    if(pricing.recommendation) body += 'RECOMMENDATION: '+pricing.recommendation+'\n';
+  }
+  body += '\n--- Generated by CaseEval 1 \xb7 HealthWatch Associates TPA \xb7 '+new Date().toISOString()+' ---';
+
+  var blob = new Blob([body], { type: 'application/msword' });
+  var url = URL.createObjectURL(blob);
+  var a = document.createElement('a');
+  a.href = url;
+  a.download = 'MedCoding_'+caseNum+'_'+new Date().toISOString().slice(0,10)+'.doc';
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(function(){ document.body.removeChild(a); URL.revokeObjectURL(url); }, 1000);
+  toast('Word document downloaded');
+}
+
+async function mcdSaveFirebase() {
+  if(!window.db) { toast('Firebase not connected'); return; }
+  var c = getC(_mcdCaseId);
+  if(!c) { toast('Case not found'); return; }
+  var ts = Date.now();
+  try {
+    await window.db.collection('cases').doc(_mcdCaseId).collection('medical_coding').doc(''+ts).set({
+      timestamp: ts,
+      caseId: _mcdCaseId,
+      caseNum: c.caseNum||'—',
+      country: _mcdCountry||null,
+      codes: _mcdData.codes||null,
+      pricing: _mcdData.pricing||null,
+      createdAt: new Date().toISOString()
+    });
+    toast('✅ Medical coding report saved to Firebase');
+  } catch(e) {
+    toast('Firebase save failed: '+e.message);
+  }
+}
+// ── End Medical Coding & Pricing ──────────────────────────────────────────
 
 </script>
 
