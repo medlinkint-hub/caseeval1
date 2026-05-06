@@ -2227,7 +2227,7 @@ async function runEval(caseId) {
     }
 
     // ── Auto-extract financial info from documents in background ──
-    const hasFiles = FILES.filter(f=>f.data&&['img','pdf','doc','txt'].includes(f.ext));
+    const hasFiles = FILES.filter(f=>f.data&&['img','pdf','doc','txt','xls'].includes(f.ext));
     if(hasFiles.length) {
       if(window._currentCaseId === caseId) setEvSt('run', 'Extracting financial info...');
       autoExtractFinance(caseId, hasFiles).then(()=>{
@@ -3999,7 +3999,7 @@ async function extractInvoicesFromCase(caseId) {
   }
 
   const c = getC(caseId);
-  const SUPPORTED = ['img','pdf','doc','txt'];
+  const SUPPORTED = ['img','pdf','doc','txt','xls'];
 
   // If FILES belongs to a different case, reload from IDB for this case first
   if(_filesForCaseId !== caseId && c && c.filesData && c.filesData.length > 0) {
@@ -5104,6 +5104,42 @@ async function extractInvoiceData(fd) {
       return null;
     }
 
+  } else if(fd.ext === 'xls') {
+    // Spreadsheets: xls, xlsx, ods — extract via SheetJS to structured text
+    try {
+      await loadSheetJS();
+      var b64s = fd.data.indexOf(';base64,')>-1 ? fd.data.split(';base64,')[1] : fd.data.split(',')[1];
+      if(!b64s) { console.warn('XLS no data:', fd.name); return null; }
+      var wb2 = XLSX.read(b64s, {type:'base64', cellDates:true, dateNF:'dd/mm/yyyy', raw:false});
+      var xlsTxt = '';
+      wb2.SheetNames.forEach(function(sn){
+        var ws2 = wb2.Sheets[sn];
+        var rows2 = XLSX.utils.sheet_to_json(ws2, {header:1, defval:'', raw:false});
+        rows2 = rows2.filter(function(r){ return r.some(function(c){ return String(c||'').trim()!==''; }); });
+        if(!rows2.length) return;
+        var maxCols2 = 0;
+        rows2.forEach(function(r){ if(r.length>maxCols2) maxCols2=r.length; });
+        var headers2 = rows2[0].map(function(h){ return String(h||'').trim(); });
+        xlsTxt += '=== Sheet: '+sn+' ===\n';
+        for(var ri2=1; ri2<rows2.length; ri2++){
+          var row2 = rows2[ri2];
+          var parts2 = [];
+          for(var ci2=0; ci2<maxCols2; ci2++){
+            var hdr2 = headers2[ci2]||('Col'+(ci2+1));
+            var val2 = String(row2[ci2]||'').trim();
+            if(val2) parts2.push(hdr2+': '+val2);
+          }
+          if(parts2.length) xlsTxt += parts2.join(' | ')+'\n';
+        }
+        xlsTxt += '\n';
+      });
+      if(!xlsTxt.trim()) { console.warn('XLS appears empty:', fd.name); return null; }
+      mc.push({type:'text', text:'[SPREADSHEET/CLAIM LIST: '+fd.name+']\n\n'+xlsTxt.substring(0,20000)});
+    } catch(e) {
+      console.error('XLS extraction error:', fd.name, e);
+      return null;
+    }
+
   } else {
     console.log('Unsupported file type for invoice extraction:', fd.ext, fd.name);
     return null;
@@ -5132,7 +5168,7 @@ async function extractAllInvoices(caseId) {
   if(!getKey()) { toast('No API key — go to Settings'); return; }
 
   const statusEl = G('inv_status');
-  const SUPPORTED = ['img','pdf','doc','txt'];
+  const SUPPORTED = ['img','pdf','doc','txt','xls'];
 
   function setStatus(msg, state) {
     if(!statusEl) return;
@@ -9196,13 +9232,37 @@ async function readFileForAI(fd) {
       await loadSheetJS();
       var b64x = data.indexOf(';base64,')>-1 ? data.split(';base64,')[1] : data.split(',')[1];
       if(!b64x) throw new Error('no data');
-      var wb = XLSX.read(b64x, {type:'base64'});
+      var wb = XLSX.read(b64x, {type:'base64', cellDates:true, dateNF:'dd/mm/yyyy', raw:false});
       var out = '';
       wb.SheetNames.forEach(function(sn){
-        out += '=== '+sn+' ===\n'+XLSX.utils.sheet_to_csv(wb.Sheets[sn])+'\n\n';
+        var ws = wb.Sheets[sn];
+        // Use header:1 to get array-of-arrays preserving structure
+        var rows = XLSX.utils.sheet_to_json(ws, {header:1, defval:'', raw:false});
+        if(!rows.length) return;
+        // Remove fully-empty rows
+        rows = rows.filter(function(r){ return r.some(function(c){ return String(c||'').trim()!==''; }); });
+        if(!rows.length) return;
+        // Find actual number of columns used
+        var maxCols = 0;
+        rows.forEach(function(r){ if(r.length>maxCols) maxCols=r.length; });
+        // First non-empty row = headers
+        var headers = rows[0].map(function(h){ return String(h||'').trim(); });
+        out += '=== Sheet: '+sn+' ===\n';
+        // Format as aligned table rows: "Header: Value | Header: Value"
+        for(var ri=1; ri<rows.length; ri++){
+          var row = rows[ri];
+          var parts = [];
+          for(var ci=0; ci<maxCols; ci++){
+            var hdr = headers[ci]||('Col'+(ci+1));
+            var val = String(row[ci]||'').trim();
+            if(val) parts.push(hdr+': '+val);
+          }
+          if(parts.length) out += parts.join(' | ')+'\n';
+        }
+        out += '\n';
       });
       if(!out.trim()) throw new Error('spreadsheet appears empty');
-      return [{type:'text', text:'[SPREADSHEET: '+fd.name+']\n\n'+out.substring(0,15000)}];
+      return [{type:'text', text:'[SPREADSHEET: '+fd.name+']\n\n'+out.substring(0,30000)}];
     } catch(e){
       return [{type:'text', text:'[Spreadsheet — could not read '+fd.name+': '+e.message+']'}];
     }
