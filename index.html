@@ -1507,16 +1507,21 @@ async function autoExtractFinance(caseId, files) {
   if(!c) return;
   if(!c.amountClaimed || parseFloat(c.amountClaimed)===0) {
     updC(caseId, {amountClaimed: total.toFixed(2)});
-    const el = G('f_ac'); if(el) el.value = total.toFixed(2);
+    // Only update the DOM field if still viewing this case
+    if(window._currentCaseId === caseId) {
+      const el = G('f_ac'); if(el) el.value = total.toFixed(2);
+    }
   }
-  // Show results in the financial extract area
-  const statusEl = G('invExtStatus');
-  if(statusEl) {
-    statusEl.style.display = 'flex';
-    statusEl.className = 'evs evd';
-    statusEl.innerHTML = '<svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg>&nbsp;Auto-extracted: '+extracted.length+' document(s) — '+fEUR(total);
+  // Show results in the financial extract area (only if still on this case)
+  if(window._currentCaseId === caseId) {
+    const statusEl = G('invExtStatus');
+    if(statusEl) {
+      statusEl.style.display = 'flex';
+      statusEl.className = 'evs evd';
+      statusEl.innerHTML = '<svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg>&nbsp;Auto-extracted: '+extracted.length+' document(s) — '+fEUR(total);
+    }
+    renderCaseInvoices(caseId, extracted);
   }
-  renderCaseInvoices(caseId, extracted);
   console.log('[AutoFinance] Done:', extracted.length, 'docs, total:', fEUR(total));
 }
 
@@ -1618,6 +1623,8 @@ async function runEval(caseId) {
     for(var _ki = 0; _ki < _idbKeys.length && !loaded; _ki++) {
       try {
         var idbFiles0 = await idbGet(_idbKeys[_ki]);
+        // Guard: abort if user switched cases during async IDB load
+        if(window._currentCaseId !== caseId) { console.warn('[runEval] Case switched during IDB load — aborting'); return; }
         if(idbFiles0 && Array.isArray(idbFiles0) && idbFiles0.length > 0) {
           FILES = idbFiles0.map(function(f){
             return Object.assign({}, f, {ext: (f.ext && f.ext.length <= 4 && ['pdf','doc','img','xls','rtf','eml','txt','html','heic','other'].indexOf(f.ext)!==-1) ? f.ext : fxt(f.name||'')});
@@ -2072,7 +2079,7 @@ async function runEval(caseId) {
         fullResult = full;
         clearInterval(iv);
         if(streamEl) streamEl.textContent = full;
-        setEvSt('run', 'Writing decision...');
+        if(window._currentCaseId === caseId) setEvSt('run', 'Writing decision...');
       }
     );
     
@@ -2081,7 +2088,7 @@ async function runEval(caseId) {
     let finalResult = fullResult;
     if(fullResult && !/DECISION\s*:/i.test(fullResult)) {
       // Evaluation ended without DECISION: — make a fast second call for verdict only
-      setEvSt('run', '⏳ Completing final decision...');
+      if(window._currentCaseId === caseId) setEvSt('run', '⏳ Completing final decision...');
       try {
         const verdictPrompt = 'Based on this partial IPMI evaluation, output ONLY the final decision.\n\n'
           + 'EVALUATION SO FAR (last part):\n' + fullResult.slice(-2000) + '\n\n'
@@ -2172,16 +2179,19 @@ async function runEval(caseId) {
     var verdictColors = {declined:'#e8231a', approved:'#16a34a', partial:'#f59e0b', reviewing:'#1a2a72'};
     var verdictMsg = {declined:'⛔ DECLINED', approved:'✅ APPROVED', partial:'⚠ PARTIALLY APPROVED', reviewing:'⏳ PENDING INFORMATION'};
     toast((verdictMsg[finalStatus]||'Evaluation complete') + ' — ' + (savedDecision||''));
-    // Render with proper formatting
-    if(erDiv) erDiv.innerHTML = renderEvalTxt(finalResult);
-    setEvSt('done', 'Done — '+new Date().toLocaleTimeString());
-    // Update all visible badges for this case
-    const cb = G('cbdg'); if(cb) { const cc=getC(caseId); cb.innerHTML=tBadge(cc.type)+' '+pBadge(cc.priority)+' '+sBadge(cc.status); }
-    // Force refresh of case list badge if visible
-    if(typeof updBadges === 'function') updBadges();
-    // Refresh the case status select dropdown if visible  
-    const stSel = G('f_s'); if(stSel && stSel.value !== finalStatus) stSel.value = finalStatus;
-    const tb = G('tlB'); if(tb) tb.innerHTML = renderTL(getC(caseId).timeline||[]);
+    // Only update DOM elements if user is still viewing the evaluated case
+    if(window._currentCaseId === caseId) {
+      // Render with proper formatting
+      if(erDiv) erDiv.innerHTML = renderEvalTxt(finalResult);
+      setEvSt('done', 'Done — '+new Date().toLocaleTimeString());
+      // Update all visible badges for this case
+      const cb = G('cbdg'); if(cb) { const cc=getC(caseId); cb.innerHTML=tBadge(cc.type)+' '+pBadge(cc.priority)+' '+sBadge(cc.status); }
+      // Force refresh of case list badge if visible
+      if(typeof updBadges === 'function') updBadges();
+      // Refresh the case status select dropdown if visible
+      const stSel = G('f_s'); if(stSel && stSel.value !== finalStatus) stSel.value = finalStatus;
+      const tb = G('tlB'); if(tb) tb.innerHTML = renderTL(getC(caseId).timeline||[]);
+    }
 
     // ── Auto-save evaluation as PDF document in case files ──
     setTimeout(function(){ saveEvalAsDocument(caseId, finalResult, savedDecision); }, 500);
@@ -2189,6 +2199,7 @@ async function runEval(caseId) {
     // ── If PENDING: switch to Documents tab and scroll to pending letter card ──
     if(finalStatus === 'reviewing' && /^PENDING/i.test(savedDecision)) {
       setTimeout(function() {
+        if(window._currentCaseId !== caseId) return; // case switched — skip tab navigation
         var filesTab = document.querySelector('.doc-tab[data-dtab="files"]');
         if(filesTab) {
           filesTab.click();
@@ -2204,9 +2215,9 @@ async function runEval(caseId) {
     // ── Auto-extract financial info from documents in background ──
     const hasFiles = FILES.filter(f=>f.data&&['img','pdf','doc','txt'].includes(f.ext));
     if(hasFiles.length) {
-      setEvSt('run', 'Extracting financial info...');
+      if(window._currentCaseId === caseId) setEvSt('run', 'Extracting financial info...');
       autoExtractFinance(caseId, hasFiles).then(()=>{
-        setEvSt('done', 'Evaluation + finances done — '+new Date().toLocaleTimeString());
+        if(window._currentCaseId === caseId) setEvSt('done', 'Evaluation + finances done — '+new Date().toLocaleTimeString());
       }).catch(e=>{ console.warn('Finance auto-extract failed:', e.message); });
     }
   } catch(err) {
@@ -2235,8 +2246,10 @@ async function runEval(caseId) {
             + '=================\n\n';
           finalResult = retryResult;
           updC(caseId, {eval: retryHeader + finalResult, status:'reviewing'});
-          if(erDiv) erDiv.innerHTML = renderEvalTxt(finalResult);
-          setEvSt('done', 'Done (text-only) — '+new Date().toLocaleTimeString('en',{hour:'2-digit',minute:'2-digit'}));
+          if(window._currentCaseId === caseId) {
+            if(erDiv) erDiv.innerHTML = renderEvalTxt(finalResult);
+            setEvSt('done', 'Done (text-only) — '+new Date().toLocaleTimeString('en',{hour:'2-digit',minute:'2-digit'}));
+          }
           toast('✓ Evaluation completed (without file attachments)');
           if(btn) btn.disabled = false;
           return;
@@ -2246,22 +2259,24 @@ async function runEval(caseId) {
       }
     }
 
-    // Give user-friendly error messages
-    if(errMsg.includes('timed out')) {
-      setEvSt('err', '⏱ Evaluation timed out — try again or reduce case details');
-      toast('⏱ Timed out. Try again — usually works on second attempt.');
-    } else if(errMsg.includes('NetworkError') || errMsg.includes('Failed to fetch')) {
-      setEvSt('err', '🌐 Network error — check your internet connection');
-      toast('🌐 Network error. Check connection and try again.');
-    } else if(errMsg.includes('overloaded')) {
-      setEvSt('err', '⏳ Claude API busy — wait 30 seconds and try again');
-      toast('⏳ Claude API is busy. Wait 30 seconds and try again.');
-    } else if(errMsg.includes('credit') || errMsg.includes('quota') || errMsg.includes('billing')) {
-      setEvSt('err', '💳 API quota exceeded — check your Anthropic billing');
-      toast('💳 API credits exhausted. Check console.anthropic.com/billing');
-    } else {
-      setEvSt('err', '✗ Error: '+errMsg.substring(0,60));
-      toast('Error: '+errMsg.substring(0,80)+'. Try removing large files and retry.');
+    // Give user-friendly error messages (only update status if still on this case)
+    if(window._currentCaseId === caseId) {
+      if(errMsg.includes('timed out')) {
+        setEvSt('err', '⏱ Evaluation timed out — try again or reduce case details');
+        toast('⏱ Timed out. Try again — usually works on second attempt.');
+      } else if(errMsg.includes('NetworkError') || errMsg.includes('Failed to fetch')) {
+        setEvSt('err', '🌐 Network error — check your internet connection');
+        toast('🌐 Network error. Check connection and try again.');
+      } else if(errMsg.includes('overloaded')) {
+        setEvSt('err', '⏳ Claude API busy — wait 30 seconds and try again');
+        toast('⏳ Claude API is busy. Wait 30 seconds and try again.');
+      } else if(errMsg.includes('credit') || errMsg.includes('quota') || errMsg.includes('billing')) {
+        setEvSt('err', '💳 API quota exceeded — check your Anthropic billing');
+        toast('💳 API credits exhausted. Check console.anthropic.com/billing');
+      } else {
+        setEvSt('err', '✗ Error: '+errMsg.substring(0,60));
+        toast('Error: '+errMsg.substring(0,80)+'. Try removing large files and retry.');
+      }
     }
   }
   if(btn) {
@@ -3968,6 +3983,7 @@ async function extractInvoicesFromCase(caseId) {
     var _idbKeyExt = c._idbKey || ('casefiles_' + caseId);
     try {
       var idbFilesExt = await idbGet(_idbKeyExt);
+      if(window._currentCaseId !== caseId) return; // case switched during IDB load
       if(idbFilesExt && Array.isArray(idbFilesExt) && idbFilesExt.length > 0) {
         FILES = idbFilesExt;
         _filesForCaseId = caseId;
@@ -4046,9 +4062,12 @@ async function extractInvoicesFromCase(caseId) {
   saveInvoices(caseId, extracted);
   const totalEUR = extracted.reduce((s,e)=>s+e.totalEUR, 0);
   updC(caseId, {amountClaimed: totalEUR.toFixed(2)});
-  const amtEl = G('f_ac'); if(amtEl) amtEl.value = totalEUR.toFixed(2);
-  setS('Done — ' + extracted.length + ' document(s), total: ' + fEUR(totalEUR), 'done');
-  renderCaseInvoices(caseId, extracted);
+  // Only update DOM if still on this case
+  if(window._currentCaseId === caseId) {
+    const amtEl = G('f_ac'); if(amtEl) amtEl.value = totalEUR.toFixed(2);
+    setS('Done — ' + extracted.length + ' document(s), total: ' + fEUR(totalEUR), 'done');
+    renderCaseInvoices(caseId, extracted);
+  }
   toast('Extracted from ' + extracted.length + ' document(s) — ' + fEUR(totalEUR));
 }
 
@@ -10936,9 +10955,11 @@ function saveEvalAsDocument(caseId, evalText, decision) {
   currentFilesData.push({name:fileName, size:fileSize, ext:'html', type:'text/html', _key:null, _isEvalReport:true, _decision:decision, _evalDate:today.toISOString()});
   updC(caseId, {filesData: currentFilesData, _idbKey: idbKey});
 
-  // Refresh file list
-  var flc = document.getElementById('fl_c');
-  if(flc) renderFL_C(caseId);
+  // Refresh file list (only if still viewing this case)
+  if(window._currentCaseId === caseId) {
+    var flc = document.getElementById('fl_c');
+    if(flc) renderFL_C(caseId);
+  }
   toast('📄 Evaluation saved to Documents tab');
 }
 function renderFL_C(caseId) {
