@@ -633,6 +633,20 @@ function freeStorage() {
 setTimeout(function(){ try { freeStorage(); } catch(e){} }, 3000);
 
 const getC = id => CASES.find(c=>c.id===id) || null;
+
+// Normalize amount strings — handles European comma-decimal format (e.g. "11225,00" → "11225.00")
+function normAmt(val) {
+  if(val === null || val === undefined || val === '') return '';
+  var s = String(val).trim().replace(/\s/g,'');
+  // European with thousands dots: "1.225,00" → "1225.00"
+  if(/\d\.\d{3},\d{1,2}$/.test(s)) { s = s.replace(/\./g,'').replace(',','.'); }
+  // Simple comma-decimal: "11225,00" → "11225.00"
+  else if(/,\d{1,2}$/.test(s)) { s = s.replace(',','.'); }
+  // Thousands commas only: "11,225" → "11225"
+  else { s = s.replace(/,/g,''); }
+  var f = parseFloat(s);
+  return (isNaN(f) || f < 0) ? '' : f.toFixed(2);
+}
 var updC = function(id,o) {
   const i = CASES.findIndex(c=>c.id===id);
   if(i>=0) {
@@ -3785,7 +3799,17 @@ function renderCD(c) {
   try {
   const wireField = function(elId, field) {
     var el = G(elId); if(!el) return;
-    el.oninput = function() { updC(cid, {[field]: el.value}); if(field==='patient'){var cdn=G('cdn');if(cdn)cdn.textContent=el.value||'New Case';} };
+    var isAmt = (field === 'amountClaimed' || field === 'amountApproved');
+    el.oninput = function() {
+      updC(cid, {[field]: el.value});
+      if(field==='patient'){var cdn=G('cdn');if(cdn)cdn.textContent=el.value||'New Case';}
+    };
+    if(isAmt) {
+      el.onblur = function() {
+        var norm = normAmt(el.value);
+        if(norm !== '' && norm !== el.value) { el.value = norm; updC(cid, {[field]: norm}); }
+      };
+    }
   };
   // Scroll eval to top when loading case
   var evREl = G('evR'); if(evREl) evREl.scrollTop = 0;
@@ -4593,7 +4617,7 @@ function createCase() {
     insurer: gv2('n_i',true),
     type: gv2('n_t')||'medclaim',
     priority: gv2('n_pu')||'medium',
-    amountClaimed: gv2('n_a'),
+    amountClaimed: normAmt(gv2('n_a')),
     amountApproved:'', currency:'EUR', payStatus:'pending',
     desc: gv2('n_de',true),
     patientEmail:'', patientPhone:'',
@@ -8446,11 +8470,11 @@ function savePA(id) {
     paNumber: (document.getElementById('f_pa_num')||{}).value||'',
     paStatus: (document.getElementById('f_pa_status')||{}).value||'',
     paProcedure: (document.getElementById('f_pa_proc')||{}).value||'',
-    paEstCost: (document.getElementById('f_pa_cost')||{}).value||'',
+    paEstCost: normAmt((document.getElementById('f_pa_cost')||{}).value||''),
     paTreatingDoctor: (document.getElementById('f_pa_doctor')||{}).value||'',
     paHospital: (document.getElementById('f_pa_hosp')||{}).value||'',
     paJustification: (document.getElementById('f_pa_justif')||{}).value||'',
-    paApprovedAmount: (document.getElementById('f_pa_approved')||{}).value||'',
+    paApprovedAmount: normAmt((document.getElementById('f_pa_approved')||{}).value||''),
     paValidUntil: (document.getElementById('f_pa_valid')||{}).value||''
   };
   var c = getC(id); var prev = c ? c.paStatus : '';
@@ -8651,8 +8675,8 @@ function saveReserves(id) {
   var c = getC(id);
   var oldReserve = c ? c.reserve : '';
   var fields = {
-    reserve: (document.getElementById('f_reserve')||{}).value||'',
-    amountPaid: (document.getElementById('f_paid')||{}).value||'',
+    reserve: normAmt((document.getElementById('f_reserve')||{}).value||''),
+    amountPaid: normAmt((document.getElementById('f_paid')||{}).value||''),
     paymentDate: (document.getElementById('f_pay_date')||{}).value||'',
     reserveCode: (document.getElementById('f_res_code')||{}).value||'',
     subrogation: (document.getElementById('f_subroga')||{}).value||''
