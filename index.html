@@ -2464,6 +2464,60 @@ async function sendCaseChat(presetText, caseId) {
       : ('=== POLICY WORDING: ' + policyName + ' ===\n' + policyWording.substring(0, 8000))
   ].filter(Boolean).join('\n');
 
+  // ── Include extracted invoice/spreadsheet data in chat context ──
+  var invBreakdown = (typeof buildInvoiceBreakdown === 'function') ? buildInvoiceBreakdown(id) : '';
+  if(invBreakdown) caseContext += '\n\n' + invBreakdown;
+
+  // ── Read any spreadsheet/XLS files from memory and include their content ──
+  try {
+    var chatFiles = (_filesForCaseId === id ? FILES : []).filter(function(f){ return f.data && f.ext === 'xls'; });
+    // Also try loading from IDB if no xls in memory
+    if(!chatFiles.length && c.filesData) {
+      var xlsMeta = c.filesData.filter(function(m){ return ['xls','xlsx','ods'].some(function(e){ return (m.name||'').toLowerCase().endsWith('.'+e); }); });
+      if(xlsMeta.length && _filesForCaseId !== id) {
+        try {
+          var idbKey2 = c._idbKey || ('casefiles_' + id);
+          var idbF2 = await idbGet(idbKey2);
+          if(idbF2 && Array.isArray(idbF2)) {
+            chatFiles = idbF2.filter(function(f){ return f.data && ['xls','xlsx','ods'].some(function(e){ return (f.name||'').toLowerCase().endsWith('.'+e); }); });
+          }
+        } catch(e2){ console.warn('[chat] IDB load for xls:', e2.message); }
+      }
+    }
+    if(chatFiles.length && typeof XLSX !== 'undefined') {
+      var xlsSection = '\n\n=== UPLOADED SPREADSHEET DOCUMENTS ===\n';
+      for(var xf=0; xf<chatFiles.length; xf++){
+        var xfd = chatFiles[xf];
+        try {
+          var xb64 = xfd.data.indexOf(';base64,')>-1 ? xfd.data.split(';base64,')[1] : xfd.data.split(',')[1];
+          var xwb = XLSX.read(xb64, {type:'base64', cellDates:true, dateNF:'dd/mm/yyyy', raw:false});
+          xlsSection += '\n[FILE: ' + xfd.name + ']\n';
+          xwb.SheetNames.forEach(function(sn){
+            var xws = xwb.Sheets[sn];
+            var xrows = XLSX.utils.sheet_to_json(xws, {header:1, defval:'', raw:false});
+            xrows = xrows.filter(function(r){ return r.some(function(c){ return String(c||'').trim()!==''; }); });
+            if(!xrows.length) return;
+            var xmaxCols = 0; xrows.forEach(function(r){ if(r.length>xmaxCols) xmaxCols=r.length; });
+            var xhdrs = xrows[0].map(function(h){ return String(h||'').trim(); });
+            xlsSection += '--- Sheet: ' + sn + ' ---\n';
+            for(var xri=1; xri<xrows.length; xri++){
+              var xrow = xrows[xri];
+              var xparts = [];
+              for(var xci=0; xci<xmaxCols; xci++){
+                var xhdr = xhdrs[xci]||('Col'+(xci+1));
+                var xval = String(xrow[xci]||'').trim();
+                if(xval) xparts.push(xhdr+': '+xval);
+              }
+              if(xparts.length) xlsSection += xparts.join(' | ')+'\n';
+            }
+          });
+        } catch(xErr){ console.warn('[chat] XLS read error:', xfd.name, xErr.message); }
+      }
+      xlsSection += '=== END SPREADSHEET DATA ===';
+      caseContext += xlsSection.substring(0, 12000);
+    }
+  } catch(chatFileErr){ console.warn('[chat] file context error:', chatFileErr.message); }
+
   var systemPrompt =
     'You are a senior IPMI claims specialist and Lloyd\'s of London underwriter at HealthWatch Assistance (HWA), a medical TPA in Thessaloniki, Greece. ' +
     'You have 20+ years of experience evaluating international health, IPMI, and travel insurance claims.\n\n' +
@@ -4100,6 +4154,7 @@ function renderCaseInvoices(caseId, invoices) {
   let h = '<div style="margin-bottom:6px;font-size:11px;font-weight:600;color:var(--tx3);text-transform:uppercase;letter-spacing:.05em">Extracted Financial Data</div>';
   let grandTotal = 0;
   let allCurrencyKnown = true;
+  let perCurrency2 = {};
 
   invoices.forEach(inv => {
     const cur = inv.cur && inv.cur !== '?' ? inv.cur : null;
@@ -4107,6 +4162,7 @@ function renderCaseInvoices(caseId, invoices) {
     const eurTotal = inv.totalEUR || 0;
     if(!inv.currencyKnown) allCurrencyKnown = false;
     if(inv.currencyKnown && eurTotal) grandTotal += eurTotal;
+    if(cur && rawTotal) { perCurrency2[cur] = (perCurrency2[cur]||0) + rawTotal; }
 
     h += '<div style="border:1px solid var(--bor);border-radius:var(--r2);padding:10px 12px;margin-bottom:8px;background:var(--bg3)">';
     h += '<div style="display:flex;justify-content:space-between;align-items:flex-start">';
@@ -4116,11 +4172,11 @@ function renderCaseInvoices(caseId, invoices) {
     if(cur && rawTotal) {
       h += '<div style="font-family:monospace;font-size:15px;font-weight:700;color:var(--navy)">'+cur+' '+rawTotal.toLocaleString('en',{minimumFractionDigits:2,maximumFractionDigits:2})+'</div>';
       if(cur !== 'EUR' && inv.currencyKnown && eurTotal) {
-        h += '<div style="font-size:11px;color:var(--tx3)">&asymp; '+fEUR(eurTotal)+'</div>';
+        h += '<div style="font-size:12px;color:var(--tx3);font-family:monospace">&asymp; '+fEUR(eurTotal)+'</div>';
       }
     } else if(rawTotal) {
       h += '<div style="font-family:monospace;font-size:15px;font-weight:700;color:var(--navy)">'+rawTotal.toLocaleString('en',{minimumFractionDigits:2,maximumFractionDigits:2})+'</div>';
-      h += '<div style="font-size:11px;color:var(--am);font-weight:600">Currency not identified</div>';
+      h += '<div style="font-size:11px;color:var(--am);font-weight:600">⚠ Currency not identified</div>';
     } else {
       h += '<div style="font-size:12px;color:var(--tx3)">No total found</div>';
     }
@@ -4131,10 +4187,12 @@ function renderCaseInvoices(caseId, invoices) {
       h += '<div style="margin-top:8px;border-top:1px solid var(--bor);padding-top:8px">';
       items.forEach(it => {
         const itTotal = parseFloat(it.total)||0;
+        const itEUR = (cur && cur !== 'EUR') ? toEUR(itTotal, cur) : 0;
         h += '<div style="display:flex;justify-content:space-between;font-size:11px;margin-bottom:3px;gap:8px">';
         h += '<span style="color:var(--tx2);flex:1">'+esc(it.desc||'—')+'</span>';
         if(itTotal) {
           h += '<span style="font-family:monospace;color:var(--navy);white-space:nowrap">'+(cur||'')+' '+itTotal.toLocaleString('en',{minimumFractionDigits:2})+'</span>';
+          if(itEUR) h += '<span style="font-family:monospace;color:var(--tx3);white-space:nowrap;margin-left:4px">'+fEUR(itEUR)+'</span>';
         }
         h += '</div>';
       });
@@ -4144,12 +4202,26 @@ function renderCaseInvoices(caseId, invoices) {
     h += '</div>';
   });
 
-  // Grand total — only if all currencies known
-  if(invoices.length > 1 && grandTotal > 0 && allCurrencyKnown) {
-    h += '<div style="display:flex;justify-content:space-between;padding:10px 14px;background:var(--navy);border-radius:var(--r2);color:#fff">';
-    h += '<span style="font-size:13px;font-weight:600">TOTAL (EUR)</span>';
+  // Grand total with per-currency breakdown
+  if(grandTotal > 0 || Object.keys(perCurrency2).length > 0) {
+    h += '<div style="border-radius:var(--r2);overflow:hidden">';
+    var curs2 = Object.keys(perCurrency2);
+    if(curs2.length > 1 || (curs2.length === 1 && curs2[0] !== 'EUR')) {
+      h += '<div style="background:#e8edf8;padding:6px 14px">';
+      curs2.forEach(function(c2){
+        var oAmt = perCurrency2[c2];
+        var eAmt = (c2 === 'EUR') ? oAmt : toEUR(oAmt, c2);
+        h += '<div style="display:flex;justify-content:space-between;font-size:11px;font-family:monospace;padding:1px 0">';
+        h += '<span style="color:var(--tx3)">'+c2+'</span><span style="color:var(--navy)">'+c2+' '+oAmt.toLocaleString('en',{minimumFractionDigits:2,maximumFractionDigits:2});
+        if(c2 !== 'EUR') h += ' &nbsp;&rarr; '+fEUR(eAmt);
+        h += '</span></div>';
+      });
+      h += '</div>';
+    }
+    h += '<div style="display:flex;justify-content:space-between;padding:10px 14px;background:var(--navy);color:#fff">';
+    h += '<span style="font-size:12px;font-weight:600">TOTAL (EUR)</span>';
     h += '<span style="font-family:monospace;font-size:15px;font-weight:700">'+fEUR(grandTotal)+'</span>';
-    h += '</div>';
+    h += '</div></div>';
   } else if(!allCurrencyKnown) {
     h += '<div style="padding:8px 12px;background:var(--ambg);border-radius:var(--r2);font-size:12px;color:#92400e;border:1px solid var(--am)">';
     h += '<strong>Note:</strong> Some currencies could not be identified from the documents. Total in EUR cannot be calculated. Please verify amounts manually.';
@@ -5249,6 +5321,7 @@ function renderInvoiceList(caseId, invoices) {
   let h = '';
   let grandTotal = 0;
   let allCurrencyKnown = true;
+  let perCurrency = {};  // track original amounts per currency
 
   invoices.forEach(inv => {
     const cur = inv.cur && inv.cur !== '?' ? inv.cur : null;
@@ -5256,6 +5329,7 @@ function renderInvoiceList(caseId, invoices) {
     const eurTotal = inv.totalEUR || 0;
     if(!inv.currencyKnown) allCurrencyKnown = false;
     if(inv.currencyKnown && eurTotal) grandTotal += eurTotal;
+    if(cur && rawTotal) { perCurrency[cur] = (perCurrency[cur]||0) + rawTotal; }
     const items = inv.data.line_items || [];
 
     h += '<div style="border:1px solid var(--bor);border-radius:var(--r2);overflow:hidden;margin-bottom:12px">';
@@ -5267,7 +5341,7 @@ function renderInvoiceList(caseId, invoices) {
     if(cur && rawTotal) {
       h += '<div style="font-family:monospace;font-size:16px;font-weight:700;color:var(--navy)">'+cur+' '+rawTotal.toLocaleString('en',{minimumFractionDigits:2,maximumFractionDigits:2})+'</div>';
       if(cur !== 'EUR' && inv.currencyKnown && eurTotal) {
-        h += '<div style="font-size:11px;color:var(--tx3)">&asymp; '+fEUR(eurTotal)+'</div>';
+        h += '<div style="font-size:12px;color:var(--tx3);font-family:monospace">&asymp; '+fEUR(eurTotal)+'</div>';
       }
     } else if(rawTotal) {
       h += '<div style="font-family:monospace;font-size:16px;font-weight:700;color:var(--navy)">'+rawTotal.toLocaleString('en',{minimumFractionDigits:2,maximumFractionDigits:2})+'</div>';
@@ -5277,33 +5351,62 @@ function renderInvoiceList(caseId, invoices) {
 
     if(items.length) {
       h += '<table style="width:100%;border-collapse:collapse">';
-      h += '<thead><tr style="background:#f8fafc"><th style="padding:6px 12px;font-size:10px;text-align:left;color:var(--tx3);border-bottom:1px solid var(--bor)">Service / Item</th><th style="padding:6px 12px;font-size:10px;text-align:center;color:var(--tx3);border-bottom:1px solid var(--bor)">Category</th><th style="padding:6px 12px;font-size:10px;text-align:right;color:var(--tx3);border-bottom:1px solid var(--bor)">Amount</th></tr></thead><tbody>';
+      h += '<thead><tr style="background:#f8fafc"><th style="padding:6px 12px;font-size:10px;text-align:left;color:var(--tx3);border-bottom:1px solid var(--bor)">Service / Item</th><th style="padding:6px 12px;font-size:10px;text-align:center;color:var(--tx3);border-bottom:1px solid var(--bor)">Category</th><th style="padding:6px 12px;font-size:10px;text-align:right;color:var(--tx3);border-bottom:1px solid var(--bor)">Original</th><th style="padding:6px 12px;font-size:10px;text-align:right;color:var(--tx3);border-bottom:1px solid var(--bor)">EUR</th></tr></thead><tbody>';
       items.forEach(it => {
         const itTotal = parseFloat(it.total)||0;
+        const itEUR = (cur && cur !== 'EUR') ? toEUR(itTotal, cur) : itTotal;
         h += '<tr style="border-bottom:1px solid var(--bor)">';
         h += '<td style="padding:8px 12px;font-size:12px;color:var(--navy)">'+esc(it.desc||'—')+'</td>';
         h += '<td style="padding:8px 12px;font-size:11px;color:var(--tx3);text-align:center">'+esc(it.category||'—')+'</td>';
         h += '<td style="padding:8px 12px;font-size:12px;font-family:monospace;text-align:right;color:var(--navy)">';
         if(itTotal) h += (cur||'')+' '+itTotal.toLocaleString('en',{minimumFractionDigits:2,maximumFractionDigits:2});
         else h += '—';
+        h += '</td>';
+        h += '<td style="padding:8px 12px;font-size:12px;font-family:monospace;text-align:right;color:var(--tx3)">';
+        if(itTotal && cur) h += (cur==='EUR'?'—':fEUR(itEUR));
+        else h += '—';
         h += '</td></tr>';
       });
-      h += '</tbody><tfoot><tr style="border-top:2px solid var(--bor)">';
+      h += '</tbody><tfoot><tr style="border-top:2px solid var(--bor);background:#f8fafc">';
       h += '<td colspan="2" style="padding:8px 12px;font-size:12px;font-weight:600;color:var(--navy)">TOTAL</td>';
       h += '<td style="padding:8px 12px;font-size:13px;font-family:monospace;font-weight:700;color:var(--navy);text-align:right">';
       if(rawTotal) h += (cur||'')+' '+rawTotal.toLocaleString('en',{minimumFractionDigits:2,maximumFractionDigits:2});
+      else h += '—';
+      h += '</td>';
+      h += '<td style="padding:8px 12px;font-size:13px;font-family:monospace;font-weight:700;color:var(--navy);text-align:right">';
+      if(eurTotal && cur !== 'EUR') h += fEUR(eurTotal);
+      else if(rawTotal && cur === 'EUR') h += fEUR(rawTotal);
       else h += '—';
       h += '</td></tr></tfoot></table>';
     }
     h += '</div>';
   });
 
-  if(invoices.length > 1 && grandTotal > 0 && allCurrencyKnown) {
-    h += '<div style="display:flex;justify-content:space-between;padding:12px 16px;background:var(--navy);border-radius:var(--r2);color:#fff;margin-top:4px">';
-    h += '<span style="font-size:13px;font-weight:600">GRAND TOTAL (converted to EUR)</span>';
+  // Grand total with per-currency breakdown
+  if(grandTotal > 0 || Object.keys(perCurrency).length > 0) {
+    h += '<div style="border-radius:var(--r2);overflow:hidden;margin-top:4px">';
+    // Per-currency sub-rows
+    var currencies = Object.keys(perCurrency);
+    if(currencies.length > 1 || (currencies.length === 1 && currencies[0] !== 'EUR')) {
+      h += '<div style="background:#e8edf8;padding:8px 16px">';
+      currencies.forEach(function(cur2){
+        var origAmt = perCurrency[cur2];
+        var eurAmt = (cur2 === 'EUR') ? origAmt : toEUR(origAmt, cur2);
+        h += '<div style="display:flex;justify-content:space-between;font-size:12px;font-family:monospace;padding:2px 0">';
+        h += '<span style="color:var(--tx3)">'+cur2+'</span>';
+        h += '<span style="color:var(--navy)">'+cur2+' '+origAmt.toLocaleString('en',{minimumFractionDigits:2,maximumFractionDigits:2});
+        if(cur2 !== 'EUR') h += ' &nbsp;<span style="color:var(--tx3)">→ '+fEUR(eurAmt)+'</span>';
+        h += '</span></div>';
+      });
+      h += '</div>';
+    }
+    // Grand total row
+    h += '<div style="display:flex;justify-content:space-between;padding:12px 16px;background:var(--navy);color:#fff">';
+    h += '<span style="font-size:13px;font-weight:600">GRAND TOTAL (EUR)</span>';
     h += '<span style="font-family:monospace;font-size:16px;font-weight:700">'+fEUR(grandTotal)+'</span>';
-    h += '</div>';
-  } else if(!allCurrencyKnown) {
+    h += '</div></div>';
+  }
+  if(!allCurrencyKnown) {
     h += '<div style="padding:10px 14px;background:var(--ambg);border-radius:var(--r2);font-size:12px;color:#92400e;border:1px solid var(--am);margin-top:4px">';
     h += '<strong>⚠ Currency Warning:</strong> Some documents did not have a clearly identified currency. Amounts shown in original figures only. Please verify currency and totals manually before processing.';
     h += '</div>';
