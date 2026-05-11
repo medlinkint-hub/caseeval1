@@ -318,6 +318,23 @@ label.dz,div.dz{border:2px dashed var(--bor2);border-radius:var(--r);padding:24p
 .btn-gold:hover{background:#c49a35;transform:translateY(-1px);box-shadow:0 4px 12px rgba(212,168,71,.3)}
 @keyframes mcd-spin{to{transform:rotate(360deg)}}
 .mcd-spinner{width:52px;height:52px;border:4px solid #e0e5ef;border-top-color:#d4a847;border-radius:50%;animation:mcd-spin 1s linear infinite;margin:0 auto 20px}
+/* ── UPGRADED: Case Q&A — Web Search + Provider Verification ── */
+.chat-source-pills{display:flex;flex-wrap:wrap;gap:4px;margin-top:6px}
+.chat-pill{display:inline-flex;align-items:center;gap:3px;padding:2px 7px;border-radius:10px;font-size:10px;font-weight:600;letter-spacing:.03em}
+.chat-pill-policy{background:#1a2f5e;color:#fff}
+.chat-pill-case{background:#0d7377;color:#fff}
+.chat-pill-web{background:#d4860a;color:#fff}
+.chat-web-note{font-size:10px;color:#d4860a;margin-top:4px;display:flex;align-items:center;gap:3px}
+.chat-pv-card{border-radius:8px;overflow:hidden;margin:8px 0;border:1px solid var(--bor)}
+.chat-pv-row{display:flex;align-items:flex-start;gap:8px;padding:7px 12px;border-bottom:1px solid var(--bor);font-size:12px}
+.chat-pv-row:last-child{border-bottom:none}
+.chat-pv-label{font-weight:700;min-width:90px;color:var(--navy)}
+.chat-pv-verdict{display:flex;justify-content:space-between;align-items:center;padding:8px 12px;font-size:13px;font-weight:700}
+.chat-pv-verdict.approved{background:#d1fae5;color:#065f46}
+.chat-pv-verdict.caution{background:#fef3c7;color:#92400e}
+.chat-pv-verdict.reject{background:#fee2e2;color:#991b1b}
+.chat-save-btn{margin-top:6px;padding:4px 12px;font-size:11px;font-weight:600;border:1px solid var(--navy);border-radius:5px;background:transparent;color:var(--navy);cursor:pointer;transition:all .15s}
+.chat-save-btn:hover{background:var(--navy);color:#fff}
 </style>
 </head>
 <body>
@@ -2321,6 +2338,15 @@ function clearCaseChat() {
   toast('Chat history cleared');
 }
 
+function setChatQ(text) {
+  var i = document.getElementById('caseChatInput');
+  if(!i) return;
+  i.value = text;
+  i.focus();
+  i.style.borderColor = 'var(--navy)';
+  i.setSelectionRange(text.length, text.length);
+}
+
 function _chatBubble(role, text, streaming) {
   var isUser = role === 'user';
   var wrap = document.createElement('div');
@@ -2366,6 +2392,161 @@ function _restoreChatHistory(chatHistory, msgs) {
   msgs.scrollTop = msgs.scrollHeight;
   var sugg = document.getElementById('caseChatSuggestions');
   if(sugg) sugg.style.display = 'none';
+}
+
+// ── UPGRADED: Case Q&A — Web Search + Provider Verification ──
+
+// Non-streaming API call for Q&A with optional web_search tool
+async function _apiCallQA(messages, systemPrompt, maxTokens) {
+  var key = getKey();
+  if(!key) throw new Error('No API key configured');
+  var mod = getMod();
+  var body = {
+    model: mod, max_tokens: maxTokens||2000,
+    messages: messages, system: systemPrompt, temperature: 0,
+    tools: [{ type: 'web_search_20250305', name: 'web_search' }]
+  };
+  var res = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST', mode: 'cors', credentials: 'omit',
+    headers: {
+      'Content-Type': 'application/json', 'x-api-key': key,
+      'anthropic-version': '2023-06-01',
+      'anthropic-dangerous-direct-browser-access': 'true'
+    },
+    body: JSON.stringify(body)
+  });
+  var data = await res.json();
+  if(!res.ok) {
+    // Tool not supported — fall back to plain call
+    if(res.status === 400 && data.error && /tool|beta/i.test(data.error.message||'')) {
+      return _apiCallQAPlain(messages, systemPrompt, maxTokens);
+    }
+    throw new Error((data.error&&data.error.message)||'HTTP '+res.status);
+  }
+  var blocks = data.content || [];
+  var text = blocks.filter(function(b){ return b.type==='text'; }).map(function(b){ return b.text||''; }).join('');
+  var webSearchUsed = blocks.some(function(b){ return (b.type==='server_tool_use'||b.type==='tool_use') && b.name==='web_search'; });
+  var queries = blocks.filter(function(b){ return (b.type==='server_tool_use'||b.type==='tool_use') && b.name==='web_search'; })
+    .map(function(b){ return (b.input&&b.input.query)||''; }).filter(Boolean);
+  return { text: text, webSearchUsed: webSearchUsed, queries: queries };
+}
+
+// Plain fallback when web_search tool unavailable
+async function _apiCallQAPlain(messages, systemPrompt, maxTokens) {
+  var key = getKey(); if(!key) throw new Error('No API key configured');
+  var mod = getMod();
+  var body = { model: mod, max_tokens: maxTokens||2000, messages: messages, system: systemPrompt, temperature: 0 };
+  var res = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST', mode: 'cors', credentials: 'omit',
+    headers: { 'Content-Type': 'application/json', 'x-api-key': key, 'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' },
+    body: JSON.stringify(body)
+  });
+  var data = await res.json();
+  if(!res.ok) throw new Error((data.error&&data.error.message)||'HTTP '+res.status);
+  return { text: (data.content||[]).map(function(b){ return b.text||''; }).join(''), webSearchUsed: false, queries: [] };
+}
+
+// Detect provider verification intent from question
+function _isProviderVerificationIntent(q) {
+  var ql = q.toLowerCase();
+  return (
+    /verif|legitim|licens|accredit|suitab|approv|certif|author/i.test(ql) &&
+    /provider|hospital|clinic|facilit|doctor|physician|lab|centre|center/i.test(ql)
+  ) ||
+  /check.*provider|verify.*provider|is this (hospital|clinic|doctor|facilit|provider)/i.test(ql) ||
+  /is the (hospital|clinic|provider|doctor|facilit)/i.test(ql) ||
+  /^verify\b|^check provider/i.test(ql.trim());
+}
+
+// Build provider context string from case data
+function _buildProviderContext(c) {
+  return [
+    'Provider Name: ' + (c.hospital || c.provider || 'not specified'),
+    'Country / City: ' + (c.country || 'not specified'),
+    'Facility Type: ' + (c.admissionType || c.facilityType || 'not specified'),
+    'Diagnosis: ' + (c.diagnosis || c.desc || 'not specified'),
+    'ICD-10 Codes: ' + ((c.icdCodes && c.icdCodes.length) ? c.icdCodes.join(', ') : 'not specified'),
+    'Claimed Procedures: ' + (c.treatment || 'not specified'),
+    'PA Status: ' + (c.paStatus || 'none') + (c.paNumber ? ' / PA# ' + c.paNumber : '')
+  ].join('\n');
+}
+
+// Parse provider verification response and render styled cards
+function _renderProviderVerification(text, caseId) {
+  var statusMap = { '✅': { bg:'#ecfdf5', txt:'#065f46' }, '⚠️': { bg:'#fffbeb', txt:'#92400e' }, '❌': { bg:'#fef2f2', txt:'#991b1b' }, '⚠': { bg:'#fffbeb', txt:'#92400e' } };
+  var rows = [
+    { key: 'Legitimacy', re: /legitimacy\s*:?\s*(.+)/i },
+    { key: 'Suitability', re: /suitability\s*:?\s*(.+)/i },
+    { key: 'Scope', re: /scope\s*:?\s*(.+)/i },
+    { key: 'Compliance', re: /compliance\s*:?\s*(.+)/i }
+  ];
+  var foundRows = false;
+  var cardHtml = '<div class="chat-pv-card">';
+  rows.forEach(function(r) {
+    var m = text.match(r.re);
+    if(!m) return;
+    foundRows = true;
+    var line = m[1].trim();
+    var icon = '⚠️';
+    if(line.startsWith('✅')) icon = '✅';
+    else if(line.startsWith('❌')) icon = '❌';
+    else if(line.startsWith('⚠')) icon = '⚠';
+    var colors = statusMap[icon] || statusMap['⚠️'];
+    var detail = line.replace(/^[✅❌⚠️⚠]\s*/, '');
+    cardHtml += '<div class="chat-pv-row" style="background:'+colors.bg+'">';
+    cardHtml += '<span style="font-size:14px">'+icon+'</span>';
+    cardHtml += '<span class="chat-pv-label">'+r.key+'</span>';
+    cardHtml += '<span style="color:'+colors.txt+';flex:1">'+esc(detail)+'</span></div>';
+  });
+  if(!foundRows) return null; // not a verification response, render normally
+
+  var overallM = text.match(/overall\s*:?\s*(APPROVED|CAUTION|REJECT)/i);
+  var overall = overallM ? overallM[1].toUpperCase() : null;
+  var summaryM = text.match(/summary\s*:?\s*(.+?)(?:\n|$)/i);
+  var summary = summaryM ? summaryM[1].trim() : '';
+
+  if(overall) {
+    var vcls = overall === 'APPROVED' ? 'approved' : overall === 'REJECT' ? 'reject' : 'caution';
+    var vIcon = overall === 'APPROVED' ? '✅' : overall === 'REJECT' ? '❌' : '⚠️';
+    cardHtml += '<div class="chat-pv-verdict '+vcls+'"><span>'+vIcon+' '+overall+'</span>';
+    if(summary) cardHtml += '<span style="font-size:11px;font-weight:400;max-width:60%;text-align:right">'+esc(summary)+'</span>';
+    cardHtml += '</div>';
+  }
+  cardHtml += '</div>';
+
+  // Append the rest of the text as prose below the card
+  var restText = text
+    .replace(/[✅❌⚠️⚠]\s*legitimacy[^]*?(?=\n[✅❌⚠️⚠]|overall:|summary:|$)/gi, '')
+    .replace(/[✅❌⚠️⚠]\s*suitability[^]*?(?=\n[✅❌⚠️⚠]|overall:|summary:|$)/gi, '')
+    .replace(/[✅❌⚠️⚠]\s*scope[^]*?(?=\n[✅❌⚠️⚠]|overall:|summary:|$)/gi, '')
+    .replace(/[✅❌⚠️⚠]\s*compliance[^]*?(?=\n[✅❌⚠️⚠]|overall:|summary:|$)/gi, '')
+    .replace(/overall\s*:?\s*(APPROVED|CAUTION|REJECT)[^\n]*/gi, '')
+    .replace(/summary\s*:?\s*.+/gi, '')
+    .replace(/\n{3,}/g, '\n\n').trim();
+
+  var saveBtn = caseId ? '<div><button class="chat-save-btn" onclick="savePVtoCase(\''+esc(caseId)+'\')">💾 Save to Case</button></div>' : '';
+  return cardHtml + (restText ? '<div style="font-size:12px;color:var(--tx2);margin-top:6px">'+_renderChatText(restText)+'</div>' : '') + saveBtn;
+}
+
+// Save provider verification result to Firestore
+async function savePVtoCase(caseId) {
+  var btn = event && event.target;
+  if(btn) { btn.textContent = '⏳ Saving...'; btn.disabled = true; }
+  try {
+    var lastPV = window._lastProviderVerification || {};
+    if(!lastPV.text) { toast('No verification result to save'); return; }
+    if(window.db) {
+      await window.db.collection('cases').doc(caseId).collection('provider_verification')
+        .add({ text: lastPV.text, question: lastPV.question, timestamp: new Date().toISOString(), savedBy: (localStorage.getItem('mp_name')||'Team Member') });
+    }
+    updC(caseId, { providerVerification: { text: lastPV.text, date: new Date().toISOString() } });
+    addTL(caseId, '🔍 Provider verification saved');
+    toast('✅ Provider verification saved to case');
+    if(btn) { btn.textContent = '✓ Saved'; btn.style.borderColor = '#059669'; btn.style.color = '#059669'; }
+  } catch(e) {
+    toast('Save error: ' + (e.message||'').substring(0,60));
+    if(btn) { btn.textContent = '💾 Save to Case'; btn.disabled = false; }
+  }
 }
 
 async function sendCaseChat(presetText, caseId) {
@@ -2552,31 +2733,73 @@ async function sendCaseChat(presetText, caseId) {
   var apiMessages = chatHistory.slice(-10).map(function(m){ return {role: m.role, content: m.content}; });
   apiMessages.push({role: 'user', content: question});
 
+  // ── Detect provider verification intent ──
+  var isPV = _isProviderVerificationIntent(question);
+  var activeSystemPrompt = systemPrompt;
+  if(isPV) {
+    activeSystemPrompt = systemPrompt +
+      '\n\n=== PROVIDER VERIFICATION REQUEST ===\n' +
+      'Use web search to verify this provider. Research:\n' +
+      '1. Is the provider a real, registered hospital/clinic/facility?\n' +
+      '2. Is it accredited by the relevant national health authority?\n' +
+      '3. Is it appropriate for the claimed diagnosis and treatment?\n' +
+      '4. Any known compliance, fraud, billing, or quality concerns?\n\n' +
+      'Respond with EXACTLY this structure (one line each):\n' +
+      '✅/⚠️/❌ Legitimacy: [registered, licensed real facility — yes/no/uncertain]\n' +
+      '✅/⚠️/❌ Suitability: [appropriate specialty/equipment for diagnosis]\n' +
+      '✅/⚠️/❌ Scope: [treatment within facility\'s stated scope]\n' +
+      '✅/⚠️/❌ Compliance: [no red flags, billing concerns, or fraud history]\n' +
+      'Overall: APPROVED / CAUTION / REJECT\n' +
+      'Summary: [one sentence recommendation]\n\n' +
+      'Then add a brief paragraph with key findings and action required.\n\n' +
+      '=== PROVIDER DETAILS TO VERIFY ===\n' +
+      _buildProviderContext(c);
+  }
+
+  // ── Update loading bubble to reflect web search in progress ──
   var streamEl = document.getElementById('chatStreamBubble');
-  var fullAnswer = '';
+  if(streamEl) {
+    streamEl.innerHTML =
+      '<span style="font-size:12px;color:var(--navy);opacity:.75">' +
+      (isPV ? '🔍 Verifying provider via web search…' : '🔍 Searching & reasoning…') + '</span>' +
+      '<span class="chatdot" style="margin-left:4px"></span>' +
+      '<span class="chatdot" style="animation-delay:.2s"></span>' +
+      '<span class="chatdot" style="animation-delay:.4s"></span>';
+  }
 
   try {
-    await apiCallStream(
-      apiMessages,
-      systemPrompt,
-      1800,
-      function(chunk, full) {
-        fullAnswer = full;
-        if(streamEl) {
-          streamEl.id = '';
-          streamEl.innerHTML = _renderChatText(full) +
-            '<span style="display:inline-block;width:2px;height:13px;background:var(--navy);margin-left:3px;vertical-align:text-bottom;animation:chatCursor .7s step-end infinite"></span>';
-          msgs.scrollTop = msgs.scrollHeight;
-        }
-      }
-    );
+    var qaResult = await _apiCallQA(apiMessages, activeSystemPrompt, 2000);
+    var fullAnswer = qaResult.text || '';
+    var webSearchUsed = qaResult.webSearchUsed || false;
+    var queries = qaResult.queries || [];
 
-    // Finalise — remove cursor
-    if(streamEl) { streamEl.innerHTML = _renderChatText(fullAnswer); }
-    else {
-      // Bubble was replaced — find last AI bubble and update
-      var allBubbles = msgs.querySelectorAll('div[style*="border-radius"]');
-      if(allBubbles.length) allBubbles[allBubbles.length-1].innerHTML = _renderChatText(fullAnswer);
+    // ── Build source pills ──
+    var pillsHtml = '<div class="chat-source-pills">';
+    if(policyWording) pillsHtml += '<span class="chat-pill chat-pill-policy">📋 Policy</span>';
+    pillsHtml += '<span class="chat-pill chat-pill-case">📁 Case Data</span>';
+    if(webSearchUsed) {
+      pillsHtml += '<span class="chat-pill chat-pill-web">🌐 Web Search</span>';
+    }
+    pillsHtml += '</div>';
+    if(webSearchUsed && queries.length) {
+      pillsHtml += '<div class="chat-web-note">🌐 Searched: ' + esc(queries.join(' · ').substring(0, 90)) + '</div>';
+    }
+
+    // ── Store for PV save button ──
+    if(isPV && fullAnswer) {
+      window._lastProviderVerification = { text: fullAnswer, question: question, caseId: id };
+    }
+
+    // ── Render response into bubble ──
+    var finalEl = document.getElementById('chatStreamBubble') || streamEl;
+    if(finalEl) {
+      finalEl.id = '';
+      var pvHtml = isPV ? _renderProviderVerification(fullAnswer, id) : null;
+      if(pvHtml) {
+        finalEl.innerHTML = pvHtml + pillsHtml;
+      } else {
+        finalEl.innerHTML = _renderChatText(fullAnswer) + pillsHtml;
+      }
     }
 
     // ── Persist to case record + timeline ──
@@ -2585,11 +2808,10 @@ async function sendCaseChat(presetText, caseId) {
       chatHistory.push({role: 'assistant', content: fullAnswer});
       updC(id, {chatHistory: chatHistory});
 
-      // Auto-save Q&A to timeline silently
       var shortQ = question.length > 80 ? question.substring(0,77)+'...' : question;
       var shortA = fullAnswer.replace(/\*\*/g,'').replace(/#{1,3}\s/g,'');
       shortA = shortA.length > 120 ? shortA.substring(0,117)+'...' : shortA;
-      addTL(id, '💬 Q: ' + shortQ + ' → A: ' + shortA);
+      addTL(id, (isPV ? '🔍 PV: ' : '💬 Q: ') + shortQ + ' → A: ' + shortA);
     }
 
     msgs.scrollTop = msgs.scrollHeight;
@@ -3767,7 +3989,7 @@ function renderCD(c) {
       'Flag any red flags or fraud indicators'
     ];
     suggestions.forEach(function(s){
-      html += '<button onclick="sendCaseChat('+JSON.stringify(s)+',\''+esc(c.id)+'\')" style="font-size:11px;padding:5px 11px;border:1px solid var(--bor2);border-radius:20px;background:var(--bg3);color:var(--tx2);cursor:pointer;font-family:inherit;transition:all .15s" onmouseover="this.style.borderColor=\'var(--navy)\';this.style.color=\'var(--navy)\';this.style.background=\'rgba(26,42,114,.06)\'" onmouseout="this.style.borderColor=\'var(--bor2)\';this.style.color=\'var(--tx2)\';this.style.background=\'var(--bg3)\'">'+esc(s)+'</button>';
+      html += '<button onclick="setChatQ(this.dataset.q)" data-q="'+esc(s)+'" style="font-size:11px;padding:5px 11px;border:1px solid var(--bor2);border-radius:20px;background:var(--bg3);color:var(--tx2);cursor:pointer;font-family:inherit;transition:all .15s" onmouseover="this.style.borderColor=\'var(--navy)\';this.style.color=\'var(--navy)\';this.style.background=\'rgba(26,42,114,.06)\'" onmouseout="this.style.borderColor=\'var(--bor2)\';this.style.color=\'var(--tx2)\';this.style.background=\'var(--bg3)\'">'+esc(s)+'</button>';
     });
     html += '</div>';
     html += '<div style="display:flex;gap:8px;align-items:flex-end">';
