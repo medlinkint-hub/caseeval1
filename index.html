@@ -3221,14 +3221,25 @@ function renderCases(filter) {
   html += '</div>';
   html += '<div class="card" style="padding:0;overflow:hidden">';
   if(list.length) {
-    html += '<table><thead><tr><th>Case</th><th>Patient</th><th>Type</th><th>Priority</th><th>Status</th><th>Country</th><th>Claimed</th><th>Date</th></tr></thead><tbody>';
+    html += '<table><thead><tr><th>Case</th><th>Patient</th><th>Type</th><th>Priority</th><th>Status</th><th>Decision</th><th>Country</th><th>Claimed</th><th>Date</th></tr></thead><tbody>';
     list.forEach(c => {
+      var ev = (c.lastDecision||'').toUpperCase().trim();
+      if(!ev && c.eval) { var cu=c.eval.slice(-300).toUpperCase(); ev=/DECLIN|DENIED/.test(cu)?'DECLINED':/PARTIAL/.test(cu)?'PARTIAL':/APPROV|COVERED/.test(cu)?'APPROVED':''; }
+      var evCell = '—';
+      if(ev) {
+        var evClr = /^DECLIN|^DENIED/.test(ev)?'#991b1b,#fee2e2':/^PARTIAL/.test(ev)?'#92400e,#fef3c7':/^APPROV|^COVERED/.test(ev)?'#065f46,#d1fae5':'#1a2a72,rgba(26,42,114,.1)';
+        var evClrs = evClr.split(',');
+        evCell = '<span style="font-size:10px;font-weight:700;padding:2px 8px;border-radius:10px;color:'+evClrs[0]+';background:'+evClrs[1]+'">'+ev+'</span>';
+      } else if(c.eval) {
+        evCell = '<span style="font-size:10px;font-weight:700;padding:2px 8px;border-radius:10px;color:#1a2a72;background:rgba(26,42,114,.08)">✓ Evaluated</span>';
+      }
       html += '<tr onclick="openCase(this.dataset.id)" data-id="'+c.id+'">' ;
       html += '<td class="tmo">'+esc(c.caseNum||'—')+'</td>';
       html += '<td class="tm">'+esc(c.patient||'—')+'</td>';
       html += '<td>'+tBadge(c.type)+'</td>';
       html += '<td>'+pBadge(c.priority)+'</td>';
       html += '<td>'+sBadge(c.status)+'</td>';
+      html += '<td>'+evCell+'</td>';
       html += '<td>'+slaBadge(c)+'</td>';
       html += '<td>'+esc(c.country||'—')+'</td>';
       html += '<td class="tmo">€'+(parseFloat(c.amountClaimed)||0).toLocaleString()+'</td>';
@@ -3775,7 +3786,7 @@ function renderCD(c) {
   // RIGHT
   html += '<div style="display:flex;flex-direction:column;gap:16px">';
   // ── DOCUMENTS + COMMUNICATION CARD ──────────────
-  html += '<div class="card" style="padding:0;overflow:hidden">';
+  html += '<div class="card" style="padding:0;overflow:hidden;order:2">';
   html += '<div style="padding:10px 16px;background:var(--bg3);border-bottom:1px solid var(--bor);display:flex;align-items:center;justify-content:space-between">';
   html += '<div class="ct" style="margin:0">📄 Documents & Communication</div>';
   html += '</div>';
@@ -3874,7 +3885,7 @@ function renderCD(c) {
   html += '</div>';  // end card
 
 
-  html += '<div class="card"><div class="ct">AI Evaluation</div>';
+  html += '<div class="card" style="order:1"><div class="ct">AI Evaluation</div>';
   // ── Show which policy will be used ──
   var _evalPol = c.selectedPolicy||'';
   var _pols4ev = getPolicies1();
@@ -4001,7 +4012,7 @@ function renderCD(c) {
 
   html += '</div>';
 
-  html += '<div class="card"><div class="ct">Timeline</div>';
+  html += '<div class="card" style="order:3"><div class="ct">Timeline</div>';
   html += '<div class="tl" id="tlB">'+renderTL(c.timeline||[])+'</div>';
   html += '<div style="display:flex;gap:8px;margin-top:12px"><input id="tlI" placeholder="Add note..." style="flex:1;padding:8px 10px;border:1px solid var(--bor);border-radius:var(--r2);background:#fff;color:var(--navy);font-size:13px;outline:none;font-family:\'DM Sans\',sans-serif">';
   html += '<button class="btn bs" onclick="addTLN(CURID)">Add</button></div>';
