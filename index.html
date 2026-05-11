@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
-<meta name="version" content="1775220877">
+<meta name="version" content="1778538844">
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
@@ -3221,19 +3221,19 @@ function renderCases(filter) {
   html += '</div>';
   html += '<div class="card" style="padding:0;overflow:hidden">';
   if(list.length) {
-    html += '<table><thead><tr><th>Case</th><th>Patient</th><th>Type</th><th>Priority</th><th>Status</th><th>Decision</th><th>Country</th><th>Claimed</th><th>Date</th></tr></thead><tbody>';
+    html += '<table><thead><tr><th>Case</th><th>Patient</th><th>Type</th><th>Priority</th><th>Status</th><th>Decision</th><th>SLA</th><th>Country</th><th>Claimed</th><th>Date</th></tr></thead><tbody>';
     list.forEach(c => {
       var ev = (c.lastDecision||'').toUpperCase().trim();
       if(!ev && c.eval) { var cu=c.eval.slice(-300).toUpperCase(); ev=/DECLIN|DENIED/.test(cu)?'DECLINED':/PARTIAL/.test(cu)?'PARTIAL':/APPROV|COVERED/.test(cu)?'APPROVED':''; }
-      var evCell = '—';
+      var evCell = '<span style="font-size:10px;color:var(--tx3)">—</span>';
       if(ev) {
         var evClr = /^DECLIN|^DENIED/.test(ev)?'#991b1b,#fee2e2':/^PARTIAL/.test(ev)?'#92400e,#fef3c7':/^APPROV|^COVERED/.test(ev)?'#065f46,#d1fae5':'#1a2a72,rgba(26,42,114,.1)';
         var evClrs = evClr.split(',');
         evCell = '<span style="font-size:10px;font-weight:700;padding:2px 8px;border-radius:10px;color:'+evClrs[0]+';background:'+evClrs[1]+'">'+ev+'</span>';
       } else if(c.eval) {
-        evCell = '<span style="font-size:10px;font-weight:700;padding:2px 8px;border-radius:10px;color:#1a2a72;background:rgba(26,42,114,.08)">✓ Evaluated</span>';
+        evCell = '<span style="font-size:10px;font-weight:700;padding:2px 8px;border-radius:10px;color:#1a2a72;background:rgba(26,42,114,.08)">✓ Eval</span>';
       }
-      html += '<tr onclick="openCase(this.dataset.id)" data-id="'+c.id+'">' ;
+      html += '<tr onclick="openCase(this.dataset.id)" data-id="'+c.id+'">';
       html += '<td class="tmo">'+esc(c.caseNum||'—')+'</td>';
       html += '<td class="tm">'+esc(c.patient||'—')+'</td>';
       html += '<td>'+tBadge(c.type)+'</td>';
@@ -6705,7 +6705,7 @@ async function changePassword() {
 // ══════════════════════════════════════════════════════════════
 
 // ── App version — update on every significant deployment ──
-var APP_BUILD = 1775220877; // epoch-style build number (matches <meta name="version">)
+var APP_BUILD = 1778538844; // epoch-style build number (matches <meta name="version">)
 
 var FB_APP = null;
 var FB_DB = null;
