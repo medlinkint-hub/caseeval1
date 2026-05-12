@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
-<meta name="version" content="1778625000">
+<meta name="version" content="1778700000">
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
@@ -3826,13 +3826,14 @@ function renderCD(c) {
   html += '<label style="font-size:11px;font-weight:700;color:var(--navy);text-transform:uppercase;letter-spacing:.04em">Client Email / Message</label>';
   html += '<button type="button" id="btn_paste_msg" style="padding:4px 11px;background:var(--navy);color:#fff;border:none;border-radius:4px;font-size:11px;font-weight:700;cursor:pointer">📋 Paste</button>';
   html += '</div>';
-  html += '<textarea id="patient_msg" rows="5" placeholder="Paste the client email or message here — AI will read the full case, evaluation and policy decision to craft the reply." style="width:100%;padding:8px;border:1px solid var(--bor);border-radius:5px;font-size:12px;line-height:1.6;resize:vertical;outline:none;font-family:DM Sans,sans-serif;box-sizing:border-box;margin-bottom:8px"></textarea>';
+  html += '<textarea id="patient_msg" rows="6" placeholder="Paste the full client email or correspondence here — including headers (From/Date/Subject) and any quoted reply chain. AI reads all messages in the thread." style="width:100%;padding:8px;border:1px solid var(--bor);border-radius:5px;font-size:12px;line-height:1.6;resize:vertical;outline:none;font-family:DM Sans,sans-serif;box-sizing:border-box;margin-bottom:6px"></textarea>';
+  html += '<div id="email_meta_info" style="display:none;flex-wrap:wrap;gap:4px;margin-bottom:6px"></div>';
   html += '<div id="intent_badge" style="display:none;margin-bottom:8px"></div>';
   // Options
   html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">';
   html += '<div><label style="font-size:10px;font-weight:600;color:var(--tx3);display:block;margin-bottom:3px;text-transform:uppercase">Response Type</label>';
   html += '<select id="reply_type" style="width:100%;padding:5px 7px;border:1px solid var(--bor);border-radius:4px;font-size:12px;color:var(--navy);outline:none">';
-  html += '<option value="auto">Auto-detect</option><option value="answer_query">Answer Question</option><option value="handle_complaint">Handle Complaint</option><option value="request_documents">Request Documents</option><option value="claim_status">Status Update</option><option value="appeal_process">Explain Appeal</option><option value="approval_confirm">Confirm Approval</option><option value="denial_explain">Explain Denial</option>';
+  html += '<option value="auto">Auto-detect</option><option value="answer_query">Answer Question</option><option value="handle_complaint">Handle Complaint</option><option value="request_documents">Request Documents</option><option value="claim_status">Status Update</option><option value="appeal_process">Explain Appeal</option><option value="approval_confirm">Confirm Approval</option><option value="denial_explain">Explain Denial</option><option value="payment_query">Payment Query</option><option value="urgent_case">URGENT</option><option value="extension_request">Extension Request</option><option value="positive_feedback">Acknowledgement</option>';
   html += '</select></div>';
   html += '<div><label style="font-size:10px;font-weight:600;color:var(--tx3);display:block;margin-bottom:3px;text-transform:uppercase">Tone</label>';
   html += '<select id="reply_tone" style="width:100%;padding:5px 7px;border:1px solid var(--bor);border-radius:4px;font-size:12px;color:var(--navy);outline:none">';
@@ -6097,19 +6098,47 @@ function commDetectIntent(text) {
   var badge=document.getElementById('intent_badge');
   var rtEl=document.getElementById('reply_type');
   var docsSec=document.getElementById('docs_request_section');
+  var emailMetaEl=document.getElementById('email_meta_info');
   if(!badge)return;
   var intent='auto',label='',color='';
-  if(/complain|unhappy|dissatisfied|frustrated|angry|upset|not fair|unacceptable/.test(t)){intent='handle_complaint';label='⚠ Complaint detected';color='#dc2626';}
-  else if(/appeal|disagree|dispute|wrong decision|reconsider/.test(t)){intent='appeal_process';label='⚖ Appeal / Dispute';color='#d97706';}
-  else if(/document|report|certificate|proof|provide|send|upload|submit|missing/.test(t)){intent='request_documents';label='📎 Document request';color='#1a2a72';}
-  else if(/status|update|progress|when|how long|waiting|decision/.test(t)){intent='claim_status';label='📋 Status inquiry';color='#7c3aed';}
-  else if(/why|reason|explain|understand|confused|clarify/.test(t)){intent='answer_query';label='❓ Question';color='#059669';}
-  else if(/pay|payment|money|bank|reimbursement|refund|how much/.test(t)){intent='approval_confirm';label='💰 Payment query';color='#059669';}
+
+  // Intent detection — ordered by priority
+  if(/\b(?:complain|unhappy|dissatisfied|frustrated|angry|upset|not fair|unacceptable|terrible|disgrace|outrage|scandal)\b/.test(t)){intent='handle_complaint';label='⚠ Complaint';color='#dc2626';}
+  else if(/\b(?:appeal|dispute|disagree|wrong decision|reconsider|review again|escalat|second opinion)\b/.test(t)){intent='appeal_process';label='⚖ Appeal / Dispute';color='#d97706';}
+  else if(/\b(?:urgent|emergency|critical|life.threat|immediate|asap|today|right now)\b/.test(t)){intent='urgent_case';label='🚨 URGENT';color='#dc2626';}
+  else if(/\b(?:cancel|withdraw|surrender|close|terminate)\b/.test(t)){intent='cancellation';label='🚫 Cancellation';color='#7c3aed';}
+  else if(/\b(?:document|report|certificate|proof|evidence|provide|send|upload|submit|missing|require|need)\b/.test(t)){intent='request_documents';label='📎 Docs Required';color='#1a2a72';}
+  else if(/\b(?:status|update|progress|when|how long|waiting|decision|result|outcome)\b/.test(t)){intent='claim_status';label='📋 Status Inquiry';color='#7c3aed';}
+  else if(/\b(?:pay|payment|money|bank|reimburs|refund|transfer|account|swift|iban)\b/.test(t)){intent='payment_query';label='💰 Payment Query';color='#059669';}
+  else if(/\b(?:why|reason|explain|understand|confus|clarif|how come|basis|grounds)\b/.test(t)){intent='answer_query';label='❓ Explanation Needed';color='#059669';}
+  else if(/\b(?:extend|renew|continu|prolong|remain|stay|longer)\b/.test(t)){intent='extension_request';label='📆 Extension Request';color='#d97706';}
+  else if(/\b(?:thank|grateful|appreciate|happy|satisfied|pleased)\b/.test(t)){intent='positive_feedback';label='✓ Positive';color='#059669';}
+
   if(label){
     badge.style.cssText='display:flex;align-items:center;gap:6px;padding:6px 10px;border-radius:5px;font-size:12px;font-weight:600;color:'+color+';background:'+color+'18;border:1px solid '+color+'44';
     badge.innerHTML=label;
     if(rtEl)rtEl.value=intent;
     if(docsSec)docsSec.style.display=intent==='request_documents'?'block':'none';
+  }
+
+  // Extract key info from email text for display
+  var refs=[]; var amounts=[]; var dates=[]; var sender='';
+  var refM=text.match(/\b(?:ref(?:erence)?|case|claim|ticket|file)[:\s#]+([A-Z0-9-]{4,20})\b/gi);
+  if(refM) refs=refM.slice(0,3).map(function(r){return r.replace(/^[^:]+:/,'').trim();});
+  var amtM=text.match(/(?:EUR?|USD|\$|£|€|GBP)\s*[\d,]+(?:\.\d{0,2})?/gi);
+  if(amtM) amounts=amtM.slice(0,3);
+  var dateM=text.match(/\b\d{1,2}[\/\.-]\d{1,2}[\/\.-]\d{2,4}\b|\b\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+\d{2,4}\b/gi);
+  if(dateM) dates=dateM.slice(0,2);
+  var fromM=text.match(/^From:\s*(.+)/im); if(fromM) sender=fromM[1].trim().substring(0,60);
+
+  if(emailMetaEl){
+    var chips='';
+    if(sender) chips+='<span style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:10px;padding:2px 8px;font-size:10px;color:#1e40af">✉ '+esc(sender)+'</span> ';
+    refs.forEach(function(r){chips+='<span style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:10px;padding:2px 8px;font-size:10px;color:#15803d"># '+esc(r)+'</span> ';});
+    amounts.forEach(function(a){chips+='<span style="background:#fefce8;border:1px solid #fde68a;border-radius:10px;padding:2px 8px;font-size:10px;color:#854d0e">'+esc(a)+'</span> ';});
+    dates.forEach(function(d){chips+='<span style="background:#f5f3ff;border:1px solid #ddd6fe;border-radius:10px;padding:2px 8px;font-size:10px;color:#6d28d9">📅 '+esc(d)+'</span> ';});
+    emailMetaEl.innerHTML=chips;
+    emailMetaEl.style.display=chips?'flex':'none';
   }
 }
 async function generatePatientReply1(id) {
@@ -6161,48 +6190,81 @@ async function generatePatientReply1(id) {
 
   // Type-specific instructions
   var typeInstruction='';
-  if(responseType==='handle_complaint'){typeInstruction='The client is making a COMPLAINT. Start by genuinely acknowledging their frustration and specific experience — do NOT be defensive. Then explain the facts clearly and empathetically. Offer a concrete path forward (appeal, additional review, escalation). Thank them for raising the issue.';}
-  else if(responseType==='appeal_process'){typeInstruction='The client wishes to appeal or dispute the decision. Explain the formal appeal process: they have 30 days to submit a written appeal with supporting evidence. It will be reviewed by a senior medical officer within 15 working days. Tell them what additional evidence would strengthen their appeal.';}
-  else if(responseType==='request_documents'){typeInstruction='The claim requires additional documentation. Request the following documents:\n'+(requestedDocs.length?requestedDocs.map(function(d){return'- '+d;}).join('\n'):'All relevant medical and supporting documents')+'\nFor each document, briefly explain why it is needed. Give a 14-day submission deadline. Provide clear submission instructions. Be helpful and specific.';}
-  else if(responseType==='claim_status'){typeInstruction='Provide a clear status update: the current decision is '+decText+'. Explain what this means in plain language and what happens next.';}
-  else if(responseType==='denial_explain'){typeInstruction='Explain the denial empathetically. Reference the specific policy clause or exclusion that applies. Acknowledge this is disappointing news. Mention the 30-day appeals process and what evidence could support a reversal.';}
-  else if(responseType==='approval_confirm'){typeInstruction='Confirm the approval clearly and positively: '+decText+'. Explain the payment process, timeline and any conditions. Be warm and reassuring.';}
-  else{typeInstruction='Answer the client question directly and completely. Use plain language. If the answer requires further review, say so and give a clear timeline.';}
+  if(responseType==='handle_complaint'){typeInstruction='The client is making a COMPLAINT. Start by genuinely acknowledging their frustration and their specific experience — do NOT be defensive or minimise their concern. Then explain the facts clearly and empathetically. Offer a concrete path forward (appeal, additional review, escalation). Thank them for raising the issue.';}
+  else if(responseType==='appeal_process'){typeInstruction='The client wishes to appeal or dispute the decision. Explain the formal appeal process clearly: they have 30 days to submit a written appeal with supporting evidence. It will be reviewed by a senior medical officer within 15 working days. Tell them specifically what additional evidence would strengthen their appeal.';}
+  else if(responseType==='request_documents'){typeInstruction='The claim requires additional documentation. Request these documents:\n'+(requestedDocs.length?requestedDocs.map(function(d){return'- '+d;}).join('\n'):'All relevant medical and supporting documents')+'\nFor each document, briefly explain why it is required. Give a 14-day submission deadline. Provide clear submission instructions (email address, portal link). Be helpful and specific.';}
+  else if(responseType==='claim_status'){typeInstruction='Provide a clear and complete status update: the current decision is '+decText+'. Explain in plain language what this means for the client and what the next concrete steps are.';}
+  else if(responseType==='denial_explain'){typeInstruction='Explain the claim denial empathetically and clearly. Reference the specific policy clause or exclusion that applies. Acknowledge this is disappointing. Mention the 30-day appeal process, what additional evidence could support a reversal, and offer to clarify any points.';}
+  else if(responseType==='approval_confirm'){typeInstruction='Confirm the approval positively and clearly: '+decText+'. Explain the payment process, expected timeline, and any conditions. Include bank details / reimbursement instructions if relevant. Be warm and reassuring.';}
+  else if(responseType==='payment_query'){typeInstruction='Address the payment question directly. Provide clear information on the approved amount, payment timeline, method and any bank details or reference needed. If payment is pending, give a specific expected date.';}
+  else if(responseType==='urgent_case'){typeInstruction='This is an URGENT situation — respond immediately and with priority. Acknowledge the urgency explicitly in the first sentence. Provide any immediate assistance available and a specific named contact or escalation path. Confirm what is being done RIGHT NOW.';}
+  else if(responseType==='extension_request'){typeInstruction='The client is requesting an extension of their coverage, stay, or deadline. Explain clearly what extensions are possible under the policy, what documents are needed to process an extension, and the expected timeline for a decision.';}
+  else if(responseType==='positive_feedback'){typeInstruction='Acknowledge and thank the client genuinely for their positive feedback. Be warm and personal. Mention commitment to continued service. Keep it brief and sincere — 2-3 short paragraphs.';}
+  else{typeInstruction='Answer the client question directly, completely and in plain language. Reference specific case/policy details where relevant. End with clear next steps.';}
 
   var sys='You are a senior IPMI TPA Patient Relations Specialist with 15 years of experience handling complex international health insurance claims. '
     +'You are writing a reply to a client on behalf of the TPA. Tone: '+toneDesc+'. '
     +'STRICT RULES: '
-    +'1. Address the client specific concern in the FIRST paragraph — never start with generic pleasantries. '
-    +'2. Use the client name if known. '
+    +'1. Address the client specific concern in the VERY FIRST sentence — never start with generic pleasantries. '
+    +'2. Use the client name if known (extracted from the email signature, salutation, or case data). '
     +'3. Always include the case/claim reference number. '
-    +'4. Never use medical or insurance jargon the client would not understand. '
-    +'5. Every reply must have clear next steps — the client should never be left wondering what happens next. '
-    +'6. If the client is upset: acknowledge their experience genuinely BEFORE explaining the facts. '
-    +'7. End with a warm, personal closing and a direct invitation to contact us. '
-    +'8. Sign off as "Patient Relations Team, [TPA Name]". '
-    +'9. Target 200-300 words — enough to be thorough, short enough to be read.';
+    +'4. NEVER use insurance jargon the client would not understand — define any technical term you must use. '
+    +'5. Every reply must end with clear, specific next steps — the client must never be left wondering what happens next. '
+    +'6. If the client is upset: acknowledge their experience genuinely BEFORE explaining anything. '
+    +'7. If there is a quoted prior conversation in the email thread, read it for context but only address the latest message. '
+    +'8. End with a warm, personal closing and a direct invitation to contact us. '
+    +'9. Sign off as "Patient Relations Team, HealthWatch TPA". '
+    +'10. Target 200-350 words — thorough but readable. '
+    +'11. Do NOT invent information — if uncertain, say "we will confirm this within 24 hours".';
+
+  // ── Parse the pasted email for thread context ──
+  var emailFrom='', emailSubject='', emailDate='', emailLatest=clientMsg, emailPrior='';
+  var fromLineM=clientMsg.match(/^From:\s*(.+)/im);    if(fromLineM) emailFrom=fromLineM[1].trim();
+  var subjLineM=clientMsg.match(/^Subject:\s*(.+)/im); if(subjLineM) emailSubject=subjLineM[1].trim();
+  var dateLineM=clientMsg.match(/^(?:Date|Sent):\s*(.+)/im); if(dateLineM) emailDate=dateLineM[1].trim();
+
+  // Split thread if quoted chain exists
+  var THREAD_PATS=[
+    /^-{3,}\s*(?:Original Message|Original E-?mail|Forwarded message)\s*-{3,}/im,
+    /^On .{10,200}wrote:\s*$/im,
+    /^From:\s*\S.*\r?\nSent:\s*/im,
+    /^={5,}$/m, /^_{5,}$/m
+  ];
+  var firstSplitIdx=Infinity, firstSplitLen=0;
+  THREAD_PATS.forEach(function(re){var m=re.exec(clientMsg); if(m&&m.index<firstSplitIdx){firstSplitIdx=m.index;firstSplitLen=m[0].length;}});
+  if(firstSplitIdx<Infinity && firstSplitIdx>20){
+    emailLatest=clientMsg.substring(0,firstSplitIdx).trim();
+    emailPrior=clientMsg.substring(firstSplitIdx+firstSplitLen).trim();
+  } else {
+    // Line-quoted thread
+    var lines=clientMsg.split('\n'), direct=[], quoted=[];
+    lines.forEach(function(l){(/^\s*>/.test(l)?quoted:direct).push(l.replace(/^\s*>+\s?/,''));});
+    if(quoted.length>5){emailLatest=direct.join('\n').trim(); emailPrior=quoted.join('\n').trim();}
+  }
 
   var prompt='=== CASE DETAILS ===\n'
     +'Case Reference: '+(c.caseNum||'—')+'\n'
     +'Patient / Client Name: '+(c.patient||'Unknown')+'\n'
     +'Insurer: '+(c.insurer||'—')+'\n'
-    +'Admission Type: '+((c.admissionType||c.type||'—').toUpperCase())+'\n'
-    +'Admission: '+(c.admissionDate||'—')+' to '+(c.dischargeDate||'—')+'\n'
     +'Country: '+(c.country||'—')+'\n'
     +'Claim Decision: '+decText+'\n'
     +'Amount Claimed: EUR '+(c.amountClaimed||'—')+'\n'
     +(c.amountApproved?'Amount Approved: EUR '+c.amountApproved+'\n':'')
     +(c.policyNumber?'Policy Number: '+c.policyNumber+'\n':'')
-    +(c.repatType&&c.repatType!=='none'?'Repatriation: '+c.repatType+'\n':'')
+    +(c.admissionDate||c.dischargeDate?'Admission: '+(c.admissionDate||'—')+' to '+(c.dischargeDate||'—')+'\n':'')
     +(c.deductible?'Deductible: EUR '+c.deductible+'\n':'')
-    +(c.copay?'Co-pay: '+c.copay+'%\n':'')
+    +(c.copayment?'Co-pay: '+c.copayment+'%\n':'')
     +'Pre-Auth Status: '+(c.paStatus||'—')+'\n'
-    +(c.policyPlan?'Policy Plan: '+c.policyPlan+'\n':'')
-    +(c.diagnosis||c.desc?'Diagnosis / Description: '+((c.diagnosis||c.desc||'').substring(0,200))+'\n':'')
-    +(c.eval?'\n=== CLAIM EVALUATION (internal — use to inform reply, do NOT quote verbatim) ===\n'+c.eval.substring(0,1500)+'\n':'')
-    +'\n=== CLIENT MESSAGE ===\n'+clientMsg
+    +(c.diagnosis||c.desc?'Diagnosis: '+((c.diagnosis||c.desc||'').substring(0,200))+'\n':'')
+    +(c.eval?'\n=== EVALUATION SUMMARY (internal — inform reply, do NOT quote verbatim) ===\n'+c.eval.replace(/\*\*/g,'').substring(0,2000)+'\n':'')
+    +'\n=== INCOMING CLIENT EMAIL ===\n'
+    +(emailFrom?'From: '+emailFrom+'\n':'')
+    +(emailDate?'Date: '+emailDate+'\n':'')
+    +(emailSubject?'Subject: '+emailSubject+'\n':'')
+    +'\n[LATEST MESSAGE]\n'+emailLatest
+    +(emailPrior?'\n\n[PRIOR CORRESPONDENCE IN THREAD]\n'+emailPrior.substring(0,2000):'')
     +'\n\n=== TASK ===\n'+typeInstruction
-    +'\n\nWrite the reply in the specified tone: '+toneDesc+'.';
+    +'\n\nWrite the reply in the specified tone: '+toneDesc+'. Address '+((emailFrom||c.patient||'the client').split(/[<@\s]/)[0])+'.';
 
   try{
     var reply=await apiCall([{role:'user',content:prompt}],sys,1200);
@@ -6237,25 +6299,7 @@ async function generatePatientReply1(id) {
 }
 
 function wireDetectIntent(text) {
-  var t=text.toLowerCase();
-  var badge=document.getElementById('intent_badge');
-  var typeEl=document.getElementById('reply_type');
-  var docsSection=document.getElementById('docs_request_section');
-  if(!badge)return;
-  var intent='auto',label='',color='';
-  if(/complain|unhappy|dissatisfied|frustrated|angry|upset|not fair|unacceptable/.test(t)){intent='handle_complaint';label='⚠ Complaint — will acknowledge and offer resolution';color='#dc2626';}
-  else if(/appeal|disagree|dispute|wrong decision|reconsider|review decision/.test(t)){intent='appeal_process';label='⚖ Appeal / Dispute — will explain appeal process';color='#d97706';}
-  else if(/document|report|certificate|proof|evidence|provide|send|upload|submit|missing|require/.test(t)){intent='request_documents';label='📎 Documents needed — will request specific documents';color='#1a2a72';}
-  else if(/status|update|progress|when|how long|waiting|decision|result/.test(t)){intent='claim_status';label='📋 Status inquiry — will provide case update';color='#7c3aed';}
-  else if(/why|reason|explain|understand|confused|clarify/.test(t)){intent='answer_query';label='❓ Question — will answer directly';color='#059669';}
-  else if(/pay|payment|money|bank|reimbursement|refund|how much/.test(t)){intent='approval_confirm';label='💰 Payment query — will confirm payment details';color='#059669';}
-  if(label){
-    badge.style.display='flex';
-    badge.style.cssText='display:flex;align-items:center;gap:8px;padding:8px 12px;border-radius:6px;background:'+color+'18;border:1px solid '+color+'55;font-size:12px;font-weight:600;color:'+color+';margin-bottom:0';
-    badge.innerHTML=label;
-    if(typeEl)typeEl.value=intent;
-    if(docsSection)docsSection.style.display=intent==='request_documents'?'block':'none';
-  }
+  commDetectIntent(text); // unified — delegates to the enhanced version
 }
 
 function copyEmail(){
@@ -6688,7 +6732,7 @@ async function changePassword() {
 // ══════════════════════════════════════════════════════════════
 
 // ── App version — update on every significant deployment ──
-var APP_BUILD = 1778625000; // epoch-style build number (matches <meta name="version">)
+var APP_BUILD = 1778700000; // epoch-style build number (matches <meta name="version">)
 
 var FB_APP = null;
 var FB_DB = null;
@@ -9600,264 +9644,397 @@ async function readFileForAI(fd) {
     return [{type:'text', text:'[RTF: '+fd.name+']\n\n'+rtfClean.substring(0,20000)}];
   }
 
-  // ── Outlook .msg — binary MAPI format, extract readable text ──
+  // ═══════════════════════════════════════════════════════════
+  // EMAIL PARSING HELPERS (shared by .msg and .eml handlers)
+  // ═══════════════════════════════════════════════════════════
+
+  // Strip HTML to readable text while preserving table/list structure
+  function htmlEmailToText(html) {
+    return html
+      .replace(/<style[\s\S]*?<\/style>/gi,'')
+      .replace(/<script[\s\S]*?<\/script>/gi,'')
+      .replace(/<br\s*\/?>/gi,'\n')
+      .replace(/<\/p>/gi,'\n\n').replace(/<p[^>]*>/gi,'\n')
+      .replace(/<\/div>/gi,'\n').replace(/<div[^>]*>/gi,'')
+      .replace(/<\/tr>/gi,'\n').replace(/<tr[^>]*>/gi,'')
+      .replace(/<td[^>]*>/gi,'  ').replace(/<th[^>]*>/gi,'  ')
+      .replace(/<\/li>/gi,'\n').replace(/<li[^>]*>/gi,'• ')
+      .replace(/<h[1-6][^>]*>/gi,'\n\n').replace(/<\/h[1-6]>/gi,'\n')
+      .replace(/<hr[^>]*>/gi,'\n────────────────────\n')
+      .replace(/<[^>]+>/g,'')
+      .replace(/&nbsp;/g,' ').replace(/&amp;/g,'&').replace(/&lt;/g,'<')
+      .replace(/&gt;/g,'>').replace(/&quot;/g,'"').replace(/&#(\d+);/g,function(m,n){return String.fromCharCode(parseInt(n));})
+      .replace(/\t{3,}/g,'  ').replace(/ {4,}/g,'   ')
+      .replace(/\n{4,}/g,'\n\n').trim();
+  }
+
+  // Split an email body with quoted/forwarded chains into labeled sections
+  function parseEmailThread(body) {
+    var SPLITS = [
+      /^-{3,}\s*(?:Original Message|Original E-?mail|Forwarded message|Begin forwarded message)\s*-{3,}/im,
+      /^On .{10,200}wrote:\s*$/im,
+      /^From:[ \t]+\S.*\r?\nSent:[ \t]+/im,
+      /^-{2,}[ \t]*Forwarded/im,
+      /^={5,}$/m,
+      /^_{5,}$/m,
+    ];
+    var bestSplit = null, bestIdx = Infinity;
+    SPLITS.forEach(function(re){
+      var m = re.exec(body);
+      if(m && m.index < bestIdx){ bestSplit = m; bestIdx = m.index; }
+    });
+
+    if(!bestSplit) {
+      // Line-quoted thread (> prefix)
+      var lines = body.split('\n');
+      var direct = [], quoted = [];
+      lines.forEach(function(l){ (/^\s*>/.test(l) ? quoted : direct).push(l.replace(/^\s*>+\s?/,'')); });
+      if(quoted.length > 5 && direct.length > 1) {
+        return '=== CURRENT MESSAGE ===\n'+direct.join('\n').trim()
+          +'\n\n=== QUOTED PRIOR CORRESPONDENCE ===\n'+quoted.join('\n').trim();
+      }
+      return body;
+    }
+
+    // Split at each detected boundary
+    var segments = [], cursor = 0, pass = body, n = 0;
+    while(n < 8) {
+      var firstSplit = null, firstIdx2 = Infinity;
+      SPLITS.forEach(function(re){
+        var m2 = re.exec(pass.substring(cursor));
+        if(m2 && (cursor + m2.index) < firstIdx2){ firstSplit = m2; firstIdx2 = cursor + m2.index; }
+      });
+      if(!firstSplit) break;
+      var seg = pass.substring(cursor, firstIdx2).trim();
+      if(seg.length > 20) segments.push(seg);
+      cursor = firstIdx2 + firstSplit[0].length;
+      n++;
+    }
+    var tail = pass.substring(cursor).trim();
+    if(tail.length > 20) segments.push(tail);
+
+    if(segments.length < 2) return body;
+    return segments.map(function(s,i){
+      return '=== EMAIL CHAIN — '+(i===0?'LATEST':'PRIOR #'+i)+' ===\n'+s;
+    }).join('\n\n');
+  }
+
+  // Identify sender role from email/name string
+  function identifyEmailRole(str) {
+    if(!str) return '';
+    var s = str.toLowerCase();
+    if(/hospital|clinic|medical cent|health cent|medic|nhs|spital/i.test(s)) return ' [HOSPITAL/CLINIC]';
+    if(/\bdr\.?\b|doctor|physician|specialist|surgeon|prof\./i.test(s)) return ' [DOCTOR]';
+    if(/insurance|insur(?:er|ance)|\btpa\b|assist|aon|aig|allianz|axa|zurich|cigna|bupa|generali|globelink|mapfre|medlink/i.test(s)) return ' [INSURER/TPA]';
+    if(/pharmac/i.test(s)) return ' [PHARMACY]';
+    if(/@(?:gmail|hotmail|yahoo|outlook|live|proton|icloud|me\.com)/i.test(s)) return ' [PATIENT/INDIVIDUAL]';
+    return '';
+  }
+
+  // ── Outlook .msg — MAPI binary format, enhanced extraction ──
   if(ext==='msg') {
     try {
       var msgData = readTextFromDataUrl(data) || '';
-      // Scan for readable text sequences in MAPI binary
-      var msgText = '';
-      for(var mi=0; mi<Math.min(msgData.length,200000); mi++) {
-        var cc = msgData.charCodeAt(mi);
-        if(cc >= 32 && cc < 127) msgText += msgData[mi];
-        else if(cc === 10 || cc === 13) msgText += '\n';
+
+      // Try UTF-16LE extraction (MAPI stores strings as UTF-16LE)
+      var utf16Parts = [];
+      try {
+        var rawB64 = data.indexOf(',')!==-1 ? data.split(',')[1] : data;
+        var rawBin = atob(rawB64);
+        for(var u=0; u<Math.min(rawBin.length-1,600000); u+=2) {
+          var lo=rawBin.charCodeAt(u)&0xff, hi=rawBin.charCodeAt(u+1)&0xff;
+          if(hi===0 && lo>=32 && lo<127) utf16Parts.push(String.fromCharCode(lo));
+          else if(lo===0x0a||(lo===0x0d&&hi===0)) utf16Parts.push('\n');
+        }
+      } catch(e16) {}
+      var utf16Text = utf16Parts.join('').replace(/\n{4,}/g,'\n\n').trim();
+
+      // Also scan ASCII bytes
+      var asciiParts = [];
+      for(var mi=0; mi<Math.min(msgData.length,400000); mi++) {
+        var cc=msgData.charCodeAt(mi);
+        if(cc>=32&&cc<127) asciiParts.push(msgData[mi]);
+        else if(cc===10||cc===13) asciiParts.push('\n');
       }
-      // Keep only lines that look like email content (letters + punctuation)
-      var msgLines = msgText.split('\n').filter(function(l){
-        return l.trim().length > 5 && /[a-zA-Z]{3,}/.test(l);
+      var asciiText = asciiParts.join('').replace(/\n{4,}/g,'\n\n').trim();
+
+      // Use whichever yielded more content
+      var bestText = utf16Text.length > asciiText.length * 0.7 ? utf16Text : asciiText;
+      var combined = asciiText + '\n' + utf16Text;
+
+      // Extract structured headers
+      var fSubject = (combined.match(/^Subject:[ \t]*(.{2,200}?)[ \t]*$/im)||['',''])[1].trim();
+      var fFrom    = (combined.match(/^From:[ \t]*(.{2,200}?)[ \t]*$/im)||['',''])[1].trim();
+      var fTo      = (combined.match(/^To:[ \t]*(.{2,200}?)[ \t]*$/im)||['',''])[1].trim();
+      var fCc      = (combined.match(/^Cc:[ \t]*(.{2,200}?)[ \t]*$/im)||['',''])[1].trim();
+      var fDate    = (combined.match(/^Date:[ \t]*(.{2,80}?)[ \t]*$/im)||['',''])[1].trim()
+        || (combined.match(/(Mon|Tue|Wed|Thu|Fri|Sat|Sun)[^,\n]*,?\s*\d{1,2}\s+\w+\s+\d{4}/i)||[''])[0];
+
+      // Clean content lines (filter base64 blobs and junk)
+      var msgLines = bestText.split('\n').filter(function(l){
+        var t=l.trim();
+        return t.length>5 && /[a-zA-Z]{3,}/.test(t) && !/^[A-Za-z0-9+/]{50,}=*$/.test(t);
       });
       var msgClean = msgLines.join('\n').replace(/\n{4,}/g,'\n\n').trim();
+
       if(msgClean.length > 50) {
-        return [{type:'text', text:'[OUTLOOK EMAIL: '+fd.name+']\n\n'+msgClean.substring(0,15000)}];
+        var msgHdr = '[OUTLOOK EMAIL: '+fd.name+']\n'
+          +(fFrom?'From: '+fFrom+identifyEmailRole(fFrom)+'\n':'')
+          +(fTo?'To: '+fTo+identifyEmailRole(fTo)+'\n':'')
+          +(fCc?'Cc: '+fCc+'\n':'')
+          +(fDate?'Date: '+fDate+'\n':'')
+          +(fSubject?'Subject: '+fSubject+'\n':'');
+        var threadParsed = parseEmailThread(msgClean);
+        return [{type:'text', text:msgHdr+'\n'+threadParsed.substring(0,25000)}];
       }
     } catch(msgErr) { console.warn('[readFileForAI] MSG parse failed:', msgErr.message); }
-    return [{type:'text', text:'[OUTLOOK EMAIL: '+fd.name+' — binary format, could not extract text. File is saved in the case.]'}];
+    return [{type:'text', text:'[OUTLOOK EMAIL: '+fd.name+' — binary format; file saved in case for manual review]'}];
   }
 
-  // ── Email .eml / .msg — full MIME parser + attachment extraction ──
+  // ── .eml — full MIME parser with thread splitting + attachment extraction ──
   if(ext==='eml') {
     var emlRaw = readTextFromDataUrl(data);
     if(!emlRaw || emlRaw.length < 10) return [{type:'text', text:'[Email: '+fd.name+' — could not decode]'}];
 
-    // Safe binary → base64 (avoids stack overflow for large attachments)
+    // Safe binary → base64 (chunked to avoid stack overflow)
     function binToB64(bin) {
-      var CHUNK = 8192;
-      var parts = [];
-      for(var bi=0; bi<bin.length; bi+=CHUNK) {
+      var CHUNK=8192, parts=[];
+      for(var bi=0;bi<bin.length;bi+=CHUNK) {
         parts.push(String.fromCharCode.apply(null,
           Array.prototype.slice.call(new Uint8Array(
-            new Array(Math.min(CHUNK, bin.length-bi)).fill(0).map(function(_,j){
-              return bin.charCodeAt(bi+j)&0xff;
-            })
+            Array.from({length:Math.min(CHUNK,bin.length-bi)},function(_,j){return bin.charCodeAt(bi+j)&0xff;})
           ))
         ));
       }
       return btoa(parts.join(''));
     }
 
-    // Split headers / body at the FIRST blank line (handles \r\n and \n)
     function splitHeaderBody(raw) {
-      var idx = raw.search(/\r?\n\r?\n/);
-      if(idx === -1) return { hdr: raw, body: '' };
-      var nlLen = raw[idx]==='\r' ? 2 : 1;
-      return { hdr: raw.substring(0, idx), body: raw.substring(idx + nlLen*2) };
+      var idx=raw.search(/\r?\n\r?\n/);
+      if(idx===-1) return {hdr:raw,body:''};
+      var nlLen=raw[idx]==='\r'?2:1;
+      return {hdr:raw.substring(0,idx), body:raw.substring(idx+nlLen*2)};
     }
 
-    // Parse header block → {key: value} — handles folded headers
     function parseHeaders(hdrStr) {
-      var hdrs = {};
-      var lines = hdrStr.replace(/\r\n/g,'\n').split('\n');
-      var cur = '';
+      var hdrs={}, lines=hdrStr.replace(/\r\n/g,'\n').split('\n'), cur='';
       lines.forEach(function(l){
-        if(/^[\t ]/.test(l)) { cur += ' ' + l.trim(); return; }
-        if(cur) {
-          var ci = cur.indexOf(':');
-          if(ci > 0) hdrs[cur.substring(0,ci).toLowerCase().trim()] = cur.substring(ci+1).trim();
-        }
-        cur = l;
+        if(/^[\t ]/.test(l)){cur+=' '+l.trim();return;}
+        if(cur){var ci=cur.indexOf(':'); if(ci>0) hdrs[cur.substring(0,ci).toLowerCase().trim()]=cur.substring(ci+1).trim();}
+        cur=l;
       });
-      if(cur) {
-        var ci = cur.indexOf(':');
-        if(ci > 0) hdrs[cur.substring(0,ci).toLowerCase().trim()] = cur.substring(ci+1).trim();
-      }
+      if(cur){var ci=cur.indexOf(':'); if(ci>0) hdrs[cur.substring(0,ci).toLowerCase().trim()]=cur.substring(ci+1).trim();}
       return hdrs;
     }
 
-    // Decode a MIME body string according to content-transfer-encoding
     function decodeBody(bodyStr, enc) {
       try {
-        if(enc === 'base64') {
-          return atob(bodyStr.replace(/[\s\r\n]/g,''));
-        }
-        if(enc === 'quoted-printable') {
-          return bodyStr
-            .replace(/=\r?\n/g,'')
-            .replace(/=([0-9A-Fa-f]{2})/g, function(m,h){ return String.fromCharCode(parseInt(h,16)); });
-        }
+        if(enc==='base64') return atob(bodyStr.replace(/[\s\r\n]/g,''));
+        if(enc==='quoted-printable') return bodyStr.replace(/=\r?\n/g,'').replace(/=([0-9A-Fa-f]{2})/g,function(m,h){return String.fromCharCode(parseInt(h,16));});
       } catch(e) {}
+      // Try UTF-8 decode for 8bit / 7bit
+      try { return decodeURIComponent(escape(bodyStr)); } catch(e2) {}
       return bodyStr;
     }
 
-    // Parse entire MIME structure recursively
     function parseMIMEParts(raw) {
-      var sb = splitHeaderBody(raw);
-      var hdrs = parseHeaders(sb.hdr);
-      var ct = hdrs['content-type'] || 'text/plain';
-      var enc = (hdrs['content-transfer-encoding'] || '').toLowerCase().trim();
-      var disp = hdrs['content-disposition'] || '';
-
-      // Extract filename
-      var fnM = disp.match(/filename\*?=["'\s]?([^"';\r\n]+)/i) || ct.match(/name=["'\s]?([^"'\s;]+)/i);
-      var fname2 = fnM ? fnM[1].replace(/^utf-8\'\'/i,'').replace(/["']/g,'').trim() : '';
-
-      // Multipart: split on boundary
-      var bndM = ct.match(/boundary=["\']?([^"\';\s]+)["\']?/i);
+      var sb=splitHeaderBody(raw);
+      var hdrs=parseHeaders(sb.hdr);
+      var ct=hdrs['content-type']||'text/plain';
+      var enc=(hdrs['content-transfer-encoding']||'').toLowerCase().trim();
+      var disp=hdrs['content-disposition']||'';
+      var fnM=disp.match(/filename\*?(?:=|\*0\*=)["'\s]?([^"';\r\n]+)/i)||ct.match(/name=["'\s]?([^"'\s;]+)/i);
+      var fname2=fnM?fnM[1].replace(/^utf-8''/i,'').replace(/["']/g,'').trim():'';
+      // Handle RFC 2231 encoded filenames
+      if(fname2) fname2=fname2.replace(/%([0-9A-Fa-f]{2})/g,function(m,h){return String.fromCharCode(parseInt(h,16));});
+      var bndM=ct.match(/boundary=["\']?([^"\';\s\r\n]+)["\']?/i);
       if(bndM) {
-        var bnd = '--' + bndM[1];
-        // Split body on boundary lines
-        var bodyLines = sb.body.replace(/\r\n/g,'\n').split('\n');
-        var sections = [];
-        var cur2 = [];
-        bodyLines.forEach(function(l){
-          var stripped = l.trim();
-          if(stripped === bnd || stripped === bnd+'--') {
-            if(cur2.length > 0) sections.push(cur2.join('\n'));
-            cur2 = [];
-          } else {
-            cur2.push(l);
-          }
+        var bnd='--'+bndM[1];
+        var bodyNorm=sb.body.replace(/\r\n/g,'\n');
+        var sections=[]; var cur2=[];
+        bodyNorm.split('\n').forEach(function(l){
+          var s=l.trim();
+          if(s===bnd||s===bnd+'--'){if(cur2.length) sections.push(cur2.join('\n')); cur2=[];}
+          else cur2.push(l);
         });
-        if(cur2.length > 0) sections.push(cur2.join('\n'));
-        var children = [];
-        sections.forEach(function(sec){
-          if(sec.trim()) children.push(parseMIMEParts(sec));
-        });
-        return { hdrs:hdrs, enc:enc, ct:ct, disp:disp, fname:fname2, body:'', children:children };
+        if(cur2.length) sections.push(cur2.join('\n'));
+        return {hdrs:hdrs,enc:enc,ct:ct,disp:disp,fname:fname2,body:'',
+          children:sections.filter(function(s){return s.trim();}).map(parseMIMEParts)};
       }
-
-      // Leaf part — decode body
-      return { hdrs:hdrs, enc:enc, ct:ct, disp:disp, fname:fname2, body: decodeBody(sb.body, enc), children:[] };
+      return {hdrs:hdrs,enc:enc,ct:ct,disp:disp,fname:fname2,body:decodeBody(sb.body,enc),children:[]};
     }
 
-    // Walk MIME tree → collect blocks for Claude
-    var blocks = [];
-    var attachmentNames = [];
-    var hadTextBody = false;
+    var blocks=[], attachmentNames=[], hadTextBody=false;
 
-    function walk(part) {
-      if(part.children.length > 0) {
-        part.children.forEach(walk);
-        return;
-      }
-      var ctL = part.ct.toLowerCase();
-      var isAttach = /attachment/i.test(part.disp);
+    function walk(part, depth) {
+      depth = depth||0;
+      if(part.children.length>0){ part.children.forEach(function(p){walk(p,depth+1);}); return; }
+      var ctL=part.ct.toLowerCase();
+      var isAttach=/attachment/i.test(part.disp) || (part.fname && !/^text\//.test(ctL) && !/^image\//.test(ctL) && !/application\/pdf/.test(ctL));
 
-      // ── Email body text ──
+      // ── Plain text body ──
       if(/text\/plain/i.test(ctL) && !isAttach) {
-        // Body text — clean and add
-        var txt = part.body.replace(/\r\n/g,'\n').replace(/\n{4,}/g,'\n\n').trim();
-        if(txt.length > 10) {
-          if(!hadTextBody) {
-            blocks.push({type:'text', text:'[EMAIL BODY]\n\n' + txt.substring(0,15000)});
-            hadTextBody = true;
-          }
+        var txt=part.body.replace(/\r\n/g,'\n').replace(/\n{4,}/g,'\n\n').trim();
+        if(txt.length>10 && !hadTextBody) {
+          var threaded=parseEmailThread(txt);
+          blocks.push({type:'text', text:'[EMAIL BODY]\n\n'+threaded.substring(0,28000)});
+          hadTextBody=true;
         }
         return;
       }
 
-      // ── HTML body — strip tags, use only if no plain text yet ──
+      // ── HTML body — convert preserving table/list structure ──
       if(/text\/html/i.test(ctL) && !isAttach && !hadTextBody) {
-        var stripped2 = part.body
-          .replace(/<style[\s\S]*?<\/style>/gi,'')
-          .replace(/<script[\s\S]*?<\/script>/gi,'')
-          .replace(/<[^>]+>/g,' ')
-          .replace(/&nbsp;/g,' ').replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>')
-          .replace(/\s{3,}/g,' ').trim();
-        if(stripped2.length > 10) {
-          blocks.push({type:'text', text:'[EMAIL BODY]\n\n' + stripped2.substring(0,10000)});
-          hadTextBody = true;
+        var htmlTxt=htmlEmailToText(part.body);
+        if(htmlTxt.length>10) {
+          var threaded2=parseEmailThread(htmlTxt);
+          blocks.push({type:'text', text:'[EMAIL BODY]\n\n'+threaded2.substring(0,22000)});
+          hadTextBody=true;
         }
         return;
       }
 
       // ── PDF attachment ──
-      if(part.fname && /\.pdf$/i.test(part.fname) || /application\/pdf/i.test(ctL)) {
+      if(/\.pdf$/i.test(part.fname)||/application\/pdf/i.test(ctL)) {
         try {
-          var b64p = (part.enc==='base64') ? part.body.replace(/[\s\r\n]/g,'') : binToB64(part.body);
-          // Validate base64: length must be multiple of 4 after padding, min 500 chars
-          b64p = b64p.replace(/[^A-Za-z0-9+/=]/g,'');
-          while(b64p.length % 4 !== 0) b64p += '=';
-          if(b64p.length > 500) {
-            attachmentNames.push((part.fname||'attachment.pdf')+' (PDF)');
-            blocks.push({ type:'document', source:{type:'base64',media_type:'application/pdf',data:b64p}, title:part.fname||'Email Attachment' });
+          var b64p=(part.enc==='base64')?part.body.replace(/[\s\r\n]/g,''):binToB64(part.body);
+          b64p=b64p.replace(/[^A-Za-z0-9+/=]/g,'');
+          while(b64p.length%4!==0) b64p+='=';
+          if(b64p.length>500) {
+            attachmentNames.push((part.fname||'attachment.pdf')+' [PDF]');
+            blocks.push({type:'document',source:{type:'base64',media_type:'application/pdf',data:b64p},
+              title:'[EMAIL ATTACHMENT] '+(part.fname||'attachment.pdf')});
           }
-        } catch(e2){ console.warn('[EML] PDF attach:',e2.message); }
+        } catch(e2){console.warn('[EML] PDF:',e2.message);}
         return;
       }
 
-      // ── Image attachment ──
-      if(/image\//.test(ctL) || (part.fname && /\.(jpg|jpeg|png|gif|webp|bmp)$/i.test(part.fname))) {
+      // ── Image attachment (JPEG, PNG, GIF, WEBP, BMP, TIFF) ──
+      if(/image\//.test(ctL)||(part.fname&&/\.(jpg|jpeg|png|gif|webp|bmp|tiff?|heic|heif)$/i.test(part.fname))) {
         try {
-          var mime2 = /png/i.test(ctL)||/\.png$/i.test(part.fname||'')?'image/png':
-                      /gif/i.test(ctL)?'image/gif':
-                      /webp/i.test(ctL)?'image/webp':'image/jpeg';
-          var b64i = (part.enc==='base64') ? part.body.replace(/[\s\r\n]/g,'') : binToB64(part.body);
-          // Validate base64
-          b64i = b64i.replace(/[^A-Za-z0-9+/=]/g,'');
-          while(b64i.length % 4 !== 0) b64i += '=';
-          if(b64i.length > 200) {
-            attachmentNames.push((part.fname||'image'));
-            blocks.push({type:'image', source:{type:'base64',media_type:mime2,data:b64i}});
+          var mime2=/png/i.test(ctL)||/\.png$/i.test(part.fname||'')?'image/png'
+            :/gif/i.test(ctL)?'image/gif'
+            :/webp/i.test(ctL)?'image/webp'
+            :/tiff?/i.test(ctL)||/\.tiff?$/i.test(part.fname||'')?'image/tiff'
+            :'image/jpeg';
+          var b64i=(part.enc==='base64')?part.body.replace(/[\s\r\n]/g,''):binToB64(part.body);
+          b64i=b64i.replace(/[^A-Za-z0-9+/=]/g,'');
+          while(b64i.length%4!==0) b64i+='=';
+          if(b64i.length>200) {
+            attachmentNames.push(part.fname||'image');
+            // TIFF not natively supported by Claude vision — send as text notice
+            if(/tiff?/i.test(mime2)) {
+              blocks.push({type:'text',text:'[IMAGE ATTACHMENT: '+(part.fname||'image.tiff')+' — TIFF format. Contains visual medical data; see original file.]'});
+            } else {
+              blocks.push({type:'image',source:{type:'base64',media_type:mime2,data:b64i}});
+            }
           }
-        } catch(e3){ console.warn('[EML] Image attach:',e3.message); }
+        } catch(e3){console.warn('[EML] Image:',e3.message);}
         return;
       }
 
-      // ── Word/Excel/text attachment ──
-      if(part.fname && /\.(doc|docx|xls|xlsx|txt|csv|rtf)$/i.test(part.fname)) {
+      // ── Word (.docx) attachment ──
+      if(part.fname&&/\.docx?$/i.test(part.fname)) {
         try {
-          var b64d = (part.enc==='base64') ? part.body.replace(/[\s\r\n]/g,'') : '';
-          if(b64d && typeof mammoth!=='undefined' && /\.docx?$/i.test(part.fname)) {
-            attachmentNames.push(part.fname+' (Word)');
-            mammoth.extractRawText({arrayBuffer:b64AB(b64d)}).then(function(res){
-              if(res.value && res.value.trim().length > 10)
-                blocks.push({type:'text', text:'[ATTACHED: '+part.fname+']\n\n'+res.value.trim().substring(0,8000)});
+          var b64doc=(part.enc==='base64')?part.body.replace(/[\s\r\n]/g,''):'';
+          if(b64doc&&typeof mammoth!=='undefined') {
+            attachmentNames.push(part.fname+' [Word]');
+            mammoth.extractRawText({arrayBuffer:b64AB(b64doc)}).then(function(res){
+              if(res.value&&res.value.trim().length>10)
+                blocks.push({type:'text',text:'[EMAIL ATTACHMENT — '+part.fname+']\n\n'+res.value.trim().substring(0,12000)});
             }).catch(function(){});
-          } else if(b64d) {
-            attachmentNames.push(part.fname);
-            try {
-              var decoded2 = atob(b64d).replace(/[^\x09\x0A\x0D\x20-\x7E]/g,' ').replace(/\s{3,}/g,' ').trim();
-              if(decoded2.length > 30)
-                blocks.push({type:'text', text:'[ATTACHED: '+part.fname+']\n\n'+decoded2.substring(0,6000)});
-            } catch(e4){}
           }
-        } catch(e5){ console.warn('[EML] Doc attach:',e5.message); }
+        } catch(e4){console.warn('[EML] DOCX:',e4.message);}
+        return;
+      }
+
+      // ── Excel (.xlsx/.xls) attachment ──
+      if(part.fname&&/\.xlsx?$/i.test(part.fname)) {
+        try {
+          var b64xl=(part.enc==='base64')?part.body.replace(/[\s\r\n]/g,''):'';
+          if(b64xl&&typeof XLSX!=='undefined') {
+            attachmentNames.push(part.fname+' [Excel]');
+            try {
+              var wb=XLSX.read(b64xl,{type:'base64'});
+              var xlText='';
+              wb.SheetNames.forEach(function(sn){
+                var csv=XLSX.utils.sheet_to_csv(wb.Sheets[sn],{blankrows:false});
+                if(csv.trim().length>5) xlText+='\n[Sheet: '+sn+']\n'+csv;
+              });
+              if(xlText.length>10)
+                blocks.push({type:'text',text:'[EMAIL ATTACHMENT — '+part.fname+']\n'+xlText.substring(0,12000)});
+            } catch(xlErr){}
+          }
+        } catch(e5){console.warn('[EML] XLS:',e5.message);}
+        return;
+      }
+
+      // ── Nested .eml attachment (forwarded email as attachment) ──
+      if(part.fname&&/\.eml$/i.test(part.fname)) {
+        try {
+          var nestedRaw=(part.enc==='base64')?atob(part.body.replace(/[\s\r\n]/g,'')):part.body;
+          var nestedParsed=parseMIMEParts(nestedRaw);
+          var nestedSubj=nestedParsed.hdrs['subject']||'';
+          var nestedFrom=nestedParsed.hdrs['from']||'';
+          attachmentNames.push((part.fname||'forwarded.eml')+' [Email]');
+          blocks.push({type:'text',text:'[ATTACHED EMAIL: '+(part.fname||'forwarded.eml')+']\n'
+            +(nestedFrom?'From: '+nestedFrom+identifyEmailRole(nestedFrom)+'\n':'')
+            +(nestedSubj?'Subject: '+nestedSubj+'\n':'')});
+          walk(nestedParsed, depth+1);
+        } catch(eNestedErr){console.warn('[EML] Nested eml:',eNestedErr.message);}
+        return;
+      }
+
+      // ── Text / CSV / RTF attachment ──
+      if(part.fname&&/\.(txt|csv|tsv|rtf)$/i.test(part.fname)) {
+        try {
+          var b64tx=(part.enc==='base64')?part.body.replace(/[\s\r\n]/g,''):'';
+          var txDecoded=b64tx?atob(b64tx).replace(/[^\x09\x0A\x0D\x20-\x7E]/g,' ').trim():part.body.trim();
+          if(txDecoded.length>20) {
+            attachmentNames.push(part.fname);
+            blocks.push({type:'text',text:'[EMAIL ATTACHMENT — '+part.fname+']\n\n'+txDecoded.substring(0,10000)});
+          }
+        } catch(e6){console.warn('[EML] Text attach:',e6.message);}
         return;
       }
     }
 
     try {
-      var parsed = parseMIMEParts(emlRaw);
-      // Top-level headers for summary
-      var subj = parsed.hdrs['subject']||'';
-      var from = parsed.hdrs['from']||'';
-      var to   = parsed.hdrs['to']||'';
-      var date = parsed.hdrs['date']||'';
-      walk(parsed);
+      var parsed=parseMIMEParts(emlRaw);
+      var subj=parsed.hdrs['subject']||'';
+      var from=parsed.hdrs['from']||'';
+      var to=parsed.hdrs['to']||'';
+      var cc=parsed.hdrs['cc']||'';
+      var date=parsed.hdrs['date']||'';
+      var replyTo=parsed.hdrs['reply-to']||'';
+      var importance=parsed.hdrs['importance']||parsed.hdrs['x-priority']||'';
+      walk(parsed,0);
     } catch(emlErr) {
       console.error('[EML] Parser error:', emlErr.message);
-      // Fallback: just return the raw text
       return [{type:'text', text:'[EMAIL: '+fd.name+']\n\n'+emlRaw.substring(0,20000)}];
     }
 
-    // Header summary always first
-    var hdrSummary = '[EMAIL: '+fd.name+']\n'
-      + (from ? 'From: '+from+'\n' : '')
-      + (to   ? 'To: '+to+'\n' : '')
-      + (date ? 'Date: '+date+'\n' : '')
-      + (subj ? 'Subject: '+subj+'\n' : '')
-      + (attachmentNames.length ? 'Attachments ('+attachmentNames.length+'): '+attachmentNames.join(', ')+'\n' : '');
+    // Build rich header summary
+    var hdrSummary='[EMAIL: '+fd.name+']\n'
+      +(from?'From: '+from+identifyEmailRole(from)+'\n':'')
+      +(to?'To: '+to+identifyEmailRole(to)+'\n':'')
+      +(cc?'Cc: '+cc+'\n':'')
+      +(replyTo&&replyTo!==from?'Reply-To: '+replyTo+'\n':'')
+      +(date?'Date: '+date+'\n':'')
+      +(subj?'Subject: '+subj+'\n':'')
+      +(importance?'Priority: '+importance+'\n':'')
+      +(attachmentNames.length?'Attachments ('+attachmentNames.length+'): '+attachmentNames.join(', ')+'\n':'');
     blocks.unshift({type:'text', text:hdrSummary});
 
-    // If parser produced only the header (no body found), add clean text fallback
-    // Strip MIME boundaries and base64 blobs from raw email before using as fallback
-    if(blocks.length === 1) {
-      var cleanEml = emlRaw
-        .replace(/Content-Transfer-Encoding:\s*base64[\s\S]*?(?=\n--|\n\nContent-|\Z)/gi, '[base64 attachment removed]')
-        .replace(/^[A-Za-z0-9+/]{60,}\s*$/gm, '') // strip base64 lines
-        .replace(/--[^\n]{10,}\n/g, '') // strip boundary markers
-        .replace(/\n{4,}/g, '\n\n')
-        .substring(0, 15000);
-      blocks.push({type:'text', text:'[EMAIL BODY]\n\n'+cleanEml});
+    // Fallback if no body was extracted
+    if(blocks.length===1) {
+      var cleanEml=emlRaw
+        .replace(/Content-Transfer-Encoding:\s*base64[\s\S]*?(?=\n--|\n\nContent-)/gi,'[base64 data]')
+        .replace(/^[A-Za-z0-9+/]{60,}=*\s*$/gm,'')
+        .replace(/--[^\n]{5,}\n/g,'')
+        .replace(/\n{4,}/g,'\n\n').substring(0,20000);
+      var fallbackThreaded=parseEmailThread(cleanEml);
+      blocks.push({type:'text',text:'[EMAIL BODY]\n\n'+fallbackThreaded});
     }
 
     console.log('[EML] Parsed:', fd.name, '→', blocks.length, 'blocks,', attachmentNames.length, 'attachments');
