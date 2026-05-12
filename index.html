@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
-<meta name="version" content="1778538844">
+<meta name="version" content="1778625000">
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
@@ -6640,43 +6640,26 @@ function fmtAmt(amount, cur) {
 }
 
 function buildAmountString(caseObj) {
-  // Build a proper amount string from case invoices or fields
+  // Always returns EUR amount for AI eval prompt
   var invs = getInvoices(caseObj.id);
-  
+
   if(invs && invs.length) {
-    // Use actual extracted invoices — group by currency
-    var byCur = {};
+    var totalEUR = 0;
+    var hasData = false;
     invs.forEach(function(inv){
       var cur = ((inv.data&&inv.data.currency)||inv.cur||'EUR').toUpperCase();
       var amt = parseFloat((inv.data&&inv.data.total)||inv.rawTotal||0);
-      if(amt > 0) byCur[cur] = (byCur[cur]||0) + amt;
+      if(amt > 0) { totalEUR += toEUR(amt, cur); hasData = true; }
     });
-    
-    var parts = [];
-    var totalEUR = 0;
-    Object.keys(byCur).forEach(function(cur){
-      var amt = byCur[cur];
-      var eur = toEUR(amt, cur);
-      totalEUR += eur;
-      if(cur === 'EUR') {
-        parts.push('EUR ' + amt.toFixed(2));
-      } else {
-        parts.push(cur + ' ' + amt.toFixed(2) + ' (≈ EUR ' + eur.toFixed(2) + ')');
-      }
-    });
-    
-    var result = parts.join(' + ');
-    if(Object.keys(byCur).length > 1 || Object.keys(byCur)[0] !== 'EUR') {
-      result += '\n    TOTAL (EUR): ' + totalEUR.toFixed(2);
-    }
-    return result;
+    if(hasData) return 'EUR ' + totalEUR.toLocaleString('en',{minimumFractionDigits:2,maximumFractionDigits:2});
   }
-  
-  // Fall back to case fields
-  var amt = parseFloat(caseObj.amountClaimed||0);
+
+  // Fall back to case fields — amountClaimed is stored in EUR
+  var amt = parseFloat(caseObj.amountClaimedEUR||caseObj.amountClaimed||0);
   var cur = (caseObj.currency||'EUR').toUpperCase();
   if(amt <= 0) return 'Not provided';
-  return fmtAmt(amt, cur);
+  var eurAmt = cur === 'EUR' ? amt : toEUR(amt, cur);
+  return 'EUR ' + eurAmt.toLocaleString('en',{minimumFractionDigits:2,maximumFractionDigits:2});
 }
 
 
@@ -6705,7 +6688,7 @@ async function changePassword() {
 // ══════════════════════════════════════════════════════════════
 
 // ── App version — update on every significant deployment ──
-var APP_BUILD = 1778538844; // epoch-style build number (matches <meta name="version">)
+var APP_BUILD = 1778625000; // epoch-style build number (matches <meta name="version">)
 
 var FB_APP = null;
 var FB_DB = null;
@@ -10497,19 +10480,18 @@ async function extractAndMerge(fd, caseId) {
   var disVal = convertDate(info.discharge_date);
   if(disVal && !c.dischargeDate){ updates.dischargeDate=disVal; var dde=G('f_dis_date'); if(dde) dde.value=disVal; }
 
-  // Financial — store original currency, always update if larger
+  // Financial — always store amount in EUR
   var totalNum = parseFloat(info.total_amount);
   if(!isNaN(totalNum) && totalNum > 0) {
     var docCur = ((info.currency||info.currency_symbol||'')+'').toUpperCase().replace(/[^A-Z]/g,'').substring(0,3) || 'EUR';
     var totalEUR = toEUR(totalNum, docCur);
-    var existingEUR = toEUR(parseFloat(c.amountClaimed||0), (c.currency||'EUR'));
-    // Always store the ORIGINAL currency + amount
-    if(!c.amountClaimed || parseFloat(c.amountClaimed)===0 || totalEUR > existingEUR) {
-      updates.amountClaimed = String(totalNum);
-      updates.currency = docCur;
+    var existingEUR = parseFloat(c.amountClaimed||0);  // amountClaimed is always EUR
+    if(!c.amountClaimed || existingEUR===0 || totalEUR > existingEUR) {
+      updates.amountClaimed = String(Math.round(totalEUR*100)/100);  // always EUR
+      updates.currency = docCur;  // preserve original currency for reference
       updates.amountClaimedOriginal = docCur + ' ' + totalNum.toFixed(2);
       updates.amountClaimedEUR = String(Math.round(totalEUR*100)/100);
-      var acEl=G('f_ac'); if(acEl) acEl.value=String(totalNum);
+      var acEl=G('f_ac'); if(acEl) acEl.value=String(Math.round(totalEUR*100)/100);
       var cuEl=G('f_cu'); if(cuEl) cuEl.value=docCur;
     }
   }
