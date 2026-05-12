@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
-<meta name="version" content="1778700000">
+<meta name="version" content="1778750000">
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
@@ -6256,13 +6256,13 @@ async function generatePatientReply1(id) {
     +(c.copayment?'Co-pay: '+c.copayment+'%\n':'')
     +'Pre-Auth Status: '+(c.paStatus||'—')+'\n'
     +(c.diagnosis||c.desc?'Diagnosis: '+((c.diagnosis||c.desc||'').substring(0,200))+'\n':'')
-    +(c.eval?'\n=== EVALUATION SUMMARY (internal — inform reply, do NOT quote verbatim) ===\n'+c.eval.replace(/\*\*/g,'').substring(0,2000)+'\n':'')
+    +(c.eval?'\n=== EVALUATION SUMMARY (internal — inform reply, do NOT quote verbatim) ===\n'+c.eval.replace(/\*\*/g,'').substring(0,4000)+'\n':'')
     +'\n=== INCOMING CLIENT EMAIL ===\n'
     +(emailFrom?'From: '+emailFrom+'\n':'')
     +(emailDate?'Date: '+emailDate+'\n':'')
     +(emailSubject?'Subject: '+emailSubject+'\n':'')
     +'\n[LATEST MESSAGE]\n'+emailLatest
-    +(emailPrior?'\n\n[PRIOR CORRESPONDENCE IN THREAD]\n'+emailPrior.substring(0,2000):'')
+    +(emailPrior?'\n\n[PRIOR CORRESPONDENCE IN THREAD]\n'+emailPrior.substring(0,20000):'')
     +'\n\n=== TASK ===\n'+typeInstruction
     +'\n\nWrite the reply in the specified tone: '+toneDesc+'. Address '+((emailFrom||c.patient||'the client').split(/[<@\s]/)[0])+'.';
 
@@ -6732,7 +6732,7 @@ async function changePassword() {
 // ══════════════════════════════════════════════════════════════
 
 // ── App version — update on every significant deployment ──
-var APP_BUILD = 1778700000; // epoch-style build number (matches <meta name="version">)
+var APP_BUILD = 1778750000; // epoch-style build number (matches <meta name="version">)
 
 var FB_APP = null;
 var FB_DB = null;
@@ -9741,7 +9741,7 @@ async function readFileForAI(fd) {
       try {
         var rawB64 = data.indexOf(',')!==-1 ? data.split(',')[1] : data;
         var rawBin = atob(rawB64);
-        for(var u=0; u<Math.min(rawBin.length-1,600000); u+=2) {
+        for(var u=0; u<Math.min(rawBin.length-1,1200000); u+=2) {
           var lo=rawBin.charCodeAt(u)&0xff, hi=rawBin.charCodeAt(u+1)&0xff;
           if(hi===0 && lo>=32 && lo<127) utf16Parts.push(String.fromCharCode(lo));
           else if(lo===0x0a||(lo===0x0d&&hi===0)) utf16Parts.push('\n');
@@ -9751,7 +9751,7 @@ async function readFileForAI(fd) {
 
       // Also scan ASCII bytes
       var asciiParts = [];
-      for(var mi=0; mi<Math.min(msgData.length,400000); mi++) {
+      for(var mi=0; mi<Math.min(msgData.length,800000); mi++) {
         var cc=msgData.charCodeAt(mi);
         if(cc>=32&&cc<127) asciiParts.push(msgData[mi]);
         else if(cc===10||cc===13) asciiParts.push('\n');
@@ -9785,7 +9785,7 @@ async function readFileForAI(fd) {
           +(fDate?'Date: '+fDate+'\n':'')
           +(fSubject?'Subject: '+fSubject+'\n':'');
         var threadParsed = parseEmailThread(msgClean);
-        return [{type:'text', text:msgHdr+'\n'+threadParsed.substring(0,25000)}];
+        return [{type:'text', text:msgHdr+'\n'+threadParsed.substring(0,80000)}];
       }
     } catch(msgErr) { console.warn('[readFileForAI] MSG parse failed:', msgErr.message); }
     return [{type:'text', text:'[OUTLOOK EMAIL: '+fd.name+' — binary format; file saved in case for manual review]'}];
@@ -9877,7 +9877,7 @@ async function readFileForAI(fd) {
         var txt=part.body.replace(/\r\n/g,'\n').replace(/\n{4,}/g,'\n\n').trim();
         if(txt.length>10 && !hadTextBody) {
           var threaded=parseEmailThread(txt);
-          blocks.push({type:'text', text:'[EMAIL BODY]\n\n'+threaded.substring(0,28000)});
+          blocks.push({type:'text', text:'[EMAIL BODY]\n\n'+threaded.substring(0,80000)});
           hadTextBody=true;
         }
         return;
@@ -9888,7 +9888,7 @@ async function readFileForAI(fd) {
         var htmlTxt=htmlEmailToText(part.body);
         if(htmlTxt.length>10) {
           var threaded2=parseEmailThread(htmlTxt);
-          blocks.push({type:'text', text:'[EMAIL BODY]\n\n'+threaded2.substring(0,22000)});
+          blocks.push({type:'text', text:'[EMAIL BODY]\n\n'+threaded2.substring(0,60000)});
           hadTextBody=true;
         }
         return;
@@ -9941,7 +9941,7 @@ async function readFileForAI(fd) {
             attachmentNames.push(part.fname+' [Word]');
             mammoth.extractRawText({arrayBuffer:b64AB(b64doc)}).then(function(res){
               if(res.value&&res.value.trim().length>10)
-                blocks.push({type:'text',text:'[EMAIL ATTACHMENT — '+part.fname+']\n\n'+res.value.trim().substring(0,12000)});
+                blocks.push({type:'text',text:'[EMAIL ATTACHMENT — '+part.fname+']\n\n'+res.value.trim().substring(0,25000)});
             }).catch(function(){});
           }
         } catch(e4){console.warn('[EML] DOCX:',e4.message);}
@@ -9962,7 +9962,7 @@ async function readFileForAI(fd) {
                 if(csv.trim().length>5) xlText+='\n[Sheet: '+sn+']\n'+csv;
               });
               if(xlText.length>10)
-                blocks.push({type:'text',text:'[EMAIL ATTACHMENT — '+part.fname+']\n'+xlText.substring(0,12000)});
+                blocks.push({type:'text',text:'[EMAIL ATTACHMENT — '+part.fname+']\n'+xlText.substring(0,25000)});
             } catch(xlErr){}
           }
         } catch(e5){console.warn('[EML] XLS:',e5.message);}
@@ -9992,7 +9992,7 @@ async function readFileForAI(fd) {
           var txDecoded=b64tx?atob(b64tx).replace(/[^\x09\x0A\x0D\x20-\x7E]/g,' ').trim():part.body.trim();
           if(txDecoded.length>20) {
             attachmentNames.push(part.fname);
-            blocks.push({type:'text',text:'[EMAIL ATTACHMENT — '+part.fname+']\n\n'+txDecoded.substring(0,10000)});
+            blocks.push({type:'text',text:'[EMAIL ATTACHMENT — '+part.fname+']\n\n'+txDecoded.substring(0,20000)});
           }
         } catch(e6){console.warn('[EML] Text attach:',e6.message);}
         return;
@@ -10011,7 +10011,7 @@ async function readFileForAI(fd) {
       walk(parsed,0);
     } catch(emlErr) {
       console.error('[EML] Parser error:', emlErr.message);
-      return [{type:'text', text:'[EMAIL: '+fd.name+']\n\n'+emlRaw.substring(0,20000)}];
+      return [{type:'text', text:'[EMAIL: '+fd.name+']\n\n'+emlRaw.substring(0,80000)}];
     }
 
     // Build rich header summary
@@ -10032,7 +10032,7 @@ async function readFileForAI(fd) {
         .replace(/Content-Transfer-Encoding:\s*base64[\s\S]*?(?=\n--|\n\nContent-)/gi,'[base64 data]')
         .replace(/^[A-Za-z0-9+/]{60,}=*\s*$/gm,'')
         .replace(/--[^\n]{5,}\n/g,'')
-        .replace(/\n{4,}/g,'\n\n').substring(0,20000);
+        .replace(/\n{4,}/g,'\n\n').substring(0,80000);
       var fallbackThreaded=parseEmailThread(cleanEml);
       blocks.push({type:'text',text:'[EMAIL BODY]\n\n'+fallbackThreaded});
     }
