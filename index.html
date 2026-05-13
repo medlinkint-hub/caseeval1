@@ -11505,6 +11505,14 @@ function handleCaseFiles(fileList, caseId) {
         renderFL_C(caseId);
         toast('✓ ' + total + ' file(s) saved for this case');
         updC(caseId, {filesData: FILES.map(function(f,i){ return {name:f.name, size:f.size, ext:f.ext, type:'', _key:'idb_'+caseId+'_'+i}; }), _idbKey: idbKey});
+
+        // Auto-extract from all supported file types (emails, PDFs, images, Word)
+        var EXTRACTABLE_CF = ['img','heic','pdf','doc','xls','rtf','eml','msg','html','txt'];
+        FILES.forEach(function(f) {
+          if(EXTRACTABLE_CF.indexOf(f.ext) !== -1) {
+            extractAndMerge(f, caseId).then(function(){ renderFL_C(caseId); }).catch(function(){});
+          }
+        });
       }
     };
     r.onerror = function() {
