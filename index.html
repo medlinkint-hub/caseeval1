@@ -9912,10 +9912,13 @@ async function readFileForAI(fd) {
           else cur2.push(l);
         });
         if(cur2.length) sections.push(cur2.join('\n'));
-        return {hdrs:hdrs,enc:enc,ct:ct,disp:disp,fname:fname2,body:'',
+        return {hdrs:hdrs,enc:enc,ct:ct,disp:disp,fname:fname2,body:'',rawB64:'',
           children:sections.filter(function(s){return s.trim();}).map(parseMIMEParts)};
       }
-      return {hdrs:hdrs,enc:enc,ct:ct,disp:disp,fname:fname2,body:decodeBody(sb.body,enc),children:[]};
+      // rawB64: preserve original base64 string before binary decoding, so attachment handlers
+      // can use it directly. part.body (from decodeBody) is binary for base64 parts.
+      var rawB64 = enc==='base64' ? sb.body.replace(/[\s\r\n]/g,'') : '';
+      return {hdrs:hdrs,enc:enc,ct:ct,disp:disp,fname:fname2,rawB64:rawB64,body:decodeBody(sb.body,enc),children:[]};
     }
 
     var blocks=[], attachmentNames=[];
@@ -9986,7 +9989,7 @@ async function readFileForAI(fd) {
       // This is the standard MIME type for forwarded emails — previously unhandled
       if(/message\/rfc822/i.test(ctL)) {
         try {
-          var rfcRaw=(part.enc==='base64')?atob(part.body.replace(/[\s\r\n]/g,'')):part.body;
+          var rfcRaw=part.rawB64?atob(part.rawB64):part.body;
           var rfcParsed=parseMIMEParts(rfcRaw);
           var rfcSubj=rfcParsed.hdrs['subject']||'';
           var rfcFrom=rfcParsed.hdrs['from']||'';
@@ -10004,7 +10007,8 @@ async function readFileForAI(fd) {
       // ── PDF attachment ──
       if(/\.pdf$/i.test(part.fname||'')||/application\/pdf/i.test(ctL)) {
         try {
-          var b64p=(part.enc==='base64')?part.body.replace(/[\s\r\n]/g,''):binToB64(part.body);
+          // rawB64 is the original base64 before decodeBody converted it to binary
+          var b64p=part.rawB64||binToB64(part.body);
           b64p=b64p.replace(/[^A-Za-z0-9+/=]/g,'');
           while(b64p.length%4!==0) b64p+='=';
           if(b64p.length>500) {
@@ -10024,7 +10028,7 @@ async function readFileForAI(fd) {
             :/webp/i.test(ctL)?'image/webp'
             :/tiff?/i.test(ctL)||/\.tiff?$/i.test(part.fname||'')?'image/tiff'
             :'image/jpeg';
-          var b64i=(part.enc==='base64')?part.body.replace(/[\s\r\n]/g,''):binToB64(part.body);
+          var b64i=part.rawB64||binToB64(part.body);
           b64i=b64i.replace(/[^A-Za-z0-9+/=]/g,'');
           while(b64i.length%4!==0) b64i+='=';
           if(b64i.length>200) {
@@ -10042,7 +10046,7 @@ async function readFileForAI(fd) {
       // ── Word (.docx) attachment ──
       if(part.fname&&/\.docx?$/i.test(part.fname)) {
         try {
-          var b64doc=(part.enc==='base64')?part.body.replace(/[\s\r\n]/g,''):'';
+          var b64doc=part.rawB64||'';
           if(b64doc&&typeof mammoth!=='undefined') {
             attachmentNames.push(part.fname+' [Word]');
             mammoth.extractRawText({arrayBuffer:b64AB(b64doc)}).then(function(res){
@@ -10057,7 +10061,7 @@ async function readFileForAI(fd) {
       // ── Excel (.xlsx/.xls) attachment ──
       if(part.fname&&/\.xlsx?$/i.test(part.fname)) {
         try {
-          var b64xl=(part.enc==='base64')?part.body.replace(/[\s\r\n]/g,''):'';
+          var b64xl=part.rawB64||'';
           if(b64xl&&typeof XLSX!=='undefined') {
             attachmentNames.push(part.fname+' [Excel]');
             try {
@@ -10078,7 +10082,7 @@ async function readFileForAI(fd) {
       // ── Nested .eml attachment (forwarded email as file attachment) ──
       if(part.fname&&/\.eml$/i.test(part.fname)) {
         try {
-          var nestedRaw=(part.enc==='base64')?atob(part.body.replace(/[\s\r\n]/g,'')):part.body;
+          var nestedRaw=part.rawB64?atob(part.rawB64):part.body;
           var nestedParsed=parseMIMEParts(nestedRaw);
           var nestedSubj=nestedParsed.hdrs['subject']||'';
           var nestedFrom=nestedParsed.hdrs['from']||'';
@@ -10094,8 +10098,7 @@ async function readFileForAI(fd) {
       // ── Text / CSV / RTF attachment ──
       if(part.fname&&/\.(txt|csv|tsv|rtf)$/i.test(part.fname)) {
         try {
-          var b64tx=(part.enc==='base64')?part.body.replace(/[\s\r\n]/g,''):'';
-          var txDecoded=b64tx?atob(b64tx).replace(/[^\x09\x0A\x0D\x20-\x7E]/g,' ').trim():part.body.trim();
+          var txDecoded=part.body.trim();
           if(txDecoded.length>20) {
             attachmentNames.push(part.fname);
             blocks.push({type:'text',text:'[EMAIL ATTACHMENT — '+part.fname+']\n\n'+txDecoded.substring(0,20000)});
