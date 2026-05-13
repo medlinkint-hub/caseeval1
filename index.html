@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
-<meta name="version" content="1778750000">
+<meta name="version" content="1778695000">
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
@@ -929,16 +929,20 @@ async function apiCallStream(messages, systemPrompt, maxTokens, onChunk) {
   console.log('[Stream] Using non-streaming fetch');
   const body2 = { model: mod, max_tokens: maxTokens||1500, messages: messages, temperature: 0 };
   if(systemPrompt) body2.system = systemPrompt;
+  var hasPDF2 = messages.some(function(m){
+    var c = Array.isArray(m.content) ? m.content : [];
+    return c.some(function(b){ return b.type==='document' && b.source && b.source.media_type==='application/pdf'; });
+  });
   const res2 = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     mode: 'cors',
     credentials: 'omit',
-    headers: {
+    headers: Object.assign({
       'Content-Type': 'application/json',
       'x-api-key': key,
       'anthropic-version': '2023-06-01',
       'anthropic-dangerous-direct-browser-access': 'true'
-    },
+    }, hasPDF2 ? {'anthropic-beta': 'pdfs-2024-09-25'} : {}),
     body: JSON.stringify(body2)
   });
   const data2 = await res2.json();
@@ -1987,9 +1991,10 @@ async function runEval(caseId) {
 
   const msgContent = [];
   var skippedFiles = [];
-  var MAX_FILE_B64 = 4 * 1024 * 1024; // 4MB base64 limit per file
+  var MAX_FILE_B64 = 5 * 1024 * 1024; // 5MB per regular file
+  var MAX_EML_B64  = 20 * 1024 * 1024; // 20MB for .eml/.msg (may contain large PDF attachments)
   var totalSize = 0;
-  var MAX_TOTAL = 15 * 1024 * 1024; // 15MB total limit
+  var MAX_TOTAL = 20 * 1024 * 1024; // 20MB total limit
 
   // Build content blocks for all file types — PARALLEL reading for speed
   setEvSt('run', 'Preparing documents...');
@@ -1999,7 +2004,10 @@ async function runEval(caseId) {
     var _ff = FILES[_fi];
     if(!_ff.data) continue;
     var _ds = _ff.data.length;
-    if(_ds > MAX_FILE_B64) {
+    var _isEmailFile = (_ff.ext === 'eml' || _ff.ext === 'msg');
+    var _sizeLimit = _isEmailFile ? MAX_EML_B64 : MAX_FILE_B64;
+    if(_ds > _sizeLimit) {
+      if(_isEmailFile) { _filesToRead.push(_ff); continue; } // never skip emails
       skippedFiles.push(_ff.name + ' (too large: ' + Math.round(_ds/1024/1024*10)/10 + 'MB)');
       console.warn('[runEval] Skipping large file:', _ff.name);
       continue;
@@ -3089,17 +3097,19 @@ function renderEvalTxt(txt) {
 // ══════════════════════════════════════════════
 function renderFL_N() {
   var el = G('fl_n'); if(!el) return;
-  var extColors = {pdf:'#dc2626',doc:'#2563eb',img:'#059669',heic:'#059669',xls:'#d97706',rtf:'#6b7280',eml:'#7c3aed',html:'#0891b2',txt:'#6b7280',other:'#6b7280'};
-  var extLabels = {pdf:'PDF',doc:'DOC',img:'IMG',heic:'IMG',xls:'XLS',rtf:'RTF',eml:'EML',html:'HTM',txt:'TXT',other:'FILE'};
+  var extColors = {pdf:'#dc2626',doc:'#2563eb',img:'#059669',heic:'#059669',xls:'#d97706',rtf:'#6b7280',eml:'#7c3aed',msg:'#7c3aed',html:'#0891b2',txt:'#6b7280',other:'#6b7280'};
+  var extLabels = {pdf:'PDF',doc:'DOC',img:'IMG',heic:'IMG',xls:'XLS',rtf:'RTF',eml:'EML',msg:'MSG',html:'HTM',txt:'TXT',other:'FILE'};
   var h = '';
   FILES.forEach(function(f,i){
-    h += '<div style="display:flex;align-items:center;gap:8px;padding:7px 10px;border:1px solid var(--bor);border-radius:6px;margin-bottom:5px;background:#fff">';
+    var isEmail = f.ext==='eml'||f.ext==='msg';
+    h += '<div style="display:flex;align-items:center;gap:8px;padding:7px 10px;border:1px solid '+(isEmail?'#7c3aed44':'var(--bor)')+';border-radius:6px;margin-bottom:5px;background:'+(isEmail?'#faf5ff':'#fff')+'">';
     var col = extColors[f.ext]||'#6b7280';
     var lbl = extLabels[f.ext]||f.ext.toUpperCase().slice(0,3)||'?';
     h += '<div style="flex-shrink:0;width:36px;height:36px;border-radius:6px;background:'+col+';display:flex;align-items:center;justify-content:center;font-size:9px;font-weight:800;color:#fff;letter-spacing:.03em">'+lbl+'</div>';
     h += '<div style="flex:1;min-width:0">';
     h += '<div style="font-size:12px;font-weight:600;color:var(--navy);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+esc(f.name)+'</div>';
     h += '<div style="font-size:10px;color:var(--tx3)">'+f.ext.toUpperCase()+' · '+fmt(f.size)+'</div>';
+    if(isEmail) h += '<div style="font-size:10px;color:#6d28d9;font-weight:600">✅ Email + all attachments fully read during evaluation</div>';
     h += '</div>';
     h += '<button onclick="delFileNew('+i+')" style="border:none;background:transparent;color:var(--tx3);cursor:pointer;padding:2px 6px;font-size:16px;line-height:1">×</button>';
     h += '</div>';
@@ -6732,7 +6742,7 @@ async function changePassword() {
 // ══════════════════════════════════════════════════════════════
 
 // ── App version — update on every significant deployment ──
-var APP_BUILD = 1778750000; // epoch-style build number (matches <meta name="version">)
+var APP_BUILD = 1778695000; // epoch-style build number (matches <meta name="version">)
 
 var FB_APP = null;
 var FB_DB = null;
@@ -9777,15 +9787,59 @@ async function readFileForAI(fd) {
       });
       var msgClean = msgLines.join('\n').replace(/\n{4,}/g,'\n\n').trim();
 
-      if(msgClean.length > 50) {
+      // Scan binary for attachment filenames (look for .pdf .jpg .docx etc. in both ASCII and UTF-16)
+      var attachMentions = [];
+      var fnRe = /[\w\- ()]+\.(pdf|docx?|xlsx?|jpg|jpeg|png|tiff?|gif|rtf|txt|eml)/gi;
+      var fnMatches = combined.match(fnRe) || [];
+      fnMatches.forEach(function(fn){
+        fn = fn.trim();
+        if(fn.length > 4 && fn.length < 120 && attachMentions.indexOf(fn)===-1)
+          attachMentions.push(fn);
+      });
+
+      // Also scan binary for embedded PDF signatures — find %PDF- occurrences
+      var msgBlocks = [];
+      try {
+        var rawB642 = data.indexOf(',')!==-1 ? data.split(',')[1] : data;
+        var rawBin2 = atob(rawB642.replace(/[\s\r\n]/g,''));
+        var pdfIdx = 0;
+        var pdfCount = 0;
+        while((pdfIdx = rawBin2.indexOf('%PDF-', pdfIdx)) !== -1 && pdfCount < 5) {
+          // Find %%EOF
+          var eofIdx = rawBin2.indexOf('%%EOF', pdfIdx);
+          if(eofIdx !== -1 && eofIdx - pdfIdx > 100 && eofIdx - pdfIdx < 8000000) {
+            var pdfSlice = rawBin2.substring(pdfIdx, eofIdx+5);
+            try {
+              var pdfB64 = '';
+              var CHUNK2 = 8192;
+              for(var ci=0; ci<pdfSlice.length; ci+=CHUNK2)
+                pdfB64 += btoa(pdfSlice.substring(ci, ci+CHUNK2));
+              pdfB64 = pdfB64.replace(/[^A-Za-z0-9+/=]/g,'');
+              while(pdfB64.length%4!==0) pdfB64+='=';
+              if(pdfB64.length > 500) {
+                var pdfName = (attachMentions[pdfCount]||('attachment_'+(pdfCount+1)+'.pdf'));
+                if(!/\.pdf$/i.test(pdfName)) pdfName += '.pdf';
+                msgBlocks.push({type:'document', source:{type:'base64',media_type:'application/pdf',data:pdfB64},
+                  title:'[MSG ATTACHMENT] '+pdfName});
+                pdfCount++;
+              }
+            } catch(pdfEx){}
+          }
+          pdfIdx += 5;
+        }
+      } catch(binEx){}
+
+      if(msgClean.length > 50 || msgBlocks.length > 0) {
         var msgHdr = '[OUTLOOK EMAIL: '+fd.name+']\n'
           +(fFrom?'From: '+fFrom+identifyEmailRole(fFrom)+'\n':'')
           +(fTo?'To: '+fTo+identifyEmailRole(fTo)+'\n':'')
           +(fCc?'Cc: '+fCc+'\n':'')
           +(fDate?'Date: '+fDate+'\n':'')
-          +(fSubject?'Subject: '+fSubject+'\n':'');
+          +(fSubject?'Subject: '+fSubject+'\n':'')
+          +(attachMentions.length?'Attachments mentioned: '+attachMentions.join(', ')+'\n':'');
         var threadParsed = parseEmailThread(msgClean);
-        return [{type:'text', text:msgHdr+'\n'+threadParsed.substring(0,80000)}];
+        var resultBlocks = [{type:'text', text:msgHdr+(msgClean.length>50?'\n'+threadParsed.substring(0,80000):'')}];
+        return resultBlocks.concat(msgBlocks);
       }
     } catch(msgErr) { console.warn('[readFileForAI] MSG parse failed:', msgErr.message); }
     return [{type:'text', text:'[OUTLOOK EMAIL: '+fd.name+' — binary format; file saved in case for manual review]'}];
@@ -9864,38 +9918,91 @@ async function readFileForAI(fd) {
       return {hdrs:hdrs,enc:enc,ct:ct,disp:disp,fname:fname2,body:decodeBody(sb.body,enc),children:[]};
     }
 
-    var blocks=[], attachmentNames=[], hadTextBody=false;
+    var blocks=[], attachmentNames=[];
 
-    function walk(part, depth) {
+    // walk: traverse MIME tree and build content blocks
+    // altUsed: {v:false} — set true when a text body is captured within a multipart/alternative group
+    //          pass null when entering a new email context (nested/forwarded) to reset text-body tracking
+    function walk(part, depth, altUsed) {
       depth = depth||0;
-      if(part.children.length>0){ part.children.forEach(function(p){walk(p,depth+1);}); return; }
+
+      if(part.children.length>0) {
+        var isAlt=/multipart\/alternative/i.test(part.ct);
+        if(isAlt) {
+          // In alternative groups, prefer text/plain over text/html to avoid duplicate content.
+          // Walk non-text children (attachments, images) regardless.
+          var localAlt={v:false};
+          // Pass 1: text/plain inline parts
+          part.children.forEach(function(p){
+            var cl=(p.ct||'').toLowerCase();
+            if(/text\/plain/i.test(cl)&&!/attachment/i.test(p.disp||'')&&!p.fname)
+              walk(p,depth+1,localAlt);
+          });
+          // Pass 2: text/html only if no plain text was captured
+          part.children.forEach(function(p){
+            var cl=(p.ct||'').toLowerCase();
+            if(/text\/html/i.test(cl)&&!/attachment/i.test(p.disp||'')&&!p.fname)
+              walk(p,depth+1,localAlt);
+          });
+          // Pass 3: everything else (PDFs, images, nested emails, other attachments)
+          part.children.forEach(function(p){
+            var cl=(p.ct||'').toLowerCase();
+            if(!/^text\//i.test(cl)) walk(p,depth+1,null);
+          });
+        } else {
+          part.children.forEach(function(p){walk(p,depth+1,null);});
+        }
+        return;
+      }
+
       var ctL=part.ct.toLowerCase();
-      var isAttach=/attachment/i.test(part.disp) || (part.fname && !/^text\//.test(ctL) && !/^image\//.test(ctL) && !/application\/pdf/.test(ctL));
+      var isAttach=/attachment/i.test(part.disp||'') ||
+        (part.fname && !/^text\//.test(ctL) && !/^image\//.test(ctL) && !/application\/pdf/.test(ctL));
+      var textBlocks=blocks.filter(function(b){return b.type==='text';}).length;
 
       // ── Plain text body ──
       if(/text\/plain/i.test(ctL) && !isAttach) {
+        if(altUsed && altUsed.v) return; // already captured a body in this alt group
         var txt=part.body.replace(/\r\n/g,'\n').replace(/\n{4,}/g,'\n\n').trim();
-        if(txt.length>10 && !hadTextBody) {
-          var threaded=parseEmailThread(txt);
-          blocks.push({type:'text', text:'[EMAIL BODY]\n\n'+threaded.substring(0,80000)});
-          hadTextBody=true;
+        if(txt.length>10 && textBlocks<10) {
+          blocks.push({type:'text', text:'[EMAIL BODY]\n\n'+parseEmailThread(txt).substring(0,80000)});
+          if(altUsed) altUsed.v=true;
         }
         return;
       }
 
       // ── HTML body — convert preserving table/list structure ──
-      if(/text\/html/i.test(ctL) && !isAttach && !hadTextBody) {
+      if(/text\/html/i.test(ctL) && !isAttach) {
+        if(altUsed && altUsed.v) return; // already captured a body in this alt group
         var htmlTxt=htmlEmailToText(part.body);
-        if(htmlTxt.length>10) {
-          var threaded2=parseEmailThread(htmlTxt);
-          blocks.push({type:'text', text:'[EMAIL BODY]\n\n'+threaded2.substring(0,60000)});
-          hadTextBody=true;
+        if(htmlTxt.length>10 && textBlocks<10) {
+          blocks.push({type:'text', text:'[EMAIL BODY]\n\n'+parseEmailThread(htmlTxt).substring(0,60000)});
+          if(altUsed) altUsed.v=true;
         }
         return;
       }
 
+      // ── Forwarded/attached email as MIME message (message/rfc822) ──
+      // This is the standard MIME type for forwarded emails — previously unhandled
+      if(/message\/rfc822/i.test(ctL)) {
+        try {
+          var rfcRaw=(part.enc==='base64')?atob(part.body.replace(/[\s\r\n]/g,'')):part.body;
+          var rfcParsed=parseMIMEParts(rfcRaw);
+          var rfcSubj=rfcParsed.hdrs['subject']||'';
+          var rfcFrom=rfcParsed.hdrs['from']||'';
+          var rfcDate=rfcParsed.hdrs['date']||'';
+          attachmentNames.push('Forwarded: '+(rfcSubj||rfcFrom||'email'));
+          blocks.push({type:'text',text:'[FORWARDED EMAIL]\n'
+            +(rfcFrom?'From: '+rfcFrom+identifyEmailRole(rfcFrom)+'\n':'')
+            +(rfcDate?'Date: '+rfcDate+'\n':'')
+            +(rfcSubj?'Subject: '+rfcSubj+'\n':'')});
+          walk(rfcParsed,depth+1,null); // fresh context — new email's body should always be captured
+        } catch(rfcErr){console.warn('[EML] RFC822:',rfcErr.message);}
+        return;
+      }
+
       // ── PDF attachment ──
-      if(/\.pdf$/i.test(part.fname)||/application\/pdf/i.test(ctL)) {
+      if(/\.pdf$/i.test(part.fname||'')||/application\/pdf/i.test(ctL)) {
         try {
           var b64p=(part.enc==='base64')?part.body.replace(/[\s\r\n]/g,''):binToB64(part.body);
           b64p=b64p.replace(/[^A-Za-z0-9+/=]/g,'');
@@ -9922,7 +10029,6 @@ async function readFileForAI(fd) {
           while(b64i.length%4!==0) b64i+='=';
           if(b64i.length>200) {
             attachmentNames.push(part.fname||'image');
-            // TIFF not natively supported by Claude vision — send as text notice
             if(/tiff?/i.test(mime2)) {
               blocks.push({type:'text',text:'[IMAGE ATTACHMENT: '+(part.fname||'image.tiff')+' — TIFF format. Contains visual medical data; see original file.]'});
             } else {
@@ -9969,7 +10075,7 @@ async function readFileForAI(fd) {
         return;
       }
 
-      // ── Nested .eml attachment (forwarded email as attachment) ──
+      // ── Nested .eml attachment (forwarded email as file attachment) ──
       if(part.fname&&/\.eml$/i.test(part.fname)) {
         try {
           var nestedRaw=(part.enc==='base64')?atob(part.body.replace(/[\s\r\n]/g,'')):part.body;
@@ -9980,7 +10086,7 @@ async function readFileForAI(fd) {
           blocks.push({type:'text',text:'[ATTACHED EMAIL: '+(part.fname||'forwarded.eml')+']\n'
             +(nestedFrom?'From: '+nestedFrom+identifyEmailRole(nestedFrom)+'\n':'')
             +(nestedSubj?'Subject: '+nestedSubj+'\n':'')});
-          walk(nestedParsed, depth+1);
+          walk(nestedParsed,depth+1,null); // fresh context
         } catch(eNestedErr){console.warn('[EML] Nested eml:',eNestedErr.message);}
         return;
       }
@@ -10008,7 +10114,7 @@ async function readFileForAI(fd) {
       var date=parsed.hdrs['date']||'';
       var replyTo=parsed.hdrs['reply-to']||'';
       var importance=parsed.hdrs['importance']||parsed.hdrs['x-priority']||'';
-      walk(parsed,0);
+      walk(parsed,0,null);
     } catch(emlErr) {
       console.error('[EML] Parser error:', emlErr.message);
       return [{type:'text', text:'[EMAIL: '+fd.name+']\n\n'+emlRaw.substring(0,80000)}];
@@ -10420,7 +10526,7 @@ async function extractFromFile(fd) {
   var isEML  = fd.ext==='eml';
   var isLarge = fd.data && fd.data.length > 800000; // >600KB raw
   // Large PDFs or multi-page scans need more output tokens
-  var extractTok = isPDF ? (isLarge ? 4000 : 3500) : (isImg ? 3000 : 2000);
+  var extractTok = isPDF ? (isLarge ? 4000 : 3500) : (isImg ? 3000 : (isEML ? 3000 : 2000));
   var bestResult = null; // track best partial result across passes
 
   // Helper: score how useful an extraction result is
@@ -10853,7 +10959,7 @@ async function extractAndMerge(fd, caseId) {
 
 // ── addFiles: store + auto-extract ALL supported types ────────
 function addFiles(list, caseId) {
-  var EXTRACTABLE = ['img','heic','pdf','doc','xls','rtf','eml','html','txt'];
+  var EXTRACTABLE = ['img','heic','pdf','doc','xls','rtf','eml','msg','html','txt'];
   // If FILES belongs to a different case, reset before adding (prevents cross-case bleed)
   if(_filesForCaseId !== caseId) {
     console.warn('[addFiles] FILES belonged to', _filesForCaseId, '— resetting for', caseId);
@@ -10901,7 +11007,7 @@ function addFiles(list, caseId) {
 
 // ── addFilesNew: for New Case form (same logic, no caseId yet) ─
 function addFilesNew(list) {
-  var EXTRACTABLE = ['img','heic','pdf','doc','xls','rtf','eml','html','txt'];
+  var EXTRACTABLE = ['img','heic','pdf','doc','xls','rtf','eml','msg','html','txt'];
   list.forEach(function(f){
     var r = new FileReader();
     r.onload = function(e){
@@ -11243,10 +11349,10 @@ async function extractFromNewFile(fd) {
   } catch(ex) {
     console.error('[NewCase] Extract error:', fd.name, ex.message, ex.stack);
     // For PDFs/images: file is saved and WILL be read during evaluation — show green
-    var isPDForImg = fd.ext === 'pdf' || fd.ext === 'img' || fd.ext === 'heic';
-    if(isPDForImg) {
-      if(stEl){ stEl.innerHTML='<div style="padding:8px 12px;background:#d1fae5;border-radius:6px;border-left:3px solid #059669;font-size:12px;color:#065f46">✅ '+esc(fd.name)+' — saved and ready for evaluation (auto-fill skipped)</div>'; }
-      // Don't throw — PDF is fine for evaluation
+    var isPDForImgOrEmail = fd.ext === 'pdf' || fd.ext === 'img' || fd.ext === 'heic' || fd.ext === 'eml' || fd.ext === 'msg';
+    if(isPDForImgOrEmail) {
+      var _ftLabel = (fd.ext === 'eml' || fd.ext === 'msg') ? 'Email' : 'Document';
+      if(stEl){ stEl.innerHTML='<div style="padding:8px 12px;background:#d1fae5;border-radius:6px;border-left:3px solid #059669;font-size:12px;color:#065f46">✅ '+esc(fd.name)+' — '+_ftLabel+' saved and ready for evaluation (auto-fill skipped)</div>'; }
       return;
     }
     if(stEl){ stEl.innerHTML='<div style="padding:8px 12px;background:#fee2e2;border-radius:6px;border-left:3px solid #dc2626;font-size:12px;color:#991b1b">⚠ '+esc(fd.name)+': '+esc(ex.message)+'</div>'; }
@@ -11631,17 +11737,20 @@ function renderFL_C(caseId) {
   // SECTION 3 — Uploaded files list (with names)
   // ══════════════════════════════════════════════════
   if(regularFiles.length > 0) {
-    var extColors = {pdf:'#dc2626',doc:'#2563eb',img:'#059669',heic:'#059669',xls:'#d97706',rtf:'#6b7280',eml:'#7c3aed',html:'#0891b2',txt:'#6b7280',other:'#6b7280'};
-    var extLabels = {pdf:'PDF',doc:'DOC',img:'IMG',heic:'IMG',xls:'XLS',rtf:'RTF',eml:'EML',html:'HTM',txt:'TXT',other:'FILE'};
+    var extColors = {pdf:'#dc2626',doc:'#2563eb',img:'#059669',heic:'#059669',xls:'#d97706',rtf:'#6b7280',eml:'#7c3aed',msg:'#7c3aed',html:'#0891b2',txt:'#6b7280',other:'#6b7280'};
+    var extLabels = {pdf:'PDF',doc:'DOC',img:'IMG',heic:'IMG',xls:'XLS',rtf:'RTF',eml:'EML',msg:'MSG',html:'HTM',txt:'TXT',other:'FILE'};
     h += '<div style="margin-bottom:8px">';
     h += '<div style="font-size:10px;font-weight:700;color:var(--tx3);text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px">📎 Case Documents ('+regularFiles.length+') — used in evaluation</div>';
     regularFiles.forEach(function(f, i) {
+      var isEmail = f.ext==='eml'||f.ext==='msg';
       var col = extColors[f.ext]||'#6b7280';
       var lbl = extLabels[f.ext]||f.ext.toUpperCase().slice(0,3)||'?';
-      h += '<div style="display:flex;align-items:center;gap:8px;padding:5px 8px;background:#fff;border:1px solid var(--bor);border-radius:6px;margin-bottom:4px">';
+      h += '<div style="display:flex;align-items:center;gap:8px;padding:5px 8px;background:'+(isEmail?'#faf5ff':'#fff')+';border:1px solid '+(isEmail?'#7c3aed44':'var(--bor)')+';border-radius:6px;margin-bottom:4px">';
       h += '<div style="flex-shrink:0;width:28px;height:28px;border-radius:4px;background:'+col+';display:flex;align-items:center;justify-content:center;font-size:8px;font-weight:800;color:#fff;letter-spacing:.02em">'+lbl+'</div>';
       h += '<div style="flex:1;min-width:0"><div style="font-size:11px;font-weight:600;color:var(--navy);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+esc(f.name)+'</div>';
-      h += '<div style="font-size:10px;color:var(--tx3)">'+Math.round((f.size||0)/1024)+'KB</div></div>';
+      h += '<div style="font-size:10px;color:var(--tx3)">'+Math.round((f.size||0)/1024)+'KB</div>';
+      if(isEmail) h += '<div style="font-size:10px;color:#6d28d9;font-weight:600">✅ Email + all attachments fully read during evaluation</div>';
+      h += '</div>';
       h += '</div>';
     });
     h += '<div style="display:flex;gap:8px;margin-top:4px">';
