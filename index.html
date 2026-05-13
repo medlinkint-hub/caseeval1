@@ -4556,16 +4556,19 @@ async function processExtractQueue() {
     } else {
       var isEmailExt = fd.ext === 'eml' || fd.ext === 'msg';
       var isNoData = e._noData === true;
+      var isEmailNoData = isNoData && isEmailExt;
       if(statusSpan) {
-        statusSpan.textContent = isNoData ? '📧' : '⚠';
+        statusSpan.textContent = isEmailNoData ? '📧' : '⚠';
         statusSpan.style.color = '#f59e0b';
-        statusSpan.title = isNoData
+        statusSpan.title = isEmailNoData
           ? 'Email saved — no claim data in body. Upload the PDF attachment separately.'
-          : 'Saved ✓ — auto-read failed: '+errMsg;
+          : isNoData
+            ? 'Saved ✓ — no data extracted. File will be fully read during evaluation.'
+            : 'Saved ✓ — auto-read failed: '+errMsg;
       }
       if(item.rowDiv) item.rowDiv.style.borderLeftColor = '#f59e0b';
       // Add hint for emails with no data
-      if(isNoData && item.rowDiv && !item.rowDiv.querySelector('.email-hint')) {
+      if(isEmailNoData && item.rowDiv && !item.rowDiv.querySelector('.email-hint')) {
         var hint = document.createElement('span');
         hint.className = 'email-hint';
         hint.style.cssText = 'font-size:9px;color:#92400e;flex-shrink:0;white-space:nowrap';
@@ -10588,6 +10591,7 @@ async function extractFromFile(fd) {
   // Large PDFs or multi-page scans need more output tokens
   var extractTok = isPDF ? (isLarge ? 4000 : 3500) : (isImg ? 3000 : (isEML ? 3000 : 2000));
   var bestResult = null; // track best partial result across passes
+  var firstPassError = null; // track first API error for user-facing feedback
 
   // Helper: score how useful an extraction result is
   function scoreResult(j) {
@@ -10617,6 +10621,7 @@ async function extractFromFile(fd) {
     }
     console.warn('[DocEngine] Pass 1 low score ('+score1+'), trying Pass 2:', fd.name);
   } catch(e1) {
+    if(!firstPassError) firstPassError = e1;
     console.warn('[DocEngine] Pass 1 failed:', fd.name, e1.message);
   }
 
@@ -10782,11 +10787,12 @@ async function extractFromFile(fd) {
   }
 
   // All passes truly failed — return graceful fallback (never crash)
-  console.error('[DocEngine] All 5 passes failed for:', fd.name);
+  console.error('[DocEngine] All 5 passes failed for:', fd.name, firstPassError ? firstPassError.message : '');
   return {
-    document_type: fd.name || 'Document',
+    document_type: 'unreadable',
     confidence: 'low',
-    notes: 'Could not auto-extract — file is saved and will be fully read during evaluation'
+    notes: null,
+    _apiError: firstPassError ? firstPassError.message : null
   };
 }
 
@@ -11128,9 +11134,17 @@ async function extractFromNewFile(fd) {
 
   try {
     var info = await extractFromFile(fd);
-    if(!info) {
-      if(stEl) stEl.style.display='none';
-      return;
+
+    // If all API passes failed, info._apiError tells us why
+    if(info && info._apiError) {
+      var errHint = /api key|no key|401|authentication/i.test(info._apiError)
+        ? 'Invalid or missing API key — go to Settings to update your key.'
+        : /credit|quota|limit|429/i.test(info._apiError)
+          ? 'API credits exhausted — add more credits to your Anthropic account.'
+          : 'API error: '+info._apiError;
+      if(stEl){ stEl.innerHTML='<div style="padding:8px 12px;background:#fee2e2;border-radius:6px;border-left:3px solid #dc2626;font-size:12px;color:#991b1b">⚠ '+esc(fd.name)+' — '+esc(errHint)+'</div>'; }
+      toast('⚠ Auto-read failed: '+errHint, 9000);
+      throw new Error(errHint);
     }
 
     // ── Sanitize: force all scalar fields to strings, never objects ──
@@ -11352,12 +11366,15 @@ async function extractFromNewFile(fd) {
     if(s.airline_refund > 0) fill('f_airline_refund', s.airline_refund.toFixed(2));
     fillSel('f_trip_type', s.trip_type);
 
-    // Build description block
+    // Build description block — skip if extraction produced nothing useful
     var parts = [];
+    var nExWarn = []; // declared here so they're accessible after the else block
+    var nMissing = [];
+    var isUselessResult = (s.document_type === 'unreadable' || s.document_type === fd.name || !s.document_type);
+    if(!isUselessResult) {
     var hdr = '📄 ' + s.document_type.toUpperCase();
     if(s.handwritten==='yes') hdr+=' (handwritten)';
     if(s.document_language && s.document_language.toLowerCase()!=='english') hdr+=' ['+s.document_language+']';
-    if(s.confidence==='low') hdr+=' ⚠ low quality';
     parts.push(hdr);
     if(ok(s.dob)) parts.push('DOB: '+s.dob);
     if(ok(s.nationality)) parts.push('Nationality: '+s.nationality);
@@ -11403,8 +11420,8 @@ async function extractFromNewFile(fd) {
     if(ok(s.notes)) parts.push('Notes: '+s.notes);
 
     // ── Append extraction warnings to description ─────────────
-    var nExWarn = Array.isArray(info.extraction_warnings) ? info.extraction_warnings.filter(function(w){ return w && String(w).trim(); }) : [];
-    var nMissing = Array.isArray(info.critical_fields_missing) ? info.critical_fields_missing.filter(function(f){ return f && String(f).trim(); }) : [];
+    nExWarn = Array.isArray(info.extraction_warnings) ? info.extraction_warnings.filter(function(w){ return w && String(w).trim(); }) : [];
+    nMissing = Array.isArray(info.critical_fields_missing) ? info.critical_fields_missing.filter(function(f){ return f && String(f).trim(); }) : [];
     if(nExWarn.length || nMissing.length) {
       var wParts = [];
       if(nMissing.length) wParts.push('⚠ FIELDS NOT FOUND IN DOCUMENT: '+nMissing.join(', '));
@@ -11414,6 +11431,8 @@ async function extractFromNewFile(fd) {
         deEl2.value = (deEl2.value||'').trim() + '\n\n⚠ ACCURACY NOTICES (verify before saving):\n'+wParts.join('\n');
       }
     }
+
+    } // end if(!isUselessResult)
 
     if(parts.length >= 1){
       var deEl = G('n_de');
@@ -11430,7 +11449,13 @@ async function extractFromNewFile(fd) {
     var hasAccuracyWarnings = nExWarn.length > 0 || nMissing.length > 0 || s.confidence === 'low';
 
     var msg, statusColor, borderColor, textColor;
-    if(isEmailFile && fieldsFilled === 0) {
+    if(isUselessResult && fieldsFilled === 0) {
+      // Extraction produced nothing useful — don't clutter with filename-as-type
+      var docType = isEmailFile ? 'Email' : (fd.ext === 'pdf' ? 'PDF' : fd.ext.toUpperCase());
+      msg = docType+' saved — no data auto-extracted.'+
+        (isEmailFile ? ' If it has a PDF/Word attachment, upload it separately.' : ' File will be fully read during evaluation.');
+      statusColor = '#fffbeb'; borderColor = '#f59e0b'; textColor = '#92400e';
+    } else if(isEmailFile && fieldsFilled === 0) {
       // Email was saved but no claim data could be auto-extracted from the body
       msg = '📧 '+fd.name+' saved — email body had no claim data to auto-fill.'+
         ' If it has a PDF/Word attachment, upload it separately for extraction.';
@@ -11450,7 +11475,8 @@ async function extractFromNewFile(fd) {
     toast(msg, (hasAccuracyWarnings || (isEmailFile && fieldsFilled===0)) ? 8000 : 4000);
 
     // If email with 0 fields: signal to processExtractQueue to show warning icon, not green
-    if(isEmailFile && fieldsFilled === 0) {
+    // Signal to processExtractQueue that extraction yielded nothing useful
+    if(fieldsFilled === 0 && (isUselessResult || isEmailFile)) {
       var noDataErr = new Error(msg);
       noDataErr._noData = true;
       throw noDataErr;
@@ -11458,17 +11484,7 @@ async function extractFromNewFile(fd) {
 
   } catch(ex) {
     console.error('[NewCase] Extract error:', fd.name, ex.message);
-    // "_noData" errors are deliberate — already updated stEl — just re-throw so processExtractQueue shows ⚠
-    if(ex._noData) throw ex;
-    // Unexpected JS errors for PDFs/images/emails: file is saved — show green, don't crash
-    var isPDFOrImgOrEmail = fd.ext === 'pdf' || fd.ext === 'img' || fd.ext === 'heic' || fd.ext === 'eml' || fd.ext === 'msg';
-    if(isPDFOrImgOrEmail) {
-      var _ftLabel = (fd.ext === 'eml' || fd.ext === 'msg') ? 'Email' : 'Document';
-      if(stEl){ stEl.innerHTML='<div style="padding:8px 12px;background:#fffbeb;border-radius:6px;border-left:3px solid #f59e0b;font-size:12px;color:#92400e">⚠ '+esc(fd.name)+' — '+_ftLabel+' saved. Auto-read failed: '+esc(ex.message)+'</div>'; }
-      return; // return so processExtractQueue still shows green (file IS saved)
-    }
-    if(stEl){ stEl.innerHTML='<div style="padding:8px 12px;background:#fee2e2;border-radius:6px;border-left:3px solid #dc2626;font-size:12px;color:#991b1b">⚠ '+esc(fd.name)+': '+esc(ex.message)+'</div>'; }
-    throw ex;
+    throw ex; // _noData errors show 📧 icon; API/JS errors show ⚠ — processExtractQueue distinguishes
   }
 }
 
