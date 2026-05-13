@@ -4181,16 +4181,9 @@ function renderCD(c) {
     toast('Priority updated');
   };
 
-  // ── File upload wiring ──
+  // ── File upload wiring (renderFL_C overrides this 50ms later with the same handler) ──
   var fiC = G('fi_c');
-  if(fiC) fiC.onchange = function(){ addFiles(Array.from(this.files), cid); this.value=''; };
-  var dzC = G('dz_c');
-  if(dzC) {
-    dzC.ondragover = function(e){ e.preventDefault(); dzC.classList.add('ov'); };
-    dzC.ondragleave = function(){ dzC.classList.remove('ov'); };
-    dzC.ondrop = function(e){ e.preventDefault(); dzC.classList.remove('ov'); addFiles(Array.from(e.dataTransfer.files), cid); };
-    // Label has for="fi_c" so clicking it already opens picker — no need for onclick
-  }
+  if(fiC) fiC.onchange = function(){ handleCaseFiles(this.files, cid); this.value=''; };
   renderFL_C(cid);
   // Wire policy selector
   var resCountryEl = document.getElementById('f_res_country');
@@ -4658,7 +4651,7 @@ function handleNewFiles(fileList) {
       }
     }
 
-    var isMeaningful = ['pdf','doc','img','heic','eml'].indexOf(ext) !== -1;
+    var isMeaningful = ['pdf','doc','img','heic','eml','msg','xls','rtf','html','txt'].indexOf(ext) !== -1;
 
     // Create file row — start with orange (loading)
     var rowDiv = document.createElement('div');
@@ -4754,7 +4747,7 @@ function renderNew() {
   html += '<div style="font-size:13px;color:var(--tx3)">Drop files or tap to upload</div>';
   html += '<div style="font-size:11px;color:var(--tx3);margin-top:3px">PDF · Word · Excel · Images (JPG/PNG/HEIC) · Text · Email — all languages</div></div>';
   html += '</label>';
-  html += '<input type="file" id="fi_n" multiple accept=".pdf,.doc,.docx,.xls,.xlsx,.jpg,.jpeg,.png,.heic,.heif,.tiff,.tif,.txt,.csv,.eml,.html,.rtf" style="display:none" onchange="handleNewFiles(this.files)">';
+  html += '<input type="file" id="fi_n" multiple accept=".pdf,.doc,.docx,.xls,.xlsx,.ods,.jpg,.jpeg,.png,.heic,.heif,.tiff,.tif,.txt,.csv,.tsv,.eml,.msg,.html,.htm,.rtf,.odt" style="display:none" onchange="handleNewFiles(this.files)">';
   html += '<div id="nfl" style="margin-top:6px"></div>';
   html += '<div id="extractStatus" style="display:none;margin-top:6px"></div>';
   html += '</div>';
@@ -9745,18 +9738,19 @@ async function readFileForAI(fd) {
   if(ext==='msg') {
     try {
       var msgData = readTextFromDataUrl(data) || '';
+      var rawBin = '';
+      try {
+        var rawB64 = data.indexOf(',')!==-1 ? data.split(',')[1] : data;
+        rawBin = atob(rawB64.replace(/[\s\r\n]/g,''));
+      } catch(e) {}
 
       // Try UTF-16LE extraction (MAPI stores strings as UTF-16LE)
       var utf16Parts = [];
-      try {
-        var rawB64 = data.indexOf(',')!==-1 ? data.split(',')[1] : data;
-        var rawBin = atob(rawB64);
-        for(var u=0; u<Math.min(rawBin.length-1,1200000); u+=2) {
-          var lo=rawBin.charCodeAt(u)&0xff, hi=rawBin.charCodeAt(u+1)&0xff;
-          if(hi===0 && lo>=32 && lo<127) utf16Parts.push(String.fromCharCode(lo));
-          else if(lo===0x0a||(lo===0x0d&&hi===0)) utf16Parts.push('\n');
-        }
-      } catch(e16) {}
+      for(var u=0; u<Math.min(rawBin.length-1,1200000); u+=2) {
+        var lo=rawBin.charCodeAt(u)&0xff, hi=rawBin.charCodeAt(u+1)&0xff;
+        if(hi===0 && lo>=32 && lo<127) utf16Parts.push(String.fromCharCode(lo));
+        else if(lo===0x0a||(lo===0x0d&&hi===0)) utf16Parts.push('\n');
+      }
       var utf16Text = utf16Parts.join('').replace(/\n{4,}/g,'\n\n').trim();
 
       // Also scan ASCII bytes
@@ -9768,9 +9762,45 @@ async function readFileForAI(fd) {
       }
       var asciiText = asciiParts.join('').replace(/\n{4,}/g,'\n\n').trim();
 
-      // Use whichever yielded more content
-      var bestText = utf16Text.length > asciiText.length * 0.7 ? utf16Text : asciiText;
-      var combined = asciiText + '\n' + utf16Text;
+      // Try to find HTML body embedded in MSG (Outlook stores HTML body as a stream)
+      var htmlBodyText = '';
+      var htmlIdx = rawBin.toLowerCase().indexOf('<html');
+      if(htmlIdx === -1) htmlIdx = rawBin.toLowerCase().indexOf('<body');
+      if(htmlIdx !== -1) {
+        // Find the closing html tag or take up to 200KB
+        var htmlEnd = rawBin.toLowerCase().indexOf('</html>', htmlIdx);
+        if(htmlEnd === -1) htmlEnd = rawBin.toLowerCase().indexOf('</body>', htmlIdx);
+        var htmlSlice = rawBin.substring(htmlIdx, htmlEnd !== -1 ? htmlEnd + 7 : Math.min(htmlIdx + 200000, rawBin.length));
+        try {
+          // Try to decode as UTF-8
+          var htmlDecoded = '';
+          try { htmlDecoded = decodeURIComponent(escape(htmlSlice)); } catch(e) { htmlDecoded = htmlSlice; }
+          htmlBodyText = htmlDecoded
+            .replace(/<style[\s\S]*?<\/style>/gi,'').replace(/<script[\s\S]*?<\/script>/gi,'')
+            .replace(/<br\s*\/?>/gi,'\n').replace(/<\/p>/gi,'\n\n').replace(/<p[^>]*>/gi,'\n')
+            .replace(/<\/div>/gi,'\n').replace(/<div[^>]*>/gi,'')
+            .replace(/<\/tr>/gi,'\n').replace(/<tr[^>]*>/gi,'')
+            .replace(/<td[^>]*>/gi,' ').replace(/<\/li>/gi,'\n').replace(/<li[^>]*>/gi,'• ')
+            .replace(/<[^>]+>/g,'')
+            .replace(/&nbsp;/g,' ').replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&quot;/g,'"')
+            .replace(/\s{4,}/g,' ').replace(/\n{4,}/g,'\n\n').trim();
+        } catch(htmlEx) {}
+      }
+
+      // Try to find RTF body ({\rtf1 ... })
+      var rtfBodyText = '';
+      var rtfIdx = rawBin.indexOf('{\\rtf1');
+      if(rtfIdx !== -1) {
+        var rtfSlice = rawBin.substring(rtfIdx, Math.min(rtfIdx + 150000, rawBin.length));
+        rtfBodyText = rtfSlice
+          .replace(/\\[a-z]+[-]?\d* ?/gi,' ').replace(/\{[^{}]{0,100}\}/g,' ')
+          .replace(/[{}\\]/g,'').replace(/\s{2,}/g,' ').trim();
+      }
+
+      // Use whichever yielded more useful content
+      var candidates = [utf16Text, asciiText, htmlBodyText, rtfBodyText];
+      var bestText = candidates.reduce(function(a,b){ return b.length > a.length ? b : a; }, '');
+      var combined = asciiText + '\n' + utf16Text + '\n' + htmlBodyText;
 
       // Extract structured headers
       var fSubject = (combined.match(/^Subject:[ \t]*(.{2,200}?)[ \t]*$/im)||['',''])[1].trim();
@@ -9799,16 +9829,14 @@ async function readFileForAI(fd) {
 
       // Also scan binary for embedded PDF signatures — find %PDF- occurrences
       var msgBlocks = [];
-      try {
-        var rawB642 = data.indexOf(',')!==-1 ? data.split(',')[1] : data;
-        var rawBin2 = atob(rawB642.replace(/[\s\r\n]/g,''));
+      if(rawBin) try {
         var pdfIdx = 0;
         var pdfCount = 0;
-        while((pdfIdx = rawBin2.indexOf('%PDF-', pdfIdx)) !== -1 && pdfCount < 5) {
+        while((pdfIdx = rawBin.indexOf('%PDF-', pdfIdx)) !== -1 && pdfCount < 5) {
           // Find %%EOF
-          var eofIdx = rawBin2.indexOf('%%EOF', pdfIdx);
+          var eofIdx = rawBin.indexOf('%%EOF', pdfIdx);
           if(eofIdx !== -1 && eofIdx - pdfIdx > 100 && eofIdx - pdfIdx < 8000000) {
-            var pdfSlice = rawBin2.substring(pdfIdx, eofIdx+5);
+            var pdfSlice = rawBin.substring(pdfIdx, eofIdx+5);
             try {
               var pdfB64 = '';
               var CHUNK2 = 8192;
