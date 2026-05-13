@@ -10019,10 +10019,16 @@ async function readFileForAI(fd) {
           var b64p=part.rawB64||binToB64(part.body);
           b64p=b64p.replace(/[^A-Za-z0-9+/=]/g,'');
           while(b64p.length%4!==0) b64p+='=';
+          // 28MB base64 ≈ 21MB raw — Anthropic API PDF limit is 32MB
+          var pdfTooBig = b64p.length > 28*1024*1024;
           if(b64p.length>500) {
             attachmentNames.push((part.fname||'attachment.pdf')+' [PDF]');
-            blocks.push({type:'document',source:{type:'base64',media_type:'application/pdf',data:b64p},
-              title:'[EMAIL ATTACHMENT] '+(part.fname||'attachment.pdf')});
+            if(pdfTooBig) {
+              blocks.push({type:'text',text:'[EMAIL ATTACHMENT PDF TOO LARGE TO SEND: '+(part.fname||'attachment.pdf')+' — '+Math.round(b64p.length*0.75/1024/1024)+'MB. File is saved in the case for manual review.]'});
+            } else {
+              blocks.push({type:'document',source:{type:'base64',media_type:'application/pdf',data:b64p},
+                title:'[EMAIL ATTACHMENT] '+(part.fname||'attachment.pdf')});
+            }
           }
         } catch(e2){console.warn('[EML] PDF:',e2.message);}
         return;
@@ -10039,10 +10045,13 @@ async function readFileForAI(fd) {
           var b64i=part.rawB64||binToB64(part.body);
           b64i=b64i.replace(/[^A-Za-z0-9+/=]/g,'');
           while(b64i.length%4!==0) b64i+='=';
+          // 6.5MB base64 ≈ 5MB raw — Anthropic image API limit
+          var imgTooBig = b64i.length > 6.5*1024*1024;
           if(b64i.length>200) {
             attachmentNames.push(part.fname||'image');
-            if(/tiff?/i.test(mime2)) {
-              blocks.push({type:'text',text:'[IMAGE ATTACHMENT: '+(part.fname||'image.tiff')+' — TIFF format. Contains visual medical data; see original file.]'});
+            if(/tiff?/i.test(mime2)||imgTooBig) {
+              var reason=imgTooBig?' (too large: '+Math.round(b64i.length*0.75/1024/1024)+'MB)':' — TIFF format';
+              blocks.push({type:'text',text:'[IMAGE ATTACHMENT: '+(part.fname||'image')+reason+'. Contains visual medical data; see original file.]'});
             } else {
               blocks.push({type:'image',source:{type:'base64',media_type:mime2,data:b64i}});
             }
@@ -10628,6 +10637,29 @@ async function extractFromFile(fd) {
   }
 
   // ══════════════════════════════════════════════════
+  // PASS 3b — Text-only retry for emails with attachments
+  // If all passes failed AND content has binary blocks (PDF/image),
+  // retry with text-only blocks so the email body is at least extracted
+  // ══════════════════════════════════════════════════
+  var textOnlyContent = content.filter(function(b){ return b.type==='text'; });
+  if(textOnlyContent.length > 0 && textOnlyContent.length < content.length) {
+    try {
+      var p3bMsgs = [{role:'user', content: textOnlyContent.concat([{type:'text', text:PROMPT}])}];
+      var r3b = await callAPI(p3bMsgs, extractTok);
+      var j3b = parseJSON(r3b);
+      var score3b = scoreResult(j3b);
+      if(score3b > scoreResult(bestResult)) bestResult = j3b;
+      if(score3b >= 2) {
+        console.log('[DocEngine] Pass 3b (text-only) OK (score '+score3b+'):', fd.name);
+        return j3b;
+      }
+      console.warn('[DocEngine] Pass 3b low score ('+score3b+'):', fd.name);
+    } catch(e3b) {
+      console.warn('[DocEngine] Pass 3b failed:', fd.name, e3b.message);
+    }
+  }
+
+  // ══════════════════════════════════════════════════
   // PASS 4 — Last resort minimal extraction
   // ══════════════════════════════════════════════════
   try {
@@ -10724,7 +10756,14 @@ async function extractAndMerge(fd, caseId) {
   setEvSt('run', 'Reading '+esc(fd.name)+'...');
   toast('📖 Reading '+esc(fd.name)+'...', 3000);
 
-  var info = await extractFromFile(fd);
+  var info;
+  try {
+    info = await extractFromFile(fd);
+  } catch(extErr) {
+    setEvSt('idle','Ready — press Run Evaluation');
+    toast('⚠ Could not read ' + esc(fd.name) + ': ' + (extErr.message||'unknown error'), 5000);
+    return;
+  }
   if(!info) {
     setEvSt('idle','Ready — press Run Evaluation');
     toast('⚠ Could not extract data from ' + esc(fd.name) + '. Check API key in Settings.');
