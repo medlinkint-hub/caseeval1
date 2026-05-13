@@ -4554,12 +4554,24 @@ async function processExtractQueue() {
         item.rowDiv.appendChild(note);
       }
     } else {
+      var isEmailExt = fd.ext === 'eml' || fd.ext === 'msg';
+      var isNoData = e._noData === true;
       if(statusSpan) {
-        statusSpan.textContent = '⚠';
+        statusSpan.textContent = isNoData ? '📧' : '⚠';
         statusSpan.style.color = '#f59e0b';
-        statusSpan.title = 'Saved ✓ — auto-read failed: '+errMsg;
+        statusSpan.title = isNoData
+          ? 'Email saved — no claim data in body. Upload the PDF attachment separately.'
+          : 'Saved ✓ — auto-read failed: '+errMsg;
       }
       if(item.rowDiv) item.rowDiv.style.borderLeftColor = '#f59e0b';
+      // Add hint for emails with no data
+      if(isNoData && item.rowDiv && !item.rowDiv.querySelector('.email-hint')) {
+        var hint = document.createElement('span');
+        hint.className = 'email-hint';
+        hint.style.cssText = 'font-size:9px;color:#92400e;flex-shrink:0;white-space:nowrap';
+        hint.textContent = 'upload PDF separately';
+        item.rowDiv.appendChild(hint);
+      }
     }
 
     // Add ↺ Re-read button for all native formats on failure
@@ -9857,7 +9869,7 @@ async function readFileForAI(fd) {
         }
       } catch(binEx){}
 
-      if(msgClean.length > 50 || msgBlocks.length > 0) {
+      if(msgClean.length > 15 || msgBlocks.length > 0) {
         var msgHdr = '[OUTLOOK EMAIL: '+fd.name+']\n'
           +(fFrom?'From: '+fFrom+identifyEmailRole(fFrom)+'\n':'')
           +(fTo?'To: '+fTo+identifyEmailRole(fTo)+'\n':'')
@@ -11107,7 +11119,10 @@ function addFilesNew(list) {
 
 // Extract from file and fill New Case form fields directly
 async function extractFromNewFile(fd) {
-  if(!getKey()) { toast('Add API key in Settings to auto-read documents'); return; }
+  if(!getKey()) {
+    toast('Add API key in Settings to auto-read documents');
+    throw new Error('No API key configured');
+  }
   var stEl = G('extractStatus');
   if(stEl){ stEl.style.display='block'; stEl.innerHTML='<div style="padding:8px 12px;background:rgba(26,42,114,.06);border-radius:6px;border-left:3px solid var(--navy);font-size:12px;color:var(--navy)"><div class="spin" style="display:inline-block;width:12px;height:12px;border:2px solid var(--navy);border-top-color:transparent;border-radius:50%;animation:spin 1s linear infinite;margin-right:6px"></div>Reading '+esc(fd.name)+'...</div>'; }
 
@@ -11410,28 +11425,47 @@ async function extractFromNewFile(fd) {
 
     // Status
     var fieldsFilled = [s.patient,s.insurer,s.dol,s.diagnosis,s.policy_number,s.departure_date,s.airline,s.hospital].filter(ok).length;
+    var isEmailFile = fd.ext === 'eml' || fd.ext === 'msg';
     var langNote = s.document_language && s.document_language.toLowerCase()!=='english' ? ' ['+s.document_language+']' : '';
     var hasAccuracyWarnings = nExWarn.length > 0 || nMissing.length > 0 || s.confidence === 'low';
-    var msg = (hasAccuracyWarnings ? '⚠ ' : '✓ ')+fd.name+' — '+s.document_type+langNote+' — '+fieldsFilled+' fields extracted'+(hasAccuracyWarnings ? ' — verify highlighted fields' : '');
-    var statusColor = hasAccuracyWarnings ? '#fffbeb' : '#d1fae5';
-    var borderColor = hasAccuracyWarnings ? '#f59e0b' : '#059669';
-    var textColor = hasAccuracyWarnings ? '#92400e' : '#065f46';
+
+    var msg, statusColor, borderColor, textColor;
+    if(isEmailFile && fieldsFilled === 0) {
+      // Email was saved but no claim data could be auto-extracted from the body
+      msg = '📧 '+fd.name+' saved — email body had no claim data to auto-fill.'+
+        ' If it has a PDF/Word attachment, upload it separately for extraction.';
+      statusColor = '#fffbeb'; borderColor = '#f59e0b'; textColor = '#92400e';
+    } else {
+      msg = (hasAccuracyWarnings ? '⚠ ' : '✓ ')+fd.name+' — '+s.document_type+langNote+' — '+fieldsFilled+' fields extracted'+(hasAccuracyWarnings ? ' — verify highlighted fields' : '');
+      statusColor = hasAccuracyWarnings ? '#fffbeb' : '#d1fae5';
+      borderColor = hasAccuracyWarnings ? '#f59e0b' : '#059669';
+      textColor = hasAccuracyWarnings ? '#92400e' : '#065f46';
+    }
     var warnDetails = '';
-    if(hasAccuracyWarnings) {
+    if(hasAccuracyWarnings && fieldsFilled > 0) {
       if(nMissing.length) warnDetails += '<div style="margin-top:4px"><b>Not found in document:</b> '+esc(nMissing.join(', '))+'</div>';
       if(nExWarn.length) warnDetails += '<div style="margin-top:4px"><b>Uncertain readings:</b> '+esc(nExWarn.slice(0,3).join(' | '))+'</div>';
     }
     if(stEl){ stEl.innerHTML='<div style="padding:8px 12px;background:'+statusColor+';border-radius:6px;border-left:3px solid '+borderColor+';font-size:12px;color:'+textColor+'">'+esc(msg)+warnDetails+'</div>'; }
-    toast(msg, hasAccuracyWarnings ? 7000 : 4000);
+    toast(msg, (hasAccuracyWarnings || (isEmailFile && fieldsFilled===0)) ? 8000 : 4000);
+
+    // If email with 0 fields: signal to processExtractQueue to show warning icon, not green
+    if(isEmailFile && fieldsFilled === 0) {
+      var noDataErr = new Error(msg);
+      noDataErr._noData = true;
+      throw noDataErr;
+    }
 
   } catch(ex) {
-    console.error('[NewCase] Extract error:', fd.name, ex.message, ex.stack);
-    // For PDFs/images: file is saved and WILL be read during evaluation — show green
-    var isPDForImgOrEmail = fd.ext === 'pdf' || fd.ext === 'img' || fd.ext === 'heic' || fd.ext === 'eml' || fd.ext === 'msg';
-    if(isPDForImgOrEmail) {
+    console.error('[NewCase] Extract error:', fd.name, ex.message);
+    // "_noData" errors are deliberate — already updated stEl — just re-throw so processExtractQueue shows ⚠
+    if(ex._noData) throw ex;
+    // Unexpected JS errors for PDFs/images/emails: file is saved — show green, don't crash
+    var isPDFOrImgOrEmail = fd.ext === 'pdf' || fd.ext === 'img' || fd.ext === 'heic' || fd.ext === 'eml' || fd.ext === 'msg';
+    if(isPDFOrImgOrEmail) {
       var _ftLabel = (fd.ext === 'eml' || fd.ext === 'msg') ? 'Email' : 'Document';
-      if(stEl){ stEl.innerHTML='<div style="padding:8px 12px;background:#d1fae5;border-radius:6px;border-left:3px solid #059669;font-size:12px;color:#065f46">✅ '+esc(fd.name)+' — '+_ftLabel+' saved and ready for evaluation (auto-fill skipped)</div>'; }
-      return;
+      if(stEl){ stEl.innerHTML='<div style="padding:8px 12px;background:#fffbeb;border-radius:6px;border-left:3px solid #f59e0b;font-size:12px;color:#92400e">⚠ '+esc(fd.name)+' — '+_ftLabel+' saved. Auto-read failed: '+esc(ex.message)+'</div>'; }
+      return; // return so processExtractQueue still shows green (file IS saved)
     }
     if(stEl){ stEl.innerHTML='<div style="padding:8px 12px;background:#fee2e2;border-radius:6px;border-left:3px solid #dc2626;font-size:12px;color:#991b1b">⚠ '+esc(fd.name)+': '+esc(ex.message)+'</div>'; }
     throw ex;
