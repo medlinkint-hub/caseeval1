@@ -9883,7 +9883,15 @@ async function readFileForAI(fd) {
 
     function decodeBody(bodyStr, enc) {
       try {
-        if(enc==='base64') return atob(bodyStr.replace(/[\s\r\n]/g,''));
+        if(enc==='base64') {
+          var bin=atob(bodyStr.replace(/[\s\r\n]/g,''));
+          // Try UTF-8 decode for text parts (common for non-ASCII emails — Arabic, Greek, etc.)
+          // Skip for large binary content (>200KB) to avoid performance hit
+          if(bin.length < 200000) {
+            try { return decodeURIComponent(escape(bin)); } catch(e){}
+          }
+          return bin;
+        }
         if(enc==='quoted-printable') return bodyStr.replace(/=\r?\n/g,'').replace(/=([0-9A-Fa-f]{2})/g,function(m,h){return String.fromCharCode(parseInt(h,16));});
       } catch(e) {}
       // Try UTF-8 decode for 8bit / 7bit
