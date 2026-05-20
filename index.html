@@ -4036,7 +4036,14 @@ function renderCD(c) {
     html += '</div>';
   }
 
-  html += '<div id="evR" style="overflow-y:auto;padding-right:4px;max-height:none">'+(c.eval ? renderEvalTxt(c.eval) : '')+'</div>';
+  var _evalToShow = c.eval || (c.evalHistory && c.evalHistory.length ? c.evalHistory[0].eval : '');
+  var _evalIsHistory = !c.eval && _evalToShow;
+  html += '<div id="evR" style="overflow-y:auto;padding-right:4px;max-height:none">';
+  if(_evalToShow) {
+    if(_evalIsHistory) html += '<div style="font-size:11px;font-weight:600;color:#92400e;background:#fef3c7;border:1px solid #f59e0b;border-radius:6px;padding:5px 10px;margin-bottom:8px">⚠ Current eval missing — showing most recent saved evaluation from history</div>';
+    html += renderEvalTxt(_evalToShow);
+  }
+  html += '</div>';
   html += '<div class="brow">';
   html += '<button class="btn br2" id="bRun"><svg viewBox="0 0 24 24"><polygon points="5 3 19 12 5 21 5 3"/></svg>Run Evaluation</button>';
   html += '<button class="btn bs" id="bClear">Clear</button>';
@@ -4051,7 +4058,7 @@ function renderCD(c) {
   }
 
   // ── Case Chat Assistant ──
-  if(c.eval) {
+  if(c.eval || _evalToShow) {
     var existingChat = (c.chatHistory && Array.isArray(c.chatHistory) && c.chatHistory.length > 0);
     html += '<div id="caseChatWrap" style="margin-top:18px;border-top:2px solid var(--bor);padding-top:16px">';
     html += '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">';
@@ -6976,7 +6983,21 @@ function startFirebaseSync() {
     if(_con) {
       if(typeof CURRENT_PAGE !== 'undefined') {
         if(CURRENT_PAGE === 'dash' && typeof renderDash === 'function') renderDash();
-        else if(CURRENT_PAGE === 'cases' && typeof renderCasesWithSearch === 'function') renderCasesWithSearch();
+        else if(CURRENT_PAGE === 'cases') {
+          // If the user is viewing a case detail (window._currentCaseId set), do NOT replace
+          // with the cases list — just silently refresh the eval section if this case changed
+          if(window._currentCaseId) {
+            var _refreshedCase = getC(window._currentCaseId);
+            if(_refreshedCase) {
+              var evREl = document.getElementById('evR');
+              if(evREl && _refreshedCase.eval) evREl.innerHTML = renderEvalTxt(_refreshedCase.eval);
+              var tlEl = document.getElementById('tlB');
+              if(tlEl) tlEl.innerHTML = renderTL(_refreshedCase.timeline||[]);
+            }
+          } else if(typeof renderCasesWithSearch === 'function') {
+            renderCasesWithSearch();
+          }
+        }
         else if(CURRENT_PAGE === 'urgent' && typeof renderUrgent === 'function') renderUrgent();
         else if(CURRENT_PAGE === 'fin' && typeof renderFin === 'function') renderFin();
         else if(CURRENT_PAGE === 'docs') {
