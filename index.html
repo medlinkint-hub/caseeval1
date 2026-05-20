@@ -7245,13 +7245,34 @@ function pullAllFromFirebase() {
         CASES.push(rc);
       } else {
         var lt = new Date(CASES[li].updatedAt||CASES[li].created||0).getTime();
-        if(rt > lt) CASES[li] = Object.assign({}, CASES[li], rc);
+        var localEval = CASES[li].eval || '';
+        var remoteEval = rc.eval || '';
+        if(rt > lt) {
+          // Remote is newer — use remote but always keep the longer eval
+          CASES[li] = Object.assign({}, CASES[li], rc, {
+            eval: remoteEval.length >= localEval.length ? remoteEval : localEval
+          });
+        } else if(!localEval && remoteEval) {
+          // Timestamps equal or local is newer, but local eval is missing — restore from Firebase
+          CASES[li].eval = remoteEval;
+        }
       }
     });
     CASES.sort(function(a,b){ return new Date(b.created||0)-new Date(a.created||0); });
     try { localStorage.setItem('ce2_cases', JSON.stringify(CASES)); } catch(e){}
     try { localStorage.setItem('mp_cases', JSON.stringify(CASES)); } catch(e){}
     if(typeof updBadges==='function') updBadges();
+    // If a case detail is open and its eval was just restored, refresh the eval panel
+    if(window._currentCaseId) {
+      var _restoredCase = getC(window._currentCaseId);
+      if(_restoredCase && _restoredCase.eval) {
+        var _evREl = document.getElementById('evR');
+        if(_evREl && !_evREl.querySelector('.er')) {
+          _evREl.innerHTML = (typeof renderEvalTxt === 'function') ? renderEvalTxt(_restoredCase.eval) : '';
+          if(typeof setEvSt === 'function') setEvSt('done', 'Evaluation loaded from Firebase');
+        }
+      }
+    }
     var _con2=document.getElementById('con'); var _onDash2=_con2&&_con2.querySelector('.sg')&&!_con2.querySelector('.card input'); if(_onDash2&&typeof renderDash==='function') renderDash();
     setFBStatus('ok', remoteCases.length+' cases loaded');
     toast('✓ '+remoteCases.length+' cases loaded from Firebase');
@@ -7344,12 +7365,14 @@ async function autoInitFirebase() {
       setTimeout(function(){ pullAllFromFirebase(); }, 1500);
     }
     setTimeout(function(){
-      // Push local cases to Firebase so teammates always have the latest
+      // Push local cases to Firebase so teammates always have the latest.
+      // Delayed to 5s to give pullAllFromFirebase (at 1.5s) time to complete
+      // and restore any evals before we push — avoids overwriting restored evals.
       CASES.forEach(function(c){ syncCaseToFirestore(c); });
       // Push local policies silently — ensures Firebase has them even if they
       // were created before Firebase was first connected on this device
       if(typeof pushPoliciesToFirebase==='function') pushPoliciesToFirebase(true);
-    }, 2000);
+    }, 5000);
   }
 }
 
