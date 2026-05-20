@@ -4527,6 +4527,7 @@ async function processExtractQueue() {
     var isNative = nativeFormats.indexOf(fd.ext) !== -1;
     var errMsg = e.message || 'unknown error';
     var isKeyError = /api key|no key|401|authentication/i.test(errMsg);
+    var isApiError = isKeyError || /credit|quota|limit|429|api error/i.test(errMsg);
 
     if(isKeyError) {
       if(statusSpan) {
@@ -4537,8 +4538,9 @@ async function processExtractQueue() {
       if(item.rowDiv) item.rowDiv.style.borderLeftColor = '#e8231a';
       // Show persistent notification
       if(stEl) stEl.innerHTML = '<div style="padding:8px 12px;background:#fee2e2;border-radius:6px;border-left:3px solid #e8231a;font-size:12px;color:#991b1b">🔑 No API key — go to Settings to add your key</div>';
-    } else if(isNative) {
+    } else if(isNative && !isApiError) {
       // PDF/image — Claude will read it natively during evaluation — green
+      // (only if there was no API-level error; API errors get amber ⚠ below)
       if(statusSpan) {
         statusSpan.textContent = '🟢';
         statusSpan.style.color = '';
@@ -10654,6 +10656,7 @@ async function extractFromFile(fd) {
     }
     console.warn('[DocEngine] Pass 2 low score ('+score2+'):', fd.name);
   } catch(e2) {
+    if(!firstPassError) firstPassError = e2;
     console.warn('[DocEngine] Pass 2 failed:', fd.name, e2.message);
   }
 
@@ -10677,6 +10680,7 @@ async function extractFromFile(fd) {
         }
       }
     } catch(e3) {
+      if(!firstPassError) firstPassError = e3;
       console.warn('[DocEngine] Pass 3 failed:', fd.name, e3.message);
     }
   }
@@ -10700,6 +10704,7 @@ async function extractFromFile(fd) {
       }
       console.warn('[DocEngine] Pass 3b low score ('+score3b+'):', fd.name);
     } catch(e3b) {
+      if(!firstPassError) firstPassError = e3b;
       console.warn('[DocEngine] Pass 3b failed:', fd.name, e3b.message);
     }
   }
@@ -10724,6 +10729,7 @@ async function extractFromFile(fd) {
       return j4;
     }
   } catch(e4) {
+    if(!firstPassError) firstPassError = e4;
     console.warn('[DocEngine] Pass 4 failed:', fd.name, e4.message);
   }
 
@@ -10775,6 +10781,7 @@ async function extractFromFile(fd) {
           return j5;
         }
       } catch(e5) {
+        if(!firstPassError) firstPassError = e5;
         console.warn('[DocEngine] Pass 5 rotation '+rotations[ri]+'° failed:', e5.message);
       }
     }
@@ -10813,6 +10820,16 @@ async function extractAndMerge(fd, caseId) {
   if(!info) {
     setEvSt('idle','Ready — press Run Evaluation');
     toast('⚠ Could not extract data from ' + esc(fd.name) + '. Check API key in Settings.');
+    return;
+  }
+  if(info._apiError) {
+    setEvSt('idle','Ready — press Run Evaluation');
+    var hint = /api key|no key|401|authentication/i.test(info._apiError)
+      ? 'Invalid or missing API key — go to Settings to update your key.'
+      : /credit|quota|limit|429/i.test(info._apiError)
+        ? 'API credits exhausted — add more credits to your Anthropic account.'
+        : 'API error: '+info._apiError;
+    toast('⚠ '+esc(fd.name)+' — '+hint, 9000);
     return;
   }
 
@@ -11116,7 +11133,9 @@ function addFilesNew(list) {
       toast('📖 Reading '+esc(f.name)+'...', 4000);
       // Auto-extract into New Case form fields
       if(EXTRACTABLE.indexOf(fd.ext) !== -1) {
-        extractFromNewFile(fd);
+        extractFromNewFile(fd).catch(function(ex){
+          console.warn('[addFilesNew] Extraction failed:', f.name, ex.message);
+        });
       }
     };
     r.readAsDataURL(f);
