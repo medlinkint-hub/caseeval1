@@ -2557,6 +2557,70 @@ async function savePVtoCase(caseId) {
   }
 }
 
+// Extract Overall verdict mini-label from a saved verification text
+function _pvMiniStatus(text) {
+  var m = (text||'').match(/overall\s*:?\s*(APPROVED|CAUTION|REJECT)/i);
+  if(!m) return '';
+  var v = m[1].toUpperCase();
+  return v==='APPROVED'?'✅ APPROVED':v==='REJECT'?'❌ REJECT':'⚠️ CAUTION';
+}
+
+// Standalone facility legitimacy check — runs directly without going through Q&A chat
+async function runFacilityCheck(caseId) {
+  var panel = document.getElementById('facility_panel');
+  if(!panel) return;
+  if(!getKey()) { toast('Add API key in Settings first'); return; }
+  var c = getC(caseId);
+  if(!c) return;
+
+  var btn = document.getElementById('facility_run_btn');
+  if(btn) { btn.disabled = true; btn.textContent = '⏳ Checking…'; }
+  panel.innerHTML =
+    '<div style="font-size:12px;color:var(--tx2);display:flex;align-items:center;gap:6px;padding:4px 0">' +
+    '🔍 Verifying facility via web search…' +
+    '<span class="chatdot"></span><span class="chatdot" style="animation-delay:.2s"></span><span class="chatdot" style="animation-delay:.4s"></span></div>';
+
+  var provCtx = _buildProviderContext(c);
+  var sysPrompt =
+    'You are a senior IPMI medical intelligence analyst at HealthWatch Assistance (HWA), a medical TPA. ' +
+    'Your task is to verify the legitimacy, suitability, and compliance of the medical provider/facility for this insurance claim. ' +
+    'Use web search to research the provider and return findings in EXACTLY this structure (each on its own line):\n' +
+    '✅/⚠️/❌ Legitimacy: [is it a real, registered, licensed facility — yes/no/uncertain + brief reason]\n' +
+    '✅/⚠️/❌ Suitability: [does it have the right specialty/equipment for the claimed diagnosis/treatment]\n' +
+    '✅/⚠️/❌ Scope: [is the claimed treatment within this facility\'s stated scope of practice]\n' +
+    '✅/⚠️/❌ Compliance: [any known fraud, billing irregularities, sanctions, or quality concerns]\n' +
+    'Overall: APPROVED / CAUTION / REJECT\n' +
+    'Summary: [one decisive sentence with recommendation]\n\n' +
+    'After the structured block, add a brief paragraph with key web-sourced findings, verification URLs if found, accreditation body, and any required action.\n\n' +
+    '=== PROVIDER DETAILS ===\n' + provCtx;
+
+  try {
+    var result = await _apiCallQA(
+      [{ role: 'user', content: 'Perform a full legitimacy and compliance check on this medical provider/facility.' }],
+      sysPrompt, 2500
+    );
+    var fullText = result.text || '';
+    window._lastProviderVerification = { text: fullText, question: 'Facility legitimacy check', caseId: caseId };
+
+    var pvHtml = _renderProviderVerification(fullText, caseId);
+    var extra = '';
+    if(result.webSearchUsed && result.queries && result.queries.length) {
+      extra = '<div style="font-size:10px;color:var(--tx3);margin-top:6px;padding:4px 8px;background:#f8fafc;border-radius:4px;border:1px solid #e2e8f0">' +
+        '🌐 Searched: ' + esc(result.queries.join(' · ').substring(0, 120)) + '</div>';
+    }
+    panel.innerHTML = (pvHtml || '<div style="font-size:12px;color:var(--tx2)">'+_renderChatText(fullText)+'</div>') + extra;
+
+    // Update mini status in header
+    var mini = document.getElementById('fac_mini');
+    if(mini) mini.textContent = _pvMiniStatus(fullText) || 'Done';
+  } catch(e) {
+    panel.innerHTML = '<div style="font-size:12px;color:#dc2626">⚠ Error: ' + esc(e.message||'Check failed') + '</div>';
+    toast('Facility check failed: ' + (e.message||'').substring(0,60));
+  } finally {
+    if(btn) { btn.disabled = false; btn.textContent = '🔍 Run Check'; }
+  }
+}
+
 async function sendCaseChat(presetText, caseId) {
   if(!getKey()) { toast('Add API key in Settings first'); return; }
   var id = caseId || window._currentCaseId;
@@ -4094,6 +4158,26 @@ function renderCD(c) {
   html += '<div id="fraud_mini" style="font-size:11px;color:rgba(255,255,255,.7)">Checking...</div>';
   html += '</div>';
   html += '<div style="padding:14px 16px"><div id="fraud_panel">Loading...</div></div>';
+  html += '</div>';
+  // Facility Legitimacy Panel
+  html += '<div class="card" style="padding:0;overflow:hidden">';
+  html += '<div style="padding:10px 16px;background:linear-gradient(135deg,#0f766e,#0d5c54);display:flex;align-items:center;justify-content:space-between">';
+  html += '<div style="font-family:Syne,sans-serif;font-size:12px;font-weight:700;color:#fff">🏥 Facility Legitimacy</div>';
+  var pvMiniTxt = (c.providerVerification && c.providerVerification.text) ? _pvMiniStatus(c.providerVerification.text) : 'Not checked';
+  html += '<div id="fac_mini" style="font-size:11px;color:rgba(255,255,255,.7)">'+esc(pvMiniTxt||'Not checked')+'</div>';
+  html += '</div>';
+  html += '<div style="padding:14px 16px">';
+  var pvSavedHtml = '';
+  if(c.providerVerification && c.providerVerification.text) {
+    var pvR = _renderProviderVerification(c.providerVerification.text, null);
+    if(pvR) {
+      pvSavedHtml = pvR + '<div style="font-size:10px;color:var(--tx3);margin-top:6px">Last checked: '
+        + esc(c.providerVerification.date ? new Date(c.providerVerification.date).toLocaleDateString() : '—') + '</div>';
+    }
+  }
+  html += '<div id="facility_panel">'+(pvSavedHtml||'<div style="font-size:12px;color:var(--tx3);margin-bottom:10px">No facility check run yet.</div>')+'</div>';
+  html += '<button id="facility_run_btn" onclick="runFacilityCheck(\''+esc(cid)+'\')" style="margin-top:10px;padding:6px 14px;background:#0f766e;color:#fff;border:none;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;transition:opacity .15s" onmouseover="this.style.opacity=\'.85\'" onmouseout="this.style.opacity=\'1\'">🔍 Run Legitimacy Check</button>';
+  html += '</div>';
   html += '</div>';
   G('con').innerHTML = html;
 
