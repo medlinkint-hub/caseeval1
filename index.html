@@ -4326,6 +4326,7 @@ function renderCD(c) {
   var selPol = G('f_sel_policy');
   if(selPol) selPol.onchange = function(){ saveSelectedPolicy(this); };
   if(c.eval) setEvSt('done','Previous evaluation loaded');
+  else if(c.evalHistory && c.evalHistory.length && c.evalHistory[0] && c.evalHistory[0].eval) setEvSt('done','Showing evaluation from history');
   // Wire eval buttons - use onclick property (not addEventListener) to prevent duplicates
   const bRun = G('bRun');
   if(bRun) bRun.onclick = function(){ runEval(cid); };
@@ -7048,8 +7049,18 @@ function syncCaseToFirestore(caseObj) {
     }),
     updatedAt: new Date().toISOString(),
     updatedBy: (typeof S === 'function' ? S().name : '') || 'Team Member',
-    eval: (caseObj.eval||'').substring(0, 25000)
   });
+  // Never overwrite a non-empty Firestore eval with an empty local one.
+  // Only include eval in the sync when local has actual content.
+  if(caseObj.eval && caseObj.eval.length > 0) {
+    lean.eval = caseObj.eval.substring(0, 25000);
+  } else {
+    delete lean.eval;
+  }
+  // Same protection for evalHistory — don't wipe Firestore history with empty array
+  if(!caseObj.evalHistory || !caseObj.evalHistory.length) {
+    delete lean.evalHistory;
+  }
 
   FB_DB.collection(FB_COLLECTION).doc(caseObj.id).set(lean, {merge:true})
     .then(function(){
