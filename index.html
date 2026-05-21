@@ -4050,15 +4050,15 @@ function renderCD(c) {
   html += '<button class="btn bs" id="bExportEval" style="margin-left:auto" onclick="exportEvalPDF(window._currentCaseId)"><svg viewBox="0 0 24 24" style="width:14px;height:14px;stroke:currentColor;fill:none;stroke-width:2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/></svg>&nbsp;Save PDF</button>';
   html += '</div>';
 
-  // ── Medical Coding & Pricing button ──
-  if((c.type === 'medclaim' || c.type === 'ipmi_medical') && c.eval && c.eval.length > 50) {
+  // ── Medical Coding & Pricing button — always shown for medical cases ──
+  if(c.type === 'medclaim' || c.type === 'ipmi_medical') {
     html += '<div style="margin-top:12px">';
     html += '<button class="btn-gold" onclick="openMedicalCoder(\''+esc(c.id)+'\')"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="#1a2f5e" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>Medical Coding &amp; Pricing</button>';
     html += '</div>';
   }
 
-  // ── Case Chat Assistant ──
-  if(c.eval || _evalToShow) {
+  // ── Case Chat Assistant — always shown ──
+  {
     var existingChat = (c.chatHistory && Array.isArray(c.chatHistory) && c.chatHistory.length > 0);
     html += '<div id="caseChatWrap" style="margin-top:18px;border-top:2px solid var(--bor);padding-top:16px">';
     html += '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">';
@@ -4093,7 +4093,7 @@ function renderCD(c) {
     html += '<button onclick="sendCaseChat(null,\''+esc(c.id)+'\')" id="caseChatSendBtn" style="height:42px;padding:0 16px;background:var(--navy);color:#fff;border:none;border-radius:8px;cursor:pointer;font-size:13px;font-weight:600;font-family:inherit;display:flex;align-items:center;gap:6px;flex-shrink:0;transition:background .15s" onmouseover="this.style.background=\'var(--navy2)\'" onmouseout="this.style.background=\'var(--navy)\'"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="#fff" stroke-width="2.5" stroke-linecap="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>Ask</button>';
     html += '</div>';
     html += '</div>';
-  }
+  } // end case chat
 
   html += '</div>';
 
