@@ -12565,7 +12565,7 @@ async function _mcdRunAnalysis() {
   statusEl('Extracting ICD-10, CPT, DRG codes…');
   var raw1 = '';
   try {
-    raw1 = await apiCall(codePrompt, codeSys, 4000);
+    raw1 = await apiCall(codePrompt, codeSys, 8000);
     _mcdData.raw1 = raw1;
   } catch(e) {
     _mcdShowError('Code extraction failed: '+e.message);
@@ -12574,11 +12574,21 @@ async function _mcdRunAnalysis() {
 
   var codes = null;
   try {
-    var jsonStr = raw1.replace(/^```json\s*/,'').replace(/^```\s*/,'').replace(/```\s*$/,'').trim();
+    var jsonStr = raw1.replace(/^```json\n?/,'').replace(/^```\n?/,'').replace(/```\s*$/,'').trim();
     codes = JSON.parse(jsonStr);
   } catch(e) {
-    var jMatch = raw1.match(/\{[\s\S]*\}/);
-    if(jMatch) { try { codes = JSON.parse(jMatch[0]); } catch(e2) {} }
+    // Try extracting JSON object; if truncated, attempt repair
+    var jMatch = raw1.match(/\{[\s\S]*/);
+    if(jMatch) {
+      var attempt = jMatch[0];
+      // Strip trailing markdown fence if present
+      attempt = attempt.replace(/```[\s\S]*$/,'').trimEnd();
+      try { codes = JSON.parse(attempt); } catch(e2) {
+        // Repair truncated JSON: close any open arrays/objects
+        attempt = _repairTruncatedJSON(attempt);
+        try { codes = JSON.parse(attempt); } catch(e3) {}
+      }
+    }
   }
   if(!codes) { _mcdShowError('Could not parse code JSON.\n\nRaw response:\n'+raw1); return; }
   _mcdData.codes = codes;
@@ -12598,7 +12608,7 @@ async function _mcdRunAnalysis() {
 
   var raw2 = '';
   try {
-    raw2 = await apiCall(pricingPrompt, pricingSys, 4000);
+    raw2 = await apiCall(pricingPrompt, pricingSys, 8000);
     _mcdData.raw2 = raw2;
   } catch(e) {
     _mcdShowError('Pricing analysis failed: '+e.message);
@@ -12607,16 +12617,51 @@ async function _mcdRunAnalysis() {
 
   var pricing = null;
   try {
-    var jsonStr2 = raw2.replace(/^```json\s*/,'').replace(/^```\s*/,'').replace(/```\s*$/,'').trim();
+    var jsonStr2 = raw2.replace(/^```json\n?/,'').replace(/^```\n?/,'').replace(/```\s*$/,'').trim();
     pricing = JSON.parse(jsonStr2);
   } catch(e) {
-    var jMatch2 = raw2.match(/\{[\s\S]*\}/);
-    if(jMatch2) { try { pricing = JSON.parse(jMatch2[0]); } catch(e2) {} }
+    var jMatch2 = raw2.match(/\{[\s\S]*/);
+    if(jMatch2) {
+      var attempt2 = jMatch2[0].replace(/```[\s\S]*$/,'').trimEnd();
+      try { pricing = JSON.parse(attempt2); } catch(e2) {
+        attempt2 = _repairTruncatedJSON(attempt2);
+        try { pricing = JSON.parse(attempt2); } catch(e3) {}
+      }
+    }
   }
   if(!pricing) { _mcdShowError('Could not parse pricing JSON.\n\nRaw response:\n'+raw2); return; }
   _mcdData.pricing = pricing;
 
   _mcdShowResults();
+}
+
+function _repairTruncatedJSON(str) {
+  // Close any unclosed string
+  var inStr = false, escaped = false;
+  for(var i = 0; i < str.length; i++) {
+    var ch = str[i];
+    if(escaped) { escaped = false; continue; }
+    if(ch === '\\' && inStr) { escaped = true; continue; }
+    if(ch === '"') inStr = !inStr;
+  }
+  if(inStr) str += '"';
+  // Count unclosed braces/brackets and close them
+  var opens = [];
+  inStr = false; escaped = false;
+  for(var j = 0; j < str.length; j++) {
+    var c = str[j];
+    if(escaped) { escaped = false; continue; }
+    if(c === '\\' && inStr) { escaped = true; continue; }
+    if(c === '"') { inStr = !inStr; continue; }
+    if(inStr) continue;
+    if(c === '{') opens.push('}');
+    else if(c === '[') opens.push(']');
+    else if(c === '}' || c === ']') opens.pop();
+  }
+  // Strip trailing comma before closing
+  str = str.replace(/,\s*$/, '');
+  while(opens.length) str += opens.pop();
+  return str;
 }
 
 function _mcdShowError(msg) {
