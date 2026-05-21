@@ -12558,11 +12558,39 @@ async function _mcdRunAnalysis() {
     +'AMOUNT CLAIMED: '+(c.amountClaimed ? 'EUR '+c.amountClaimed : '—')+'\n'
     +'AMOUNT APPROVED: '+(c.amountApproved ? 'EUR '+c.amountApproved : '—');
 
-  var codePrompt = [{ role: 'user', content: caseContext+'\n\n---\nExtract ALL applicable medical codes from the case above. Return ONLY valid JSON (no markdown, no explanation) with this exact structure:\n{\n  "icd10_primary": [{"code":"A00.0","description":"Cholera due to Vibrio cholerae 01","confidence":"high"}],\n  "icd10_secondary": [],\n  "cpt": [{"code":"99213","description":"Office visit established patient","confidence":"medium"}],\n  "drg": [{"code":"291","description":"Heart failure and shock with MCC","weight":1.5}],\n  "snomed": [{"code":"73211009","description":"Diabetes mellitus"}],\n  "loinc": [{"code":"2160-0","description":"Creatinine [Mass/volume] in Serum or Plasma"}],\n  "apc": [{"code":"5641","description":"Level 1 Minor Procedures"}],\n  "hcc": [{"code":"18","description":"Diabetes with chronic complications","raf_weight":0.318}],\n  "summary": "One-paragraph clinical summary and coding rationale."\n}' }];
+  // Build message content — attach actual medical files if loaded for this case
+  var codeContent = [];
+  var _mcdFilesAttached = 0;
+  if(_filesForCaseId === _mcdCaseId && FILES.length > 0) {
+    statusEl('Loading medical documents…');
+    var MAX_MCD_TOTAL = 8 * 1024 * 1024; // 8MB total
+    var _mcdTotal = 0;
+    // Skip policy files — focus on medical records only
+    var _policyRx = /policy|wording|certificate|insurance|ipmi|schedule/i;
+    var medFiles = FILES.filter(function(f){
+      return f.data && f.data.length > 100 && !_policyRx.test(f.name||'');
+    });
+    for(var _mi = 0; _mi < medFiles.length; _mi++) {
+      var _mf = medFiles[_mi];
+      if(_mcdTotal + _mf.data.length > MAX_MCD_TOTAL) break;
+      _mcdTotal += _mf.data.length;
+      try {
+        var _mblocks = await readFileForAI(_mf);
+        if(_mblocks && _mblocks.length) {
+          codeContent.push({type:'text', text:'=== DOCUMENT: '+_mf.name+' ==='});
+          _mblocks.forEach(function(b){ codeContent.push(b); });
+          _mcdFilesAttached++;
+        }
+      } catch(e) { console.warn('[mcd] Could not read file:', _mf.name, e.message); }
+    }
+  }
+  codeContent.push({type:'text', text: caseContext+'\n\n---\nExtract ALL applicable medical codes from the case above. Return ONLY valid JSON (no markdown, no explanation) with this exact structure:\n{\n  "icd10_primary": [{"code":"A00.0","description":"Cholera due to Vibrio cholerae 01","confidence":"high"}],\n  "icd10_secondary": [],\n  "cpt": [{"code":"99213","description":"Office visit established patient","confidence":"medium"}],\n  "drg": [{"code":"291","description":"Heart failure and shock with MCC","weight":1.5}],\n  "snomed": [{"code":"73211009","description":"Diabetes mellitus"}],\n  "loinc": [{"code":"2160-0","description":"Creatinine [Mass/volume] in Serum or Plasma"}],\n  "apc": [{"code":"5641","description":"Level 1 Minor Procedures"}],\n  "hcc": [{"code":"18","description":"Diabetes with chronic complications","raf_weight":0.318}],\n  "summary": "One-paragraph clinical summary and coding rationale."\n}'});
+
+  var codePrompt = [{ role: 'user', content: codeContent }];
 
   var codeSys = 'You are a senior medical coder (CPC, CCS certified) with expertise in ICD-10-CM/PCS, CPT, DRG, SNOMED CT, LOINC, APC, and HCC. Extract all relevant codes supported by documented evidence. Flag ambiguous codes with confidence "low". Return ONLY valid JSON — no markdown fences, no explanation.';
 
-  statusEl('Extracting ICD-10, CPT, DRG codes…');
+  statusEl('Extracting ICD-10, CPT, DRG codes'+ (_mcdFilesAttached > 0 ? ' from '+_mcdFilesAttached+' document(s)…' : '…'));
   var raw1 = '';
   try {
     raw1 = await apiCall(codePrompt, codeSys, 8000);
