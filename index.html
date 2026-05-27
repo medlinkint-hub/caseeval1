@@ -1088,7 +1088,11 @@ async function extractAndFillNew(fd) {
   const s = S();
   if(!s.key) { toast('Add your API key in Settings first!'); return; }
   setExtractStatus('Reading '+fd.name+'...', 'run');
-  const info = await extractFromFile(fd);
+  var info;
+  try { info = await extractFromFile(fd); } catch(e) {
+    setExtractStatus('Error reading '+fd.name+': '+e.message, 'err');
+    return;
+  }
   if(!info) { setExtractStatus('Could not read: '+fd.name, 'err'); return; }
 
   const fill = (elId, val) => { const el=G(elId); if(el && ok(val) && !el.value.trim()) el.value=val; };
@@ -1636,6 +1640,8 @@ async function runEval(caseId) {
     setEvSt('err','No API key — go to Settings first');
     return;
   }
+  // Grab button early so all early-exit paths can re-enable it
+  const btn = G('bRun'); if(btn) btn.disabled = true;
   
   // ── Auto-load files from IndexedDB if not in memory ──
   // Fires when: FILES belongs to a different case, is empty, or all entries are metadata-only
@@ -1731,7 +1737,6 @@ async function runEval(caseId) {
   const c = getC(caseId);
   if(!c) { toast('Case not found'); return; }
 
-  const btn = G('bRun'); if(btn) btn.disabled = true;
   // Warn if case already has evaluation
   const existingEval = getC(caseId);
   if(existingEval && existingEval.eval && existingEval.eval.length > 100) {
@@ -7286,7 +7291,6 @@ function pullAllFromFirebase() {
       }
     });
     CASES.sort(function(a,b){ return new Date(b.created||0)-new Date(a.created||0); });
-    try { localStorage.setItem('ce2_cases', JSON.stringify(CASES)); } catch(e){}
     try { localStorage.setItem('mp_cases', JSON.stringify(CASES)); } catch(e){}
     if(typeof updBadges==='function') updBadges();
     // If a case detail is open and its eval was just restored, refresh the eval panel
@@ -12543,7 +12547,7 @@ function _mcdShowCountrySelector() {
 
 function _mcdSelectCountry(code, name) {
   _mcdCountry = { code: code, name: name, flag: (MCD_COUNTRIES.find(function(c){ return c.code===code; })||{}).flag||'' };
-  _mcdRunAnalysis();
+  _mcdRunAnalysis().catch(function(e){ _mcdShowError('Analysis error: '+e.message); });
 }
 
 async function _mcdRunAnalysis() {
