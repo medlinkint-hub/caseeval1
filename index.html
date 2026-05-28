@@ -2017,7 +2017,7 @@ async function runEval(caseId) {
     +((liveVals.policyStart||c.policyStart)&&(liveVals.policyEnd||c.policyEnd)?'POLICY PERIOD: '+(liveVals.policyStart||c.policyStart)+' to '+(liveVals.policyEnd||c.policyEnd)+nl:'')
     +(liveVals.deductible||c.deductible?'DEDUCTIBLE: EUR '+(liveVals.deductible||c.deductible)+nl:'')
     +(liveVals.copayment||c.copayment?'CO-PAYMENT: '+(liveVals.copayment||c.copayment)+'%'+nl:'')
-    +(liveVals.diagnosis||c.diagnosis?'PRIMARY DIAGNOSIS: '+(liveVals.diagnosis||c.diagnosis)+nl:'')+'AMOUNT CLAIMED: '+(typeof buildAmountString==='function'?buildAmountString(c):(claimed&&c.currency&&c.currency!=='EUR'?c.currency+' '+claimed+' (≈ EUR '+toEUR(parseFloat(claimed||0),c.currency).toFixed(2)+')':('EUR '+(claimed||'Not provided'))))+nl+nl+'DESCRIPTION:'+nl+desc+nl+nl+(function(){var inv=buildInvoiceBreakdown(caseId);return inv?inv+nl:'';})()+'ICD CODES: '+(c.icdCodes&&c.icdCodes.length?c.icdCodes.join(', '):'not specified')+nl+'PA NUMBER: '+(liveVals.paNumber||c.paNumber||'none')+' STATUS: '+(liveVals.paStatus||c.paStatus||'not set')+nl+'PA PROCEDURE: '+(c.paProcedure||'not specified')+nl+'PA TREATING DOCTOR: '+(c.paTreatingDoctor||'not specified')+nl+'PA HOSPITAL: '+(c.paHospital||'not specified')+nl+'PA EST. COST: EUR '+(c.paEstCost||'not stated')+nl+(c.preexisting_conditions||c.preexistingConditions?'PRE-EXISTING (from documents): '+(c.preexisting_conditions||c.preexistingConditions||'')+nl:'')+(c.preexistingConditions?'PRE-EXISTING CONDITIONS: '+c.preexistingConditions+nl:'')+(parseFloat(c.reserve||0)>0?'CASE RESERVE: EUR '+c.reserve+nl:'')+nl+(function(){ var lang=localStorage.getItem('mp_eval_lang')||'auto'; if(lang==='el') return 'INSTRUCTION: Write the ENTIRE evaluation in GREEK (Ελληνικά).\n'; if(lang==='en') return 'INSTRUCTION: Write the ENTIRE evaluation in ENGLISH.\n'; return 'INSTRUCTION: Write in ENGLISH by default. Only write in Greek if the policy wording above is in Greek.\n'; })()+'EVALUATION INSTRUCTIONS:\n'
+    +(liveVals.diagnosis||c.diagnosis?'PRIMARY DIAGNOSIS: '+(liveVals.diagnosis||c.diagnosis)+nl:'')+'AMOUNT CLAIMED: '+(typeof buildAmountString==='function'?buildAmountString(c):(claimed&&c.currency&&c.currency!=='EUR'?c.currency+' '+claimed+' (≈ EUR '+toEUR(parseFloat(claimed||0),c.currency).toFixed(2)+')':('EUR '+(claimed||'Not provided'))))+nl+(_filesForCaseId===caseId&&FILES.length?'NOTE: Medical documents are attached to this message. If those documents show amounts in a currency different from what is stated above (e.g. invoices in THB, USD, etc.), use the currency and amounts as shown in the actual documents — the field value may reflect a manual entry error.\n':'')+nl+'DESCRIPTION:'+nl+desc+nl+nl+(function(){var inv=buildInvoiceBreakdown(caseId);return inv?inv+nl:'';})()+'ICD CODES: '+(c.icdCodes&&c.icdCodes.length?c.icdCodes.join(', '):'not specified')+nl+'PA NUMBER: '+(liveVals.paNumber||c.paNumber||'none')+' STATUS: '+(liveVals.paStatus||c.paStatus||'not set')+nl+'PA PROCEDURE: '+(c.paProcedure||'not specified')+nl+'PA TREATING DOCTOR: '+(c.paTreatingDoctor||'not specified')+nl+'PA HOSPITAL: '+(c.paHospital||'not specified')+nl+'PA EST. COST: EUR '+(c.paEstCost||'not stated')+nl+(c.preexisting_conditions||c.preexistingConditions?'PRE-EXISTING (from documents): '+(c.preexisting_conditions||c.preexistingConditions||'')+nl:'')+(c.preexistingConditions?'PRE-EXISTING CONDITIONS: '+c.preexistingConditions+nl:'')+(parseFloat(c.reserve||0)>0?'CASE RESERVE: EUR '+c.reserve+nl:'')+nl+(function(){ var lang=localStorage.getItem('mp_eval_lang')||'auto'; if(lang==='el') return 'INSTRUCTION: Write the ENTIRE evaluation in GREEK (Ελληνικά).\n'; if(lang==='en') return 'INSTRUCTION: Write the ENTIRE evaluation in ENGLISH.\n'; return 'INSTRUCTION: Write in ENGLISH by default. Only write in Greek if the policy wording above is in Greek.\n'; })()+'EVALUATION INSTRUCTIONS:\n'
     +'You are evaluating case '+( c.caseNum||'-')+' for patient '+(patient||'unknown')+'.\n'
     +'Provide a DEFINITIVE and FINAL evaluation. This evaluation cannot be changed later.\n'
     +'Base your decision ONLY on the facts provided above and the policy wording.\n'
@@ -4153,7 +4153,7 @@ function renderCD(c) {
   html += '<div id="invExtStatus" style="display:none;margin-bottom:10px"></div>';
   html += '<div id="invExtResults" style="margin-bottom:10px"></div>';
   html += '<div class="g2">';
-  html += '<div class="fg"><label>Amount Claimed (€)</label><input type="number" id="f_ac" value="'+esc(c.amountClaimed||'')+'" placeholder="0.00"></div>';
+  html += '<div class="fg"><label>Amount Claimed (€)</label><input type="number" id="f_ac" value="'+esc(c.amountClaimed||'')+'" placeholder="0.00">'+(c.amountClaimedOriginal && c.amountClaimedCurrency && c.amountClaimedCurrency!=='EUR' ? '<div style="font-size:11px;color:#e67e22;margin-top:3px">&#128196; Doc shows: '+esc(c.amountClaimedOriginal)+'</div>' : '')+'</div>';
   html += '<div class="fg"><label>Amount Approved (€)</label><input type="number" id="f_aa" value="'+esc(c.amountApproved||'')+'" placeholder="0.00"></div>';
   html += '<div class="fg"><label>Currency</label><select id="f_cu">';
   ['EUR','USD','GBP','CHF','AED','SAR','EGP','TRY'].forEach(cur => { html += '<option'+(c.currency===cur?' selected':'')+'>'+cur+'</option>'; });
@@ -6893,26 +6893,40 @@ function fmtAmt(amount, cur) {
 }
 
 function buildAmountString(caseObj) {
-  // Always returns EUR amount for AI eval prompt
   var invs = getInvoices(caseObj.id);
 
   if(invs && invs.length) {
-    var totalEUR = 0;
-    var hasData = false;
+    var totalEUR = 0, origTotals = {}, hasData = false;
     invs.forEach(function(inv){
       var cur = ((inv.data&&inv.data.currency)||inv.cur||'EUR').toUpperCase();
       var amt = parseFloat((inv.data&&inv.data.total)||inv.rawTotal||0);
-      if(amt > 0) { totalEUR += toEUR(amt, cur); hasData = true; }
+      if(amt > 0) {
+        totalEUR += toEUR(amt, cur);
+        origTotals[cur] = (origTotals[cur]||0) + amt;
+        hasData = true;
+      }
     });
-    if(hasData) return 'EUR ' + totalEUR.toLocaleString('en',{minimumFractionDigits:2,maximumFractionDigits:2});
+    if(hasData) {
+      var eurStr = 'EUR ' + totalEUR.toLocaleString('en',{minimumFractionDigits:2,maximumFractionDigits:2});
+      var nonEUR = Object.keys(origTotals).filter(function(c){ return c !== 'EUR'; });
+      if(nonEUR.length === 1) {
+        var oc = nonEUR[0];
+        return oc + ' ' + origTotals[oc].toLocaleString('en',{minimumFractionDigits:2,maximumFractionDigits:2}) + ' (≈ ' + eurStr + ')';
+      }
+      return eurStr;
+    }
   }
 
-  // Fall back to case fields — amountClaimed is stored in EUR
+  // Fall back to case fields
   var amt = parseFloat(caseObj.amountClaimedEUR||caseObj.amountClaimed||0);
-  var cur = (caseObj.currency||'EUR').toUpperCase();
   if(amt <= 0) return 'Not provided';
-  var eurAmt = cur === 'EUR' ? amt : toEUR(amt, cur);
-  return 'EUR ' + eurAmt.toLocaleString('en',{minimumFractionDigits:2,maximumFractionDigits:2});
+  var origCur = (caseObj.amountClaimedCurrency||caseObj.currency||'EUR').toUpperCase();
+  var eurAmt = origCur === 'EUR' ? amt : toEUR(amt, origCur);
+  var eurStr = 'EUR ' + eurAmt.toLocaleString('en',{minimumFractionDigits:2,maximumFractionDigits:2});
+  if(origCur !== 'EUR' && caseObj.amountClaimedOriginal) {
+    return caseObj.amountClaimedOriginal + ' (≈ ' + eurStr + ')';
+  }
+  return eurStr;
 }
 
 
