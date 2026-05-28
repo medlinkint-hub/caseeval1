@@ -2124,11 +2124,16 @@ async function runEval(caseId) {
   var mandatoryEnd = '\n\n=== MANDATORY FINAL LINE ===\n'
     + 'Your response MUST end with one of these lines on its own line:\n'
     + 'DECISION: DECLINED\n'
-    + 'DECISION: APPROVED\n'  
+    + 'DECISION: APPROVED\n'
     + 'DECISION: PARTIALLY APPROVED\n'
     + 'DECISION: PENDING INFORMATION\n'
     + 'If you are running low on space, skip sections 8-11 and go directly to section 12. '
-    + 'DO NOT end your response without a DECISION: line.';
+    + 'DO NOT end your response without a DECISION: line.\n\n'
+    + 'FIELD CORRECTIONS: If you detect that any case header field contains a data entry error '
+    + '(e.g. the amount field says EUR X but the actual documents show a different currency/amount), '
+    + 'append a machine-readable corrections block ON ITS OWN LINE immediately after the DECISION line:\n'
+    + '<corrections>{"amountClaimed":"1867.00","amountClaimedOriginal":"THB 70000","amountClaimedCurrency":"THB"}</corrections>\n'
+    + 'Only include fields that need correction. Omit this block entirely if no corrections are needed.';
   // ── PSEUDONYMISATION: strip patient identifiers before sending to Anthropic ──
   pseudoReset(); // fresh map per evaluation
   var txtPseudo = pseudonymise(docManifest + txt); // docManifest prepended so filenames also get pseudonymised
@@ -2159,7 +2164,8 @@ async function runEval(caseId) {
       (chunk, full) => {
         fullResult = full;
         clearInterval(iv);
-        if(streamEl) streamEl.textContent = full;
+        // Strip machine-readable corrections block before streaming display
+        if(streamEl) streamEl.textContent = full.replace(/<corrections>[^<]*<\/corrections>/gi, '').trim();
         if(window._currentCaseId === caseId) setEvSt('run', 'Writing decision...');
       }
     );
@@ -2249,12 +2255,35 @@ async function runEval(caseId) {
       if(_am) { var _av = parseFloat(_am[1].replace(/,/g,'')); if(_av > 0) _approvedFromEval = _av.toFixed(2); }
     }
 
+    // Parse field corrections block from eval response and auto-correct case data
+    var _fieldCorrections = null;
+    var _corrMatch = finalResult.match(/<corrections>\s*(\{[^}]+\})\s*<\/corrections>/i);
+    if(_corrMatch) {
+      try {
+        _fieldCorrections = JSON.parse(_corrMatch[1]);
+        // Strip corrections block from displayed eval text
+        finalResult = finalResult.replace(/<corrections>[^<]*<\/corrections>/gi, '').trim();
+        console.log('[runEval] Field corrections detected:', _fieldCorrections);
+      } catch(e) { console.warn('[runEval] Could not parse corrections block:', e.message); }
+    }
+
     var _evalSave = {eval: evalHeader + finalResult, status: finalStatus,
       lastDecision: savedDecision, evalHistory: evalHist,
       pseudoMap: pseudoMapSnapshot || {}
     };
     if(_approvedFromEval) _evalSave.amountApproved = _approvedFromEval;
+    if(_fieldCorrections) {
+      // Apply only recognised safe fields — never overwrite case ID or patient name
+      var _safeFields = ['amountClaimed','amountClaimedOriginal','amountClaimedCurrency','currency','dol','country'];
+      _safeFields.forEach(function(f){ if(_fieldCorrections[f] !== undefined) _evalSave[f] = _fieldCorrections[f]; });
+    }
     updC(caseId, _evalSave);
+    if(_fieldCorrections && _fieldCorrections.amountClaimed) {
+      // Update DOM amount field and show a toast
+      var _acEl = G('f_ac'); if(_acEl) _acEl.value = _fieldCorrections.amountClaimed;
+      var _origLabel = _fieldCorrections.amountClaimedOriginal || '';
+      toast('💱 Amount corrected: ' + (_origLabel || _fieldCorrections.amountClaimed + ' EUR') + ' (auto-detected from documents)', 6000);
+    }
     addTL(caseId, 'AI evaluation completed — ' + savedDecision);
     // Show verdict toast
     var verdictColors = {declined:'#e8231a', approved:'#16a34a', partial:'#f59e0b', reviewing:'#1a2a72'};
