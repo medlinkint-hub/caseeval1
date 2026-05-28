@@ -1988,7 +1988,8 @@ async function runEval(caseId) {
     policyEnd: liveVals.policyEnd||c.policyEnd||''
   });
 
-  const txt = 'CASE: '+(c.caseNum||'-')+nl+'TYPE: '+(c.type==='medclaim'?'MEDICAL CLAIM':'NON-MEDICAL CLAIM')+nl+'PATIENT: '+patient+nl
+  const txt = 'IMPORTANT INSTRUCTION — MANUAL DATA ENTRY: All fields in the CASE DATA below were manually entered or confirmed by the TPA handler. These values are authoritative and accurate. DO NOT mark any field as "NOT PROVIDED IN DOCUMENTS" or "not visible in documents" if it is present in the CASE DATA — only flag a field as missing if it explicitly shows "Not provided" or "not specified". Manually entered dates, amounts, and policy details must be accepted at face value without requiring document confirmation.\n\n'
+    +'CASE: '+(c.caseNum||'-')+nl+'TYPE: '+(c.type==='medclaim'?'MEDICAL CLAIM':'NON-MEDICAL CLAIM')+nl+'PATIENT: '+patient+nl
     +'REF: '+(liveVals.ref||c.ref||'-')+nl
     +'INSURANCE TYPE: '+(liveVals.insuranceType||c.insuranceType||'not specified')+nl
     +'POLICY SUBTYPE: '+(c.policySubType==='annual'?'ANNUAL MULTI-TRIP POLICY':'SINGLE TRIP POLICY')+nl
@@ -2008,13 +2009,13 @@ async function runEval(caseId) {
     })():'')
     +'ADMISSION TYPE: '+(liveVals.admissionType||c.admissionType||'not specified')+nl
     +'AREA OF COVERAGE: '+(liveVals.coverageArea||c.coverageArea||'not specified')+nl
-    +'DATE OF LOSS: '+dol+nl
-    +(liveVals.admissionDate||c.admissionDate?'DATE OF ADMISSION: '+(liveVals.admissionDate||c.admissionDate)+nl:'')
-    +(liveVals.dischargeDate||c.dischargeDate?'DATE OF DISCHARGE: '+(liveVals.dischargeDate||c.dischargeDate)+nl:'')
+    +'DATE OF LOSS: '+(dol!=='Not provided'?dol+' (manually entered)':dol)+nl
+    +(liveVals.admissionDate||c.admissionDate?'DATE OF ADMISSION: '+(liveVals.admissionDate||c.admissionDate)+' (manually entered)'+nl:'')
+    +(liveVals.dischargeDate||c.dischargeDate?'DATE OF DISCHARGE: '+(liveVals.dischargeDate||c.dischargeDate)+' (manually entered)'+nl:'')
     +'COUNTRY OF TREATMENT: '+country+nl
     +(liveVals.countryOfResidence||c.countryOfResidence?'COUNTRY OF RESIDENCE: '+(liveVals.countryOfResidence||c.countryOfResidence||'')+nl:'')+'INSURER: '+insurer+nl
-    +(liveVals.policyNumber||c.policyNumber?'POLICY NUMBER: '+(liveVals.policyNumber||c.policyNumber)+nl:'')
-    +((liveVals.policyStart||c.policyStart)&&(liveVals.policyEnd||c.policyEnd)?'POLICY PERIOD: '+(liveVals.policyStart||c.policyStart)+' to '+(liveVals.policyEnd||c.policyEnd)+nl:'')
+    +(liveVals.policyNumber||c.policyNumber?'POLICY NUMBER: '+(liveVals.policyNumber||c.policyNumber)+' (manually entered)'+nl:'')
+    +((liveVals.policyStart||c.policyStart)&&(liveVals.policyEnd||c.policyEnd)?'POLICY PERIOD: '+(liveVals.policyStart||c.policyStart)+' to '+(liveVals.policyEnd||c.policyEnd)+' (manually entered)'+nl:'')
     +(liveVals.deductible||c.deductible?'DEDUCTIBLE: EUR '+(liveVals.deductible||c.deductible)+nl:'')
     +(liveVals.copayment||c.copayment?'CO-PAYMENT: '+(liveVals.copayment||c.copayment)+'%'+nl:'')
     +(liveVals.diagnosis||c.diagnosis?'PRIMARY DIAGNOSIS: '+(liveVals.diagnosis||c.diagnosis)+nl:'')+'AMOUNT CLAIMED: '+(typeof buildAmountString==='function'?buildAmountString(c):(claimed&&c.currency&&c.currency!=='EUR'?c.currency+' '+claimed+' (≈ EUR '+toEUR(parseFloat(claimed||0),c.currency).toFixed(2)+')':('EUR '+(claimed||'Not provided'))))+nl+(_filesForCaseId===caseId&&FILES.length?'NOTE: Medical documents are attached to this message. If those documents show amounts in a currency different from what is stated above (e.g. invoices in THB, USD, etc.), use the currency and amounts as shown in the actual documents — the field value may reflect a manual entry error.\n':'')+nl+'DESCRIPTION:'+nl+desc+nl+nl+(function(){var inv=buildInvoiceBreakdown(caseId);return inv?inv+nl:'';})()+'ICD CODES: '+(c.icdCodes&&c.icdCodes.length?c.icdCodes.join(', '):'not specified')+nl+'PA NUMBER: '+(liveVals.paNumber||c.paNumber||'none')+' STATUS: '+(liveVals.paStatus||c.paStatus||'not set')+nl+'PA PROCEDURE: '+(c.paProcedure||'not specified')+nl+'PA TREATING DOCTOR: '+(c.paTreatingDoctor||'not specified')+nl+'PA HOSPITAL: '+(c.paHospital||'not specified')+nl+'PA EST. COST: EUR '+(c.paEstCost||'not stated')+nl+(c.preexisting_conditions||c.preexistingConditions?'PRE-EXISTING (from documents): '+(c.preexisting_conditions||c.preexistingConditions||'')+nl:'')+(c.preexistingConditions?'PRE-EXISTING CONDITIONS: '+c.preexistingConditions+nl:'')+(parseFloat(c.reserve||0)>0?'CASE RESERVE: EUR '+c.reserve+nl:'')+nl+(function(){ var lang=localStorage.getItem('mp_eval_lang')||'auto'; if(lang==='el') return 'INSTRUCTION: Write the ENTIRE evaluation in GREEK (Ελληνικά).\n'; if(lang==='en') return 'INSTRUCTION: Write the ENTIRE evaluation in ENGLISH.\n'; return 'INSTRUCTION: Write in ENGLISH by default. Only write in Greek if the policy wording above is in Greek.\n'; })()+'EVALUATION INSTRUCTIONS:\n'
