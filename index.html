@@ -6495,11 +6495,47 @@ function exportCase(id) {
 }
 
 function deleteCase(id) {
-  if(!confirm('Delete this case? Cannot be undone.')) return;
-  CASES = CASES.filter(c=>c.id!==id); save(); updBadges();
+  if(!confirm('Delete this case? Cannot be undone.\n\nAll files, invoices, and evaluation data will be permanently removed.')) return;
+
+  // 1. Remove from memory and localStorage CASES array
+  var deletedCase = CASES.find(function(c){ return c.id===id; }) || {};
+  CASES = CASES.filter(function(c){ return c.id!==id; });
+  save();
+
+  // 2. Delete from Firebase
   deleteCaseFromFirestore(id);
+
+  // 3. Delete invoice data from localStorage
+  try { localStorage.removeItem('invs_'+id); } catch(e){}
+
+  // 4. Delete legacy file keys stored directly in localStorage (fd_<id>_*)
+  try {
+    var _lsKeys = [];
+    for(var _li=0; _li<localStorage.length; _li++) {
+      var _lk = localStorage.key(_li);
+      if(_lk && (_lk.startsWith('fd_'+id) || _lk.startsWith('fdtmp_'+id))) _lsKeys.push(_lk);
+    }
+    _lsKeys.forEach(function(k){ localStorage.removeItem(k); });
+  } catch(e){}
+
+  // 5. Delete medical coding data if cached
+  try { localStorage.removeItem('mcd_'+id); } catch(e){}
+
+  // 6. Delete files from IndexedDB — try all known key patterns
+  var _idbKeysToDelete = [
+    deletedCase._idbKey,
+    'casefiles_'+id
+  ].filter(Boolean);
+  _idbKeysToDelete.forEach(function(k){
+    idbDelete(k).catch(function(e){ console.warn('[deleteCase] IDB delete failed for key:', k, e); });
+  });
+
+  // 7. Clear FILES if they belonged to this case
+  if(_filesForCaseId === id) { FILES = []; _filesForCaseId = null; }
+
+  updBadges();
   renderCases();
-  toast('Case deleted');
+  toast('✅ Case permanently deleted — storage freed');
 }
 
 // ══════════════════════════════════════════════
