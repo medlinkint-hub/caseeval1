@@ -1541,15 +1541,24 @@ async function autoExtractFinance(caseId, files) {
 
   saveInvoices(caseId, extracted);
   const total = extracted.reduce((s,e)=>s+e.totalEUR, 0);
-  // Update amount claimed if not already set
   const c = getC(caseId);
   if(!c) return;
-  if(!c.amountClaimed || parseFloat(c.amountClaimed)===0) {
-    updC(caseId, {amountClaimed: total.toFixed(2)});
-    // Only update the DOM field if still viewing this case
-    if(window._currentCaseId === caseId) {
-      const el = G('f_ac'); if(el) el.value = total.toFixed(2);
-    }
+  // Determine original currency from extracted documents
+  var _extractedCurrencies = extracted.map(function(e){ return e.cur; }).filter(function(cu){ return cu && cu !== '?' && cu !== 'null'; });
+  var _dominantCur = _extractedCurrencies.length ? _extractedCurrencies[0] : 'EUR';
+  var _origTotal = extracted.reduce(function(s,e){ return s+e.rawTotal; }, 0);
+  // Always update amountClaimed with the EUR-converted amount from documents.
+  // This corrects manual entry errors (e.g. typing "70000 EUR" when doc shows "70000 THB").
+  var _claimUpdates = {amountClaimed: total.toFixed(2)};
+  if(_dominantCur !== 'EUR') {
+    // Store original currency amount for reference and evaluation context
+    _claimUpdates.amountClaimedOriginal = _dominantCur + ' ' + Math.round(_origTotal).toLocaleString();
+    _claimUpdates.amountClaimedCurrency = _dominantCur;
+  }
+  updC(caseId, _claimUpdates);
+  // Update the DOM field if still viewing this case
+  if(window._currentCaseId === caseId) {
+    const el = G('f_ac'); if(el) el.value = total.toFixed(2);
   }
   // Show results in the financial extract area (only if still on this case)
   if(window._currentCaseId === caseId) {
@@ -1778,26 +1787,17 @@ async function runEval(caseId) {
     return false;
   };
 
-  // PRIORITY 1: Manually selected policy — always respected
-  var manualPolicyName = c.selectedPolicy||'';
-  if(manualPolicyName) {
-    try {
-      var mpLib = JSON.parse(localStorage.getItem('mp_policies')||'[]');
-      var mpMatch = mpLib.find(function(p){ return p.name===manualPolicyName; });
-      if(mpMatch && mpMatch.wording) {
-        policyWording = mpMatch.wording;
-        policySource = mpMatch.name + ' ✓ manually selected';
-        console.log('[runEval] Manual policy:', policySource);
-      }
-    } catch(mpE) {}
-  }
-
-  // PRIORITY 2: Match from UPLOADED FILES — highest confidence because user uploaded the actual policy
-  if(!policyWording && FILES.length > 0) {
+  // PRIORITY 1: UPLOADED POLICY FILES — always highest priority.
+  // If the user uploaded the actual policy document, use it exclusively.
+  // This overrides any manually selected or auto-matched library policy.
+  var _uploadedPolicyFile = null;
+  if(FILES.length > 0) {
     var policyKeywords = /policy|wording|insurance|terms|conditions|coverage|plan|certificate|benefits/i;
     var policyFiles = FILES.filter(function(f){ return f.data && policyKeywords.test(f.name||''); });
     if(!policyFiles.length) {
-      policyFiles = FILES.filter(function(f){ return f.data && ['pdf','doc','txt','rtf','html'].indexOf(f.ext)!==-1; });
+      // Broader fallback: any PDF/doc that isn't clearly a medical/invoice file
+      var medicalRx = /invoice|bill|receipt|lab|report|discharge|medical|referral|prescription|xray|scan|result/i;
+      policyFiles = FILES.filter(function(f){ return f.data && ['pdf','doc','txt','rtf','html'].indexOf(f.ext)!==-1 && !medicalRx.test(f.name||''); });
     }
     for(var _pfi=0; _pfi<policyFiles.length && !policyWording; _pfi++) {
       try {
@@ -1806,11 +1806,12 @@ async function runEval(caseId) {
         if(!_blocks || !_blocks.length) continue;
         var _extractedText = _blocks.filter(function(b){ return b.type==='text'; }).map(function(b){ return b.text||''; }).join('\n').trim();
         if(_extractedText.length < 200) continue;
+        // Try to match against policy library first (gives structured wording)
         var _polLib2 = JSON.parse(localStorage.getItem('mp_policies')||'[]');
         var _matched = null;
         if(_polLib2.length) {
           _matched = _polLib2.find(function(p){
-            if(_productConflict(p.name, p.wording)) return false; // skip wrong product type
+            if(_productConflict(p.name, p.wording)) return false;
             var pn = (p.name||'').toLowerCase();
             var et = _extractedText.toLowerCase();
             var pWords = pn.split(/\s+/).filter(function(w){ return w.length>=3; });
@@ -1821,21 +1822,35 @@ async function runEval(caseId) {
         if(_matched && _matched.wording) {
           policyWording = _matched.wording;
           policySource = _matched.name + ' ✓ matched from uploaded document';
-          // NOTE: Do NOT save as selectedPolicy — only user-chosen selections are locked.
-          // Auto-matched policies from files are used for this run only.
-          console.log('[runEval] Policy matched from file:', _pf.name, '→', _matched.name);
-        } else if(_extractedText.length > 500 && policyKeywords.test(_extractedText) && !_productConflict('', _extractedText)) {
+          _uploadedPolicyFile = _pf.name;
+          console.log('[runEval] Policy matched from uploaded file:', _pf.name, '→', _matched.name);
+        } else if(_extractedText.length > 500 && (policyKeywords.test(_extractedText) || policyKeywords.test(_pf.name||''))) {
           policyWording = _extractedText;
           policySource = 'Uploaded: ' + _pf.name;
-          console.log('[runEval] Using extracted policy from file:', _pf.name);
+          _uploadedPolicyFile = _pf.name;
+          console.log('[runEval] Using extracted policy from uploaded file:', _pf.name);
         }
       } catch(_pfe) {
         console.warn('[runEval] Could not extract policy from file:', _pfe.message);
       }
     }
-    if(policyWording) {
-      setEvSt('run', '📄 Policy found in uploaded documents — evaluating...');
+    if(_uploadedPolicyFile) {
+      setEvSt('run', '📄 Using uploaded policy document — evaluating...');
     }
+  }
+
+  // PRIORITY 2: Manually selected/locked policy — used ONLY when no policy file was uploaded
+  var manualPolicyName = c.selectedPolicy||'';
+  if(!policyWording && manualPolicyName) {
+    try {
+      var mpLib = JSON.parse(localStorage.getItem('mp_policies')||'[]');
+      var mpMatch = mpLib.find(function(p){ return p.name===manualPolicyName; });
+      if(mpMatch && mpMatch.wording) {
+        policyWording = mpMatch.wording;
+        policySource = mpMatch.name + ' ✓ manually selected';
+        console.log('[runEval] Manual policy (no uploaded policy found):', policySource);
+      }
+    } catch(mpE) {}
   }
 
   // PRIORITY 3: Auto-match by insurer name from library — WITH product-type conflict check
@@ -1903,12 +1918,18 @@ async function runEval(caseId) {
   if(policyWording&&policyWording.trim()){var pw=policyWording.trim();if(pw.length>30000)pw=pw.substring(0,30000)+'\n[...]';
     // Detect if a full policy PDF is also attached as a case file — it may be more complete than the library version
     var _policyKeywordsRx = /policy|wording|insurance|terms|conditions|certificate|coverage|benefits/i;
-    var _hasUploadedPolicyFile = FILES.some(function(f){ return f.data && (_policyKeywordsRx.test(f.name||'') || f.ext==='pdf'); });
-    var _policyImportant = _hasUploadedPolicyFile
-      ? 'CRITICAL — FULL POLICY DOCUMENT ATTACHED: One or more uploaded files in this message is the complete policy document. It is the AUTHORITATIVE version and takes precedence over the library text above for ALL exclusion clauses, benefit limits, general exclusions, and specific terms. The library text may be an incomplete summary. You MUST read the attached document(s) and apply their actual wording. If the attached document contains a clause not present in the library text above, apply the attached document clause.'
-      : 'IMPORTANT: Quote specific clauses in your decision.';
+    var _hasUploadedPolicyFile = !!_uploadedPolicyFile || FILES.some(function(f){ return f.data && (_policyKeywordsRx.test(f.name||'') || f.ext==='pdf'); });
+    var _policyImportant;
+    if(_uploadedPolicyFile) {
+      // Uploaded policy — strongest instruction: ignore all other policy references
+      _policyImportant = 'CRITICAL — UPLOADED POLICY IS THE ONLY APPLICABLE POLICY: The policy text above was extracted directly from the uploaded file "'+_uploadedPolicyFile+'". This is the ONLY policy that applies to this case. DO NOT reference, mention, or apply any other insurance policy, product name, or wording from your system instructions or your training data. Evaluate EXCLUSIVELY against this uploaded policy. If a clause is not present in this document, apply IPMI market standards for that specific gap only, and state clearly that the clause was not found in the uploaded policy.';
+    } else if(_hasUploadedPolicyFile) {
+      _policyImportant = 'CRITICAL — FULL POLICY DOCUMENT ATTACHED: One or more uploaded files in this message is the complete policy document. It is the AUTHORITATIVE version and takes precedence over the library text above. Read the attached document(s) and apply their actual wording. DO NOT reference any other insurance product or policy that is not in these documents.';
+    } else {
+      _policyImportant = 'IMPORTANT: Quote specific clauses in your decision. Do not reference any other insurance product not mentioned in this policy.';
+    }
     sys='=== POLICY: '+policySource+' ==='+nl+pw+nl+'=== END POLICY ==='+nl+nl+_policyImportant+nl+nl+sys;setEvSt('run','📋 '+policySource+' policy loaded ('+Math.round(pw.length/1000)+'KB)'+(_hasUploadedPolicyFile?' + full PDF attached':'') +' — evaluating...');
-    console.log('[runEval] Policy matched:', policySource, pw.length, 'chars', _hasUploadedPolicyFile ? '(+ uploaded policy file)' : '');
+    console.log('[runEval] Policy matched:', policySource, pw.length, 'chars', _uploadedPolicyFile ? '(from uploaded file — exclusive mode)' : (_hasUploadedPolicyFile ? '(+ uploaded policy file)' : ''));
   } else if(inlinePolicyDetected) {
     // Inline policy file present — Claude will read it from msgContent attachments
     sys = '=== POLICY: '+policySource+' ===\nThe FULL policy document is attached to this message. Read ALL sections including General Exclusions carefully and quote specific clauses in your decision. The attached file is the authoritative policy — apply its actual wording including all exclusion lists.\n=== END POLICY ===\n\n' + sys;
@@ -1937,7 +1958,11 @@ async function runEval(caseId) {
   const dol = liveVals.dol || c.dol || 'Not provided';
   const country = liveVals.country || c.country || 'Not provided';
   const insurer = liveVals.insurer || c.insurer || 'Not provided';
-  const claimed = liveVals.amountClaimed || c.amountClaimed || 'Not provided';
+  const _claimedEUR = liveVals.amountClaimed || c.amountClaimed || 'Not provided';
+  // Show original currency amount if documents showed a non-EUR currency
+  const claimed = (c.amountClaimedOriginal && c.amountClaimedCurrency && c.amountClaimedCurrency !== 'EUR')
+    ? c.amountClaimedOriginal + ' (≈ EUR ' + _claimedEUR + ')'
+    : _claimedEUR;
 
   // Build deterministic case hash for consistent evaluations
   var caseDataStr = JSON.stringify({
