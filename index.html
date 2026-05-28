@@ -1988,7 +1988,11 @@ async function runEval(caseId) {
     policyEnd: liveVals.policyEnd||c.policyEnd||''
   });
 
-  const txt = 'IMPORTANT INSTRUCTION — MANUAL DATA ENTRY: All fields in the CASE DATA below were manually entered or confirmed by the TPA handler. These values are authoritative and accurate. DO NOT mark any field as "NOT PROVIDED IN DOCUMENTS" or "not visible in documents" if it is present in the CASE DATA — only flag a field as missing if it explicitly shows "Not provided" or "not specified". Manually entered dates, amounts, and policy details must be accepted at face value without requiring document confirmation.\n\n'
+  const txt = 'IMPORTANT — MANUAL DATA ENTRY RULES:\n'
+    +'1. TRUST ALL CASE DATA: Every field in the CASE DATA section below was manually entered or confirmed by the TPA handler. This includes patient name, dates, diagnosis, insurer, policy details, country, amounts, PA status, deductible, and all other fields. These values are authoritative — include and use ALL of them in your evaluation regardless of whether they appear in the attached documents.\n'
+    +'2. NEVER FLAG MANUAL DATA AS MISSING: Do NOT write "NOT PROVIDED IN DOCUMENTS", "not visible in documents", or "cannot confirm" for any field that has a value in the CASE DATA. Only flag a field as missing if it explicitly shows "Not provided" or "not specified" in the CASE DATA itself.\n'
+    +'3. FLAG CONFLICTS: If the attached documents contain information that CONTRADICTS a manually entered field (e.g. documents show a different diagnosis, different date, different insurer name, different amount, different currency), you MUST flag this discrepancy clearly with ⚠ DATA CONFLICT: [field] — Case data states [X], document states [Y]. Explain the potential impact on the claim. Then evaluate using BOTH pieces of information and state which you are relying on and why.\n'
+    +'4. COMPLEMENT — DO NOT REPLACE: Manually entered data and document data complement each other. Use all available information. A manually entered date is valid even if the uploaded document does not mention it.\n\n'
     +'CASE: '+(c.caseNum||'-')+nl+'TYPE: '+(c.type==='medclaim'?'MEDICAL CLAIM':'NON-MEDICAL CLAIM')+nl+'PATIENT: '+patient+nl
     +'REF: '+(liveVals.ref||c.ref||'-')+nl
     +'INSURANCE TYPE: '+(liveVals.insuranceType||c.insuranceType||'not specified')+nl
