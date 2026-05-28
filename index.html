@@ -1799,13 +1799,22 @@ async function runEval(caseId) {
       var medicalRx = /invoice|bill|receipt|lab|report|discharge|medical|referral|prescription|xray|scan|result/i;
       policyFiles = FILES.filter(function(f){ return f.data && ['pdf','doc','txt','rtf','html'].indexOf(f.ext)!==-1 && !medicalRx.test(f.name||''); });
     }
-    for(var _pfi=0; _pfi<policyFiles.length && !policyWording; _pfi++) {
+    for(var _pfi=0; _pfi<policyFiles.length && !policyWording && !_uploadedPolicyFile; _pfi++) {
       try {
         var _pf = policyFiles[_pfi];
         var _blocks = await readFileForAI(_pf);
         if(!_blocks || !_blocks.length) continue;
         var _extractedText = _blocks.filter(function(b){ return b.type==='text'; }).map(function(b){ return b.text||''; }).join('\n').trim();
-        if(_extractedText.length < 200) continue;
+        if(_extractedText.length < 200) {
+          // Image-based PDF — text unextractable, but file IS attached to message
+          // Mark it as the uploaded policy so we don't fall back to manual/library policy
+          if(!_uploadedPolicyFile) {
+            _uploadedPolicyFile = _pf.name;
+            policySource = 'Uploaded (inline): ' + _pf.name;
+            console.log('[runEval] Policy file found but text unextractable (image PDF) — will be read inline by Claude:', _pf.name);
+          }
+          continue;
+        }
         // Try to match against policy library first (gives structured wording)
         var _polLib2 = JSON.parse(localStorage.getItem('mp_policies')||'[]');
         var _matched = null;
@@ -1841,7 +1850,7 @@ async function runEval(caseId) {
 
   // PRIORITY 2: Manually selected/locked policy — used ONLY when no policy file was uploaded
   var manualPolicyName = c.selectedPolicy||'';
-  if(!policyWording && manualPolicyName) {
+  if(!policyWording && !_uploadedPolicyFile && manualPolicyName) {
     try {
       var mpLib = JSON.parse(localStorage.getItem('mp_policies')||'[]');
       var mpMatch = mpLib.find(function(p){ return p.name===manualPolicyName; });
@@ -1913,7 +1922,7 @@ async function runEval(caseId) {
   //   3. No inline policy file detected to be read by Claude
   // An insurer name alone is NOT enough to disable policy-absent mode —
   // without actual wording, no policy logic can be applied.
-  var policyAbsent = !policyWording && !inlinePolicyDetected;
+  var policyAbsent = !policyWording && !inlinePolicyDetected && !_uploadedPolicyFile;
 
   if(policyWording&&policyWording.trim()){var pw=policyWording.trim();if(pw.length>30000)pw=pw.substring(0,30000)+'\n[...]';
     // Detect if a full policy PDF is also attached as a case file — it may be more complete than the library version
@@ -1930,10 +1939,13 @@ async function runEval(caseId) {
     }
     sys='=== POLICY: '+policySource+' ==='+nl+pw+nl+'=== END POLICY ==='+nl+nl+_policyImportant+nl+nl+sys;setEvSt('run','📋 '+policySource+' policy loaded ('+Math.round(pw.length/1000)+'KB)'+(_hasUploadedPolicyFile?' + full PDF attached':'') +' — evaluating...');
     console.log('[runEval] Policy matched:', policySource, pw.length, 'chars', _uploadedPolicyFile ? '(from uploaded file — exclusive mode)' : (_hasUploadedPolicyFile ? '(+ uploaded policy file)' : ''));
-  } else if(inlinePolicyDetected) {
+  } else if(inlinePolicyDetected || (_uploadedPolicyFile && !policyWording)) {
     // Inline policy file present — Claude will read it from msgContent attachments
-    sys = '=== POLICY: '+policySource+' ===\nThe FULL policy document is attached to this message. Read ALL sections including General Exclusions carefully and quote specific clauses in your decision. The attached file is the authoritative policy — apply its actual wording including all exclusion lists.\n=== END POLICY ===\n\n' + sys;
-    console.log('[runEval] Inline policy file mode:', policySource);
+    // This also covers image-based PDFs where text couldn't be extracted
+    var _inlineSrc = policySource || ('Uploaded: ' + _uploadedPolicyFile);
+    sys = '=== POLICY: '+_inlineSrc+' ===\nThe FULL policy document is attached to this message (it may be an image-based PDF — use your visual reading capability to read ALL pages). Read ALL sections including General Exclusions and coverage limits carefully. Quote specific clauses in your decision. The attached file "'+(_uploadedPolicyFile||'policy document')+'" is the ONLY applicable policy — DO NOT reference, mention, or apply any other insurance policy, product name, or wording from your system instructions or training data (e.g. DCare, HCI YourLife, or any other library policy). Evaluate EXCLUSIVELY against this uploaded document.\n=== END POLICY ===\n\n' + sys;
+    setEvSt('run', '📄 Uploaded policy attached — Claude will read it directly...');
+    console.log('[runEval] Inline policy file mode:', _inlineSrc, _uploadedPolicyFile ? '(image PDF or unextractable)' : '');
   } else {
     // POLICY-ABSENT MODE — no policy from any source
     console.warn('[runEval] POLICY ABSENT for:', liveVals.insurer||c.insurer||'unknown');
