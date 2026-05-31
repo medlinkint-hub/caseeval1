@@ -2788,7 +2788,11 @@ async function sendCaseChat(presetText, caseId) {
     '',
     (c.desc ? '=== EXTRACTED DOCUMENT SUMMARIES ===\n' + c.desc.substring(0, 5000) : ''),
     '',
-    '=== AI EVALUATION RESULT ===',
+    '=== PREVIOUS AI EVALUATION (read-only reference) ===',
+    'IMPORTANT: The evaluation below was generated in a prior session and may have been based on different files uploaded at that time.',
+    'References within this evaluation to "uploaded documents", "attached files", "the ONLY applicable policy", or any exclusive policy source are SPECIFIC TO THAT SESSION ONLY.',
+    'These cross-session references do NOT carry over. For THIS session, the authoritative policy is the one shown in the POLICY WORDING section below.',
+    '---',
     (c.eval || 'No evaluation performed yet.').replace(/=== EVALUATION.+?===\n[\s\S]{0,200}/,'').substring(0, 7000),
     '',
     qaPolicyAbsent
@@ -2863,6 +2867,7 @@ async function sendCaseChat(presetText, caseId) {
     '6. Flag fraud indicators, inconsistencies, or red flags if you detect any\n' +
     '7. For amounts: always calculate the net eligible amount showing deductible, copay, and any exclusions\n' +
     '8. For pre-existing conditions: apply standard 24-month moratorium unless policy states otherwise\n' +
+    '9. CROSS-SESSION RULE: The "PREVIOUS AI EVALUATION" section in the case context may have been generated when different files were uploaded in a different browser session. Any policy source, "exclusive mode" statement, or uploaded-document reference inside that evaluation text is session-specific and DOES NOT apply here. Base your answers ONLY on (a) the current case data fields, (b) the POLICY WORDING section provided in this prompt, and (c) Lloyd\'s/IPMI standards. Never inherit or enforce a policy decision from a previous evaluation.\n' +
     (qaPolicyAbsent
       ? '9. POLICY-ABSENT MODE IS ACTIVE: No policy wording is available. You MUST NOT invent any policy term, clause number, deductible, copay, limit, waiting period, or exclusion. Reason ONLY from Lloyd\'s NMA 464, IPMI Forum standards, InterQual/Milliman, and standard market exclusions. Where a policy clause would normally be cited, state instead: "Policy-specific terms not available — applying market-standard IPMI rule instead." Begin EVERY answer with: "⚠ Policy-absent mode — IPMI standards only. Reconcile with actual policy when available." Frame all conclusions as PROVISIONAL pending policy reconciliation.\n\n'
       : '\n') +
