@@ -1791,7 +1791,7 @@ async function runEval(caseId) {
   // If the user uploaded the actual policy document, use it exclusively.
   // This overrides any manually selected or auto-matched library policy.
   var _uploadedPolicyFile = null;
-  if(FILES.length > 0) {
+  if(_filesForCaseId === caseId && FILES.length > 0) {
     var policyKeywords = /policy|wording|insurance|terms|conditions|coverage|plan|certificate|benefits/i;
     var policyFiles = FILES.filter(function(f){ return f.data && policyKeywords.test(f.name||''); });
     if(!policyFiles.length) {
@@ -1904,7 +1904,7 @@ async function runEval(caseId) {
   // (Removed separate pre-extraction API call — Claude reads PDFs/docs natively during evaluation,
   //  saving 10-20 seconds per case. Policy files are included in msgContent below.)
   var inlinePolicyDetected = false;
-  if(!policyWording && FILES.length > 0) {
+  if(!policyWording && _filesForCaseId === caseId && FILES.length > 0) {
     var policyKeywords = /policy|wording|insurance|certificate|coverage|terms|conditions|benefits|plan|schedule/i;
     var polFileCheck = FILES.filter(function(f){ return f.data && policyKeywords.test(f.name||''); });
     if(polFileCheck.length) {
@@ -2044,11 +2044,14 @@ async function runEval(caseId) {
   var MAX_TOTAL = 20 * 1024 * 1024; // 20MB total limit
 
   // Build content blocks for all file types — PARALLEL reading for speed
+  // IMPORTANT: Only attach files that belong to THIS case. If FILES were loaded
+  // for a different case in a previous session, do not attach them here.
   setEvSt('run', 'Preparing documents...');
   var _filesToRead = [];
   var _runningTotal = 0;
-  for(var _fi = 0; _fi < FILES.length; _fi++) {
-    var _ff = FILES[_fi];
+  var _evalFiles = (_filesForCaseId === caseId) ? FILES : [];
+  for(var _fi = 0; _fi < _evalFiles.length; _fi++) {
+    var _ff = _evalFiles[_fi];
     if(!_ff.data) continue;
     var _ds = _ff.data.length;
     var _isEmailFile = (_ff.ext === 'eml' || _ff.ext === 'msg');
