@@ -1787,15 +1787,44 @@ async function runEval(caseId) {
     return false;
   };
 
-  // PRIORITY 1: UPLOADED POLICY FILES — always highest priority.
-  // If the user uploaded the actual policy document, use it exclusively.
-  // This overrides any manually selected or auto-matched library policy.
+  // ── POLICY RESOLUTION — strict priority order ──
+  // 1. Manual library selection (case selectedPolicy) — ALWAYS wins if set
+  // 2. Uploaded policy file (from this case's FILES)
+  // 3. Auto-match by insurer name from library (only when 1+2 absent)
+  // 4. Global policy field (legacy mp_pol, only when 1+2 absent)
+  // Priorities 3+4 are fully blocked when a manual selection exists.
+
   var _uploadedPolicyFile = null;
-  if(_filesForCaseId === caseId && FILES.length > 0) {
+  var manualPolicyName = c.selectedPolicy||'';
+
+  // ── PRIORITY 1: Manually selected policy from library ──
+  // The TPA's explicit choice — always applied first.
+  if(manualPolicyName) {
+    try {
+      var mpLib = JSON.parse(localStorage.getItem('mp_policies')||'[]');
+      var mpMatch = mpLib.find(function(p){ return p.name===manualPolicyName; });
+      if(mpMatch && mpMatch.wording) {
+        policyWording = mpMatch.wording;
+        policySource = mpMatch.name + ' ✓ manually selected';
+        setEvSt('run', '📋 '+mpMatch.name+' loaded from library — evaluating...');
+        console.log('[runEval] PRIORITY 1 — manual library policy:', policySource);
+      } else {
+        // Policy selected but missing from library — warn, block all other sources
+        console.warn('[runEval] Selected policy "'+manualPolicyName+'" not found in library');
+        toast('⚠ Policy "'+manualPolicyName+'" not found in library. Go to Settings → Policy Library to re-add it.', 8000);
+        policySource = manualPolicyName + ' (NOT FOUND in library)';
+        // policyWording stays empty → will go to IPMI-absent mode below
+        // This is safer than silently using a wrong policy
+      }
+    } catch(mpE) { console.warn('[runEval] Library read error:', mpE.message); }
+  }
+
+  // ── PRIORITY 2: Uploaded policy file (only when no manual selection resolved) ──
+  // Used when the TPA uploaded the actual policy PDF/doc for this case.
+  if(!policyWording && !manualPolicyName && _filesForCaseId === caseId && FILES.length > 0) {
     var policyKeywords = /policy|wording|insurance|terms|conditions|coverage|plan|certificate|benefits/i;
     var policyFiles = FILES.filter(function(f){ return f.data && policyKeywords.test(f.name||''); });
     if(!policyFiles.length) {
-      // Broader fallback: any PDF/doc that isn't clearly a medical/invoice file
       var medicalRx = /invoice|bill|receipt|lab|report|discharge|medical|referral|prescription|xray|scan|result/i;
       policyFiles = FILES.filter(function(f){ return f.data && ['pdf','doc','txt','rtf','html'].indexOf(f.ext)!==-1 && !medicalRx.test(f.name||''); });
     }
@@ -1806,16 +1835,15 @@ async function runEval(caseId) {
         if(!_blocks || !_blocks.length) continue;
         var _extractedText = _blocks.filter(function(b){ return b.type==='text'; }).map(function(b){ return b.text||''; }).join('\n').trim();
         if(_extractedText.length < 200) {
-          // Image-based PDF — text unextractable, but file IS attached to message
-          // Mark it as the uploaded policy so we don't fall back to manual/library policy
+          // Image-based PDF — mark as inline, Claude will read it visually
           if(!_uploadedPolicyFile) {
             _uploadedPolicyFile = _pf.name;
             policySource = 'Uploaded (inline): ' + _pf.name;
-            console.log('[runEval] Policy file found but text unextractable (image PDF) — will be read inline by Claude:', _pf.name);
+            console.log('[runEval] PRIORITY 2 — image PDF policy, inline mode:', _pf.name);
           }
           continue;
         }
-        // Try to match against policy library first (gives structured wording)
+        // Try to cross-reference against library for structured wording
         var _polLib2 = JSON.parse(localStorage.getItem('mp_policies')||'[]');
         var _matched = null;
         if(_polLib2.length) {
@@ -1832,12 +1860,12 @@ async function runEval(caseId) {
           policyWording = _matched.wording;
           policySource = _matched.name + ' ✓ matched from uploaded document';
           _uploadedPolicyFile = _pf.name;
-          console.log('[runEval] Policy matched from uploaded file:', _pf.name, '→', _matched.name);
+          console.log('[runEval] PRIORITY 2 — uploaded file matched to library:', _pf.name, '→', _matched.name);
         } else if(_extractedText.length > 500 && (policyKeywords.test(_extractedText) || policyKeywords.test(_pf.name||''))) {
           policyWording = _extractedText;
           policySource = 'Uploaded: ' + _pf.name;
           _uploadedPolicyFile = _pf.name;
-          console.log('[runEval] Using extracted policy from uploaded file:', _pf.name);
+          console.log('[runEval] PRIORITY 2 — using extracted text from uploaded file:', _pf.name);
         }
       } catch(_pfe) {
         console.warn('[runEval] Could not extract policy from file:', _pfe.message);
@@ -1848,45 +1876,17 @@ async function runEval(caseId) {
     }
   }
 
-  // PRIORITY 2: Manually selected/locked policy — used ONLY when no policy file was uploaded
-  var manualPolicyName = c.selectedPolicy||'';
-  if(!policyWording && !_uploadedPolicyFile && manualPolicyName) {
-    try {
-      var mpLib = JSON.parse(localStorage.getItem('mp_policies')||'[]');
-      var mpMatch = mpLib.find(function(p){ return p.name===manualPolicyName; });
-      if(mpMatch && mpMatch.wording) {
-        policyWording = mpMatch.wording;
-        policySource = mpMatch.name + ' ✓ manually selected';
-        console.log('[runEval] Manual policy (no uploaded policy found):', policySource);
-      } else {
-        // Policy is locked/selected but NOT found in library — warn and block fallback
-        console.warn('[runEval] Selected policy "'+manualPolicyName+'" not found in library — blocking auto-match/global fallback to prevent wrong policy being used');
-        toast('⚠ Policy "'+manualPolicyName+'" not found in library. Re-open Settings → Policy Library to re-add it.', 8000);
-        // Mark as a named-but-missing policy so PRIORITY 3/4 cannot override
-        policySource = manualPolicyName + ' (policy not found in library)';
-        // Leave policyWording empty — will trigger policy-absent mode, which is safer
-        // than using a completely wrong policy silently
-      }
-    } catch(mpE) {}
-  }
-
-  // PRIORITY 3: Auto-match by insurer name from library — WITH product-type conflict check
-  // BLOCKED when case has a manually selected policy (even if it wasn't found) — prevents
-  // a library policy from silently overriding the TPA's explicit choice.
-  if(!policyWording && !manualPolicyName) try {
+  // ── PRIORITY 3: Auto-match by insurer name from library ──
+  // Only runs when neither a manual selection nor an uploaded file exists.
+  if(!policyWording && !manualPolicyName && !_uploadedPolicyFile) try {
     var polLib=JSON.parse(localStorage.getItem('mp_policies')||'[]');
     if(polLib.length){
       var ci=_caseInsurer;
       var match=null;
-      // Filter out policies that clearly conflict with the case product type
       var compatiblePolicies = polLib.filter(function(p){ return !_productConflict(p.name, p.wording); });
-      var searchLib = compatiblePolicies.length > 0 ? compatiblePolicies : polLib; // fallback to all if none compatible
-
-      // Step 1: Exact name match
+      var searchLib = compatiblePolicies.length > 0 ? compatiblePolicies : polLib;
       if(ci) match=searchLib.find(function(p){return (p.name||'').toLowerCase()===ci;});
-      // Step 2: Partial — insurer name in policy name or vice versa
       if(!match&&ci) match=searchLib.find(function(p){var pn=(p.name||'').toLowerCase();return pn.indexOf(ci)!==-1||ci.indexOf(pn)!==-1;});
-      // Step 3: Word-by-word — at least one word ≥4 chars must match (raised from 3 to reduce false positives)
       if(!match&&ci) {
         var ciWords=ci.split(/\s+/).filter(function(w){return w.length>=4;});
         match=searchLib.find(function(p){
@@ -1894,25 +1894,22 @@ async function runEval(caseId) {
           return ciWords.some(function(w){return pWords.some(function(pw){return pw.indexOf(w)!==-1||w.indexOf(pw)!==-1;});});
         });
       }
-      // Step 3b: Reverse word match — also 4 chars minimum
       if(!match&&ci) {
         match=searchLib.find(function(p){
           var pWords=(p.name||'').toLowerCase().split(/\s+/).filter(function(w){return w.length>=4;});
           return pWords.some(function(pw){ return ci.indexOf(pw)!==-1; });
         });
       }
-      // Step 4: Only one compatible policy — use it
       if(!match&&compatiblePolicies.length===1) match=compatiblePolicies[0];
-      if(match&&match.wording){policyWording=match.wording;policySource=match.name;}
+      if(match&&match.wording){policyWording=match.wording;policySource=match.name;console.log('[runEval] PRIORITY 3 — auto-matched:', match.name);}
     }
   } catch(e){}
 
-  // PRIORITY 4: Global policy field (legacy mp_pol localStorage key)
-  // BLOCKED when case has a manually selected policy to prevent a stale global paste
-  // from overriding the TPA's explicit case-level policy choice.
-  if(!policyWording && !manualPolicyName){
+  // ── PRIORITY 4: Global policy field (legacy mp_pol) ──
+  // Only runs when neither a manual selection nor an uploaded file exists.
+  if(!policyWording && !manualPolicyName && !_uploadedPolicyFile){
     var _globalPol = S().policy||'';
-    if(_globalPol){ policyWording=_globalPol; policySource='Global (Settings)'; }
+    if(_globalPol){ policyWording=_globalPol; policySource='Global (Settings)'; console.log('[runEval] PRIORITY 4 — global policy field used'); }
   }
 
   // PRIORITY 5: Policy document passed directly to Claude in main evaluation
