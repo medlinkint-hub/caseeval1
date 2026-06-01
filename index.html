@@ -2061,7 +2061,7 @@ async function runEval(caseId) {
   setEvSt('run', 'Preparing documents...');
   var _filesToRead = [];
   var _runningTotal = 0;
-  var _evalFiles = (_filesForCaseId === caseId) ? FILES : [];
+  var _evalFiles = (_filesForCaseId === caseId) ? FILES.filter(function(f){ return !f._isEvalReport; }) : [];
   for(var _fi = 0; _fi < _evalFiles.length; _fi++) {
     var _ff = _evalFiles[_fi];
     if(!_ff.data) continue;
