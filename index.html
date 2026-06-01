@@ -2233,6 +2233,7 @@ async function runEval(caseId) {
       + 'Time: '+new Date().toLocaleTimeString('en',{hour:'2-digit',minute:'2-digit'})+'\n'
       + 'Evaluator: '+(typeof S==='function'?S().name||'Team Member':'Team Member')+'\n'
       + 'Policy Source: '+(policyAbsent ? 'NONE — IPMI standards only' : (policySource||'matched'))+'\n'
+      + (policyWording && policyWording.length > 50 ? 'Policy Preview: '+policyWording.trim().substring(0,120).replace(/\n/g,' ')+'...\n' : '')
       + '=================\n\n';
     // Extract and save the decision verdict separately for reliability
     var savedDecision = 'UNKNOWN';
