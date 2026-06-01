@@ -1858,12 +1858,22 @@ async function runEval(caseId) {
         policyWording = mpMatch.wording;
         policySource = mpMatch.name + ' ✓ manually selected';
         console.log('[runEval] Manual policy (no uploaded policy found):', policySource);
+      } else {
+        // Policy is locked/selected but NOT found in library — warn and block fallback
+        console.warn('[runEval] Selected policy "'+manualPolicyName+'" not found in library — blocking auto-match/global fallback to prevent wrong policy being used');
+        toast('⚠ Policy "'+manualPolicyName+'" not found in library. Re-open Settings → Policy Library to re-add it.', 8000);
+        // Mark as a named-but-missing policy so PRIORITY 3/4 cannot override
+        policySource = manualPolicyName + ' (policy not found in library)';
+        // Leave policyWording empty — will trigger policy-absent mode, which is safer
+        // than using a completely wrong policy silently
       }
     } catch(mpE) {}
   }
 
   // PRIORITY 3: Auto-match by insurer name from library — WITH product-type conflict check
-  if(!policyWording) try {
+  // BLOCKED when case has a manually selected policy (even if it wasn't found) — prevents
+  // a library policy from silently overriding the TPA's explicit choice.
+  if(!policyWording && !manualPolicyName) try {
     var polLib=JSON.parse(localStorage.getItem('mp_policies')||'[]');
     if(polLib.length){
       var ci=_caseInsurer;
@@ -1897,8 +1907,13 @@ async function runEval(caseId) {
     }
   } catch(e){}
 
-  // PRIORITY 4: Global API key policy field (manual paste)
-  if(!policyWording){policyWording=S().policy||'';if(policyWording)policySource='Manual';}
+  // PRIORITY 4: Global policy field (legacy mp_pol localStorage key)
+  // BLOCKED when case has a manually selected policy to prevent a stale global paste
+  // from overriding the TPA's explicit case-level policy choice.
+  if(!policyWording && !manualPolicyName){
+    var _globalPol = S().policy||'';
+    if(_globalPol){ policyWording=_globalPol; policySource='Global (Settings)'; }
+  }
 
   // PRIORITY 5: Policy document passed directly to Claude in main evaluation
   // (Removed separate pre-extraction API call — Claude reads PDFs/docs natively during evaluation,
@@ -6048,7 +6063,19 @@ function renderSet() {
   html+='<input type="password" id="s_k" value="'+esc(s.key)+'" placeholder="sk-ant-api03-...">';
   html+='<span style="font-size:11px;color:var(--tx3);margin-top:4px;display:block">Stored only in your browser.</span></div>';
   html+='<div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn bp" onclick="saveSet()">Save Settings</button><button class="btn bs" id="testBtn" onclick="testAPI()">Test API Connection</button></div>';
-  html+='<div id="testResult" style="display:none;margin-top:10px"></div></div>';
+  html+='<div id="testResult" style="display:none;margin-top:10px"></div>';
+  // ── Global policy warning ──
+  var _gPol = localStorage.getItem('mp_pol')||'';
+  if(_gPol && _gPol.length > 50) {
+    var _gPolWords = _gPol.trim().split(/\s+/).length;
+    html += '<div style="margin-top:14px;padding:12px 14px;background:#fef3c7;border:1.5px solid #f59e0b;border-radius:8px;display:flex;align-items:flex-start;gap:10px">';
+    html += '<span style="font-size:18px;flex-shrink:0">⚠️</span>';
+    html += '<div style="flex:1"><div style="font-size:12px;font-weight:700;color:#92400e;margin-bottom:3px">Global Fallback Policy Active ('+_gPolWords.toLocaleString()+' words)</div>';
+    html += '<div style="font-size:11px;color:#92400e;margin-bottom:8px">A policy is saved in the global field and will be used as a fallback for cases that have no selected policy. This may cause the WRONG policy to be used. If you only use the Policy Library, clear this field.</div>';
+    html += '<button class="btn bd" style="font-size:11px;padding:4px 10px" onclick="localStorage.removeItem(\'mp_pol\');toast(\'✅ Global policy cleared — cases will now use only the Policy Library\');renderSet()">🗑 Clear Global Policy</button>';
+    html += '</div></div>';
+  }
+  html += '</div>';
   html+='<div id="policy_lib_placeholder"><div class="card"><div class="ct">Policy Library</div><div style="padding:10px;color:var(--tx3)">Loading...</div></div></div>';
   html+='<div class="card"><div class="ct">Team Sync &mdash; GitHub Gist</div>';
   html+='<div class="ib" style="margin-bottom:12px"><p>Share cases with your team. Get token at <a href="https://github.com/settings/tokens/new?scopes=gist&description=CaseEval" target="_blank" style="color:var(--navy);font-weight:600">github.com/settings/tokens</a> &rarr; check <b>gist</b> scope.</p></div>';
