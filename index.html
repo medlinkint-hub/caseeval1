@@ -6600,10 +6600,11 @@ function deleteCase(id) {
   // 5. Delete medical coding data if cached
   try { localStorage.removeItem('mcd_'+id); } catch(e){}
 
-  // 6. Delete files from IndexedDB — try all known key patterns
+  // 6. Delete files from IndexedDB — try all known key patterns including legacy
   var _idbKeysToDelete = [
     deletedCase._idbKey,
-    'casefiles_'+id
+    'casefiles_'+id,
+    'hw_idb_'+id
   ].filter(Boolean);
   _idbKeysToDelete.forEach(function(k){
     idbDelete(k).catch(function(e){ console.warn('[deleteCase] IDB delete failed for key:', k, e); });
@@ -6611,6 +6612,12 @@ function deleteCase(id) {
 
   // 7. Clear FILES if they belonged to this case
   if(_filesForCaseId === id) { FILES = []; _filesForCaseId = null; }
+
+  // 8. Clear current case context if the deleted case was open
+  if(window._currentCaseId === id) {
+    window._currentCaseId = null;
+    if(typeof CURID !== 'undefined') { try { window.CURID = null; } catch(e){} }
+  }
 
   updBadges();
   renderCases();
@@ -7253,8 +7260,18 @@ function syncCaseToFirestore(caseObj) {
 // Delete a case from Firebase
 function deleteCaseFromFirestore(caseId) {
   if(!FB_READY || !FB_DB || !caseId) return;
-  FB_DB.collection(FB_COLLECTION).doc(caseId).delete()
-    .catch(function(e){ console.warn('[Firebase] Delete failed:', e.message); });
+  var docRef = FB_DB.collection(FB_COLLECTION).doc(caseId);
+
+  // Delete subcollections first (Firestore does not cascade-delete subcollections)
+  var subcollections = ['provider_verification', 'medical_coding'];
+  subcollections.forEach(function(sub) {
+    docRef.collection(sub).get().then(function(snap) {
+      snap.forEach(function(d) { d.ref.delete().catch(function(){}); });
+    }).catch(function(){});
+  });
+
+  // Delete the case document itself
+  docRef.delete().catch(function(e){ console.warn('[Firebase] Delete failed:', e.message); });
 }
 
 // Push all policies to Firebase
