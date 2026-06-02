@@ -593,7 +593,8 @@ var save = function() {
   const lean = CASES.map(c => ({
     ...c,
     filesData: (c.filesData||[]).map(f => ({
-      name:f.name, size:f.size, type:f.type, ext:f.ext, _key:f._key||null
+      name:f.name, size:f.size, type:f.type, ext:f.ext, _key:f._key||null,
+      ...(f._isEvalReport ? {_isEvalReport:true, _decision:f._decision||'', _evalDate:f._evalDate||''} : {})
     })),
     eval: c.eval ? c.eval.substring(0,30000)+(c.eval.length>30000?'\n[...]':'') : '',
     desc: (c.desc||'').substring(0,2000),
@@ -672,7 +673,8 @@ var updC = function(id,o) {
     // Strip base64 data from any filesData in the update
     if(o.filesData) {
       o = {...o, filesData: o.filesData.map(f => ({
-        name:f.name, size:f.size, type:f.type, ext:f.ext, _key:f._key||null
+        name:f.name, size:f.size, type:f.type, ext:f.ext, _key:f._key||null,
+        ...(f._isEvalReport ? {_isEvalReport:true, _decision:f._decision||'', _evalDate:f._evalDate||''} : {})
       }))};
     }
     Object.assign(CASES[i], o);
@@ -1796,12 +1798,15 @@ async function runEval(caseId) {
 
   var _uploadedPolicyFile = null;
   var manualPolicyName = c.selectedPolicy||'';
+  // Cache policy library once — used by PRIORITY 1, 2, and 3 to avoid redundant reads
+  var _cachedPolicyLib = [];
+  try { _cachedPolicyLib = JSON.parse(localStorage.getItem('mp_policies')||'[]'); } catch(e){}
 
   // ── PRIORITY 1: Manually selected policy from library ──
   // The TPA's explicit choice — always applied first.
   if(manualPolicyName) {
     try {
-      var mpLib = JSON.parse(localStorage.getItem('mp_policies')||'[]');
+      var mpLib = _cachedPolicyLib;
       var mpMatch = mpLib.find(function(p){ return p.name===manualPolicyName; });
       if(mpMatch && mpMatch.wording) {
         policyWording = mpMatch.wording;
@@ -1844,7 +1849,7 @@ async function runEval(caseId) {
           continue;
         }
         // Try to cross-reference against library for structured wording
-        var _polLib2 = JSON.parse(localStorage.getItem('mp_policies')||'[]');
+        var _polLib2 = _cachedPolicyLib;
         var _matched = null;
         if(_polLib2.length) {
           _matched = _polLib2.find(function(p){
@@ -1879,7 +1884,7 @@ async function runEval(caseId) {
   // ── PRIORITY 3: Auto-match by insurer name from library ──
   // Only runs when neither a manual selection nor an uploaded file exists.
   if(!policyWording && !manualPolicyName && !_uploadedPolicyFile) try {
-    var polLib=JSON.parse(localStorage.getItem('mp_policies')||'[]');
+    var polLib=_cachedPolicyLib;
     if(polLib.length){
       var ci=_caseInsurer;
       var match=null;
@@ -1916,7 +1921,7 @@ async function runEval(caseId) {
   // (Removed separate pre-extraction API call — Claude reads PDFs/docs natively during evaluation,
   //  saving 10-20 seconds per case. Policy files are included in msgContent below.)
   var inlinePolicyDetected = false;
-  if(!policyWording && _filesForCaseId === caseId && FILES.length > 0) {
+  if(!policyWording && !manualPolicyName && _filesForCaseId === caseId && FILES.length > 0) {
     var policyKeywords = /policy|wording|insurance|certificate|coverage|terms|conditions|benefits|plan|schedule/i;
     var polFileCheck = FILES.filter(function(f){ return f.data && policyKeywords.test(f.name||''); });
     if(polFileCheck.length) {
@@ -2026,8 +2031,8 @@ async function runEval(caseId) {
     +'ADMISSION TYPE: '+(liveVals.admissionType||c.admissionType||'not specified')+nl
     +'AREA OF COVERAGE: '+(liveVals.coverageArea||c.coverageArea||'not specified')+nl
     +'DATE OF LOSS: '+(dol!=='Not provided'?dol+' (manually entered)':dol)+nl
-    +(liveVals.admissionDate||c.admissionDate?'DATE OF ADMISSION: '+(liveVals.admissionDate||c.admissionDate)+' (manually entered)'+nl:'')
-    +(liveVals.dischargeDate||c.dischargeDate?'DATE OF DISCHARGE: '+(liveVals.dischargeDate||c.dischargeDate)+' (manually entered)'+nl:'')
+    +(liveVals.admissionDate||c.admissionDate?'DATE OF ADMISSION: '+(liveVals.admissionDate||c.admissionDate)+' (case record)'+nl:'')
+    +(liveVals.dischargeDate||c.dischargeDate?'DATE OF DISCHARGE: '+(liveVals.dischargeDate||c.dischargeDate)+' (case record)'+nl:'')
     +'COUNTRY OF TREATMENT: '+country+nl
     +(liveVals.countryOfResidence||c.countryOfResidence?'COUNTRY OF RESIDENCE: '+(liveVals.countryOfResidence||c.countryOfResidence||'')+nl:'')+'INSURER: '+insurer+nl
     +(liveVals.policyNumber||c.policyNumber?'POLICY NUMBER: '+(liveVals.policyNumber||c.policyNumber)+' (manually entered)'+nl:'')
@@ -2061,7 +2066,7 @@ async function runEval(caseId) {
   setEvSt('run', 'Preparing documents...');
   var _filesToRead = [];
   var _runningTotal = 0;
-  var _evalFiles = (_filesForCaseId === caseId) ? FILES.filter(function(f){ return !f._isEvalReport; }) : [];
+  var _evalFiles = (_filesForCaseId === caseId) ? FILES.filter(function(f){ return !f._isEvalReport && !/^Evaluation_.*\.html$/i.test(f.name||''); }) : [];
   for(var _fi = 0; _fi < _evalFiles.length; _fi++) {
     var _ff = _evalFiles[_fi];
     if(!_ff.data) continue;
@@ -2809,7 +2814,7 @@ async function sendCaseChat(presetText, caseId) {
     'References within this evaluation to "uploaded documents", "attached files", "the ONLY applicable policy", or any exclusive policy source are SPECIFIC TO THAT SESSION ONLY.',
     'These cross-session references do NOT carry over. For THIS session, the authoritative policy is the one shown in the POLICY WORDING section below.',
     '---',
-    (c.eval || 'No evaluation performed yet.').replace(/=== EVALUATION.+?===\n[\s\S]{0,200}/,'').substring(0, 7000),
+    (c.eval || 'No evaluation performed yet.').replace(/=== EVALUATION.+?===\n[\s\S]{0,200}/,'').replace(/^Policy Source:.+$/m,'').replace(/^Policy Preview:.+$/m,'').substring(0, 7000),
     '',
     qaPolicyAbsent
       ? '=== [POLICY-ABSENT MODE — IPMI STANDARDS ONLY] ===\nNo policy wording is available for this case. You MUST answer using only Lloyd\'s NMA 464, IPMI Forum standards, InterQual/Milliman criteria, and standard market exclusions. Do NOT invent any policy clause, deductible, copay, limit, or exclusion. Stamp every answer with: "⚠ Policy-absent mode — IPMI standards only. Reconcile with actual policy when available."'
@@ -2885,7 +2890,7 @@ async function sendCaseChat(presetText, caseId) {
     '8. For pre-existing conditions: apply standard 24-month moratorium unless policy states otherwise\n' +
     '9. CROSS-SESSION RULE: The "PREVIOUS AI EVALUATION" section in the case context may have been generated when different files were uploaded in a different browser session. Any policy source, "exclusive mode" statement, or uploaded-document reference inside that evaluation text is session-specific and DOES NOT apply here. Base your answers ONLY on (a) the current case data fields, (b) the POLICY WORDING section provided in this prompt, and (c) Lloyd\'s/IPMI standards. Never inherit or enforce a policy decision from a previous evaluation.\n' +
     (qaPolicyAbsent
-      ? '9. POLICY-ABSENT MODE IS ACTIVE: No policy wording is available. You MUST NOT invent any policy term, clause number, deductible, copay, limit, waiting period, or exclusion. Reason ONLY from Lloyd\'s NMA 464, IPMI Forum standards, InterQual/Milliman, and standard market exclusions. Where a policy clause would normally be cited, state instead: "Policy-specific terms not available — applying market-standard IPMI rule instead." Begin EVERY answer with: "⚠ Policy-absent mode — IPMI standards only. Reconcile with actual policy when available." Frame all conclusions as PROVISIONAL pending policy reconciliation.\n\n'
+      ? '10. POLICY-ABSENT MODE IS ACTIVE: No policy wording is available. You MUST NOT invent any policy term, clause number, deductible, copay, limit, waiting period, or exclusion. Reason ONLY from Lloyd\'s NMA 464, IPMI Forum standards, InterQual/Milliman, and standard market exclusions. Where a policy clause would normally be cited, state instead: "Policy-specific terms not available — applying market-standard IPMI rule instead." Begin EVERY answer with: "⚠ Policy-absent mode — IPMI standards only. Reconcile with actual policy when available." Frame all conclusions as PROVISIONAL pending policy reconciliation.\n\n'
       : '\n') +
     '=== LLOYD\'S & IPMI REFERENCE STANDARDS ===\n' +
     'NMA 464: War/terrorism exclusions — passive terrorism victims ARE covered in modern IPMI\n' +
@@ -6616,7 +6621,7 @@ function deleteCase(id) {
   // 8. Clear current case context if the deleted case was open
   if(window._currentCaseId === id) {
     window._currentCaseId = null;
-    if(typeof CURID !== 'undefined') { try { window.CURID = null; } catch(e){} }
+    CURID = null;
   }
 
   updBadges();
