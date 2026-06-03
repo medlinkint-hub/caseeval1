@@ -6006,6 +6006,7 @@ function importCases() {
         var added = 0, updated = 0;
         imported.forEach(function(ic) {
           if(!ic.id) return;
+          if(isDeletedId(ic.id)) return; // never re-import a deleted case
           var idx = CASES.findIndex(function(c){ return c.id===ic.id; });
           if(idx === -1) { CASES.push(ic); added++; }
           else {
@@ -6584,7 +6585,17 @@ function deleteCase(id) {
   // 1. Remove from memory and localStorage CASES array
   var deletedCase = CASES.find(function(c){ return c.id===id; }) || {};
   CASES = CASES.filter(function(c){ return c.id!==id; });
+
+  // 1a. Register deletion BEFORE save/sync so no sync path can re-add the case
+  addDeletedId(id);
   save();
+
+  // 1b. Push to Gist immediately — bypass the 2s debounce so the next pullFromGist1
+  //     (which runs every 60s) sees the deletion and cannot re-add the case
+  if(typeof pushToGist1==='function' && typeof gistReady1==='function' && gistReady1()) {
+    if(typeof save._pt1 !== 'undefined') clearTimeout(save._pt1);
+    pushToGist1(true);
+  }
 
   // 2. Delete from Firebase
   deleteCaseFromFirestore(id);
@@ -6819,6 +6830,34 @@ function idbGetFileByName(caseId, filename) {
 // ══════════════════════════════════════════════════════════
 // STORAGE ENGINE — Keep localStorage lean, files in IndexedDB
 // ══════════════════════════════════════════════════════════
+
+// ── Deleted-case registry — prevents sync paths from re-adding deleted cases ──
+// Stored in localStorage as [{id, deletedAt}]. Pruned after 30 days.
+// Also shared via Gist so teammates receive deletions across sessions.
+function getDeletedIds() {
+  try { return JSON.parse(localStorage.getItem('mp_deleted_ids')||'[]'); } catch(e) { return []; }
+}
+function addDeletedId(id) {
+  if(!id) return;
+  try {
+    var ids = getDeletedIds();
+    if(!ids.some(function(x){ return x.id===id; })) {
+      ids.push({id:id, deletedAt:new Date().toISOString()});
+    }
+    var cutoff = Date.now() - 30*24*60*60*1000; // prune entries older than 30 days
+    ids = ids.filter(function(x){ return new Date(x.deletedAt||0).getTime() > cutoff; });
+    localStorage.setItem('mp_deleted_ids', JSON.stringify(ids));
+  } catch(e) {}
+}
+function isDeletedId(id) {
+  if(!id) return false;
+  return getDeletedIds().some(function(x){ return x.id===id; });
+}
+function mergeRemoteDeletedIds(remoteIds) {
+  if(!Array.isArray(remoteIds)) return;
+  remoteIds.forEach(function(entry){ if(entry && entry.id) addDeletedId(entry.id); });
+}
+
 
 function initStorage() {
   // Load cases
@@ -7139,6 +7178,8 @@ function startFirebaseSync() {
           changed = true;
         }
       } else if(change.type === 'added' || change.type === 'modified') {
+        // Skip any case that was deleted on this device — Firebase may lag behind
+        if(isDeletedId(remoteCase.id)) { deleteCaseFromFirestore(remoteCase.id); continue; }
         var remoteTime = new Date(remoteCase.updatedAt || remoteCase.created || 0).getTime();
         if(localIdx === -1) {
           // New case from a teammate — add it
@@ -7453,8 +7494,15 @@ function pullAllFromFirebase() {
     }
     var remoteCases = [];
     snapshot.forEach(function(doc){ remoteCases.push(doc.data()); });
+    var _fbDelSet = new Set(getDeletedIds().map(function(x){return x.id;}));
     // Merge: keep local cases not in Firebase, update local with remote if newer
+    // Never re-add a case that was locally deleted (even if Firebase lags behind)
     remoteCases.forEach(function(rc){
+      if(_fbDelSet.has(rc.id)) {
+        // Case was deleted locally — also delete from Firebase if not done yet
+        deleteCaseFromFirestore(rc.id);
+        return;
+      }
       var li = CASES.findIndex(function(c){ return c.id===rc.id; });
       var rt = new Date(rc.updatedAt||rc.created||0).getTime();
       if(li === -1) {
@@ -8991,7 +9039,7 @@ async function pushToGist1(silent){
   GIST1_SYNCING=true;
   try{
     var payload={description:'CaseEval 1 — Team Data',files:{}};
-    payload.files[GIST1_FILE]={content:JSON.stringify({version:1,updated:new Date().toISOString(),cases:CASES,policies:getPolicies1()},null,2)};
+    payload.files[GIST1_FILE]={content:JSON.stringify({version:1,updated:new Date().toISOString(),cases:CASES,policies:getPolicies1(),deletedIds:getDeletedIds()},null,2)};
     var resp=await fetch('https://api.github.com/gists/'+GIST1_ID,{method:'PATCH',headers:{'Authorization':'token '+GIST1_TOKEN,'Content-Type':'application/json'},body:JSON.stringify(payload)});
     if(!resp.ok)throw new Error('GitHub '+resp.status);
     GIST1_LAST_SYNC=new Date();
@@ -9013,13 +9061,19 @@ async function pullFromGist1(silent){
     var remote=parsed.cases||[];
     var localById={};CASES.forEach(function(c){localById[c.id]=c;});
     var merged=[],remoteIds=new Set();
+    // Apply remote deletions first so no deleted case enters the merge
+    if(parsed.deletedIds) mergeRemoteDeletedIds(parsed.deletedIds);
+    var _gistDelSet = new Set(getDeletedIds().map(function(x){return x.id;}));
+
     remote.forEach(function(rc){
+      if(_gistDelSet.has(rc.id)) return; // skip cases deleted by anyone
       remoteIds.add(rc.id);
       var local=localById[rc.id];
       if(!local){merged.push(rc);}
       else{var rt=new Date(rc.updated||rc.created||0).getTime(),lt=new Date(local.updated||local.created||0).getTime();merged.push(rt>=lt?rc:local);}
     });
-    CASES.forEach(function(c){if(!remoteIds.has(c.id))merged.push(c);});
+    // Only keep local-only cases that have NOT been deleted
+    CASES.forEach(function(c){if(!remoteIds.has(c.id) && !_gistDelSet.has(c.id))merged.push(c);});
     CASES=merged;save();updBadges();
     if(parsed.policies&&parsed.policies.length) try { localStorage.setItem('mp_policies',JSON.stringify(parsed.policies)); } catch(e) { console.warn('[pullFromGist] policies not saved to localStorage:', e.message); }
     GIST1_LAST_SYNC=new Date();
