@@ -7179,7 +7179,7 @@ function startFirebaseSync() {
         }
       } else if(change.type === 'added' || change.type === 'modified') {
         // Skip any case that was deleted on this device — Firebase may lag behind
-        if(isDeletedId(remoteCase.id)) { deleteCaseFromFirestore(remoteCase.id); continue; }
+        if(isDeletedId(remoteCase.id)) { deleteCaseFromFirestore(remoteCase.id); return; }
         var remoteTime = new Date(remoteCase.updatedAt || remoteCase.created || 0).getTime();
         if(localIdx === -1) {
           // New case from a teammate — add it
