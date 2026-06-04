@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
-<meta name="version" content="1778800000">
+<meta name="version" content="1778900000">
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
@@ -6118,7 +6118,9 @@ function renderSet() {
   html += '<button class="btn bp" id="btn_fb_connect" style="background:#FF6B35;border-color:#FF6B35">🔥 Connect & Start Sync</button>';
   html += '<button class="btn bs" id="btn_fb_pull">⬇ Pull All Now</button>';
   html += '<button class="btn bs" id="btn_fb_push_pol">📋 Push Policies to Team</button>';
+  html += '<button class="btn bd" id="btn_fb_purge">🗑 Remove Ghost Cases</button>';
   html += '</div>';
+  html += '<div style="font-size:11px;color:var(--tx3);margin-top:6px"><b>Remove Ghost Cases:</b> deletes cases that exist in Firebase but not in your local list. Use after deleting cases that keep reappearing from Firebase.</div>';
   html += '<details style="margin-top:4px"><summary style="font-size:11px;font-weight:700;color:var(--navy);cursor:pointer">📋 Setup instructions (click to expand)</summary>';
   html += '<ol style="margin:10px 0;padding-left:18px;font-size:12px;line-height:2;color:var(--tx2)">';
   html += '<li>Go to <a href="https://console.firebase.google.com" target="_blank" style="color:#FF6B35;font-weight:600">console.firebase.google.com</a></li>';
@@ -6247,6 +6249,8 @@ function renderSet() {
   if(btnFBPull) btnFBPull.onclick = function(){ if(!FB_READY){toast('Connect first');return;} pullAllFromFirebase(); };
   var btnFBPushPol = document.getElementById('btn_fb_push_pol');
   if(btnFBPushPol) btnFBPushPol.onclick = function(){ if(!FB_READY){toast('Connect first');return;} pushPoliciesToFirebase(); };
+  var btnFBPurge = document.getElementById('btn_fb_purge');
+  if(btnFBPurge) btnFBPurge.onclick = function(){ if(!FB_READY){toast('Connect first');return;} purgeFirebaseGhosts(); };
   if(typeof FB_READY !== 'undefined' && FB_READY) setFBStatus('ok','Connected — live sync active');
   else if(getFBConfig()&&getFBConfig().projectId) setFBStatus('off','Config saved — click Connect to activate');
     var bSG=document.getElementById('btn_save_gist');
@@ -6857,6 +6861,18 @@ function mergeRemoteDeletedIds(remoteIds) {
   if(!Array.isArray(remoteIds)) return;
   remoteIds.forEach(function(entry){ if(entry && entry.id) addDeletedId(entry.id); });
 }
+// Remove any cases from CASES[] whose IDs are registered as deleted.
+// Called after sync operations so ghost cases can't persist in memory.
+function cleanDeletedFromCases() {
+  var delSet = new Set(getDeletedIds().map(function(x){return x.id;}));
+  if(!delSet.size) return;
+  var before = CASES.length;
+  CASES = CASES.filter(function(c){ return !delSet.has(c.id); });
+  if(CASES.length < before) {
+    save();
+    if(typeof updBadges==='function') updBadges();
+  }
+}
 
 
 function initStorage() {
@@ -6866,6 +6882,13 @@ function initStorage() {
     var raw = localStorage.getItem(NS+'_cases');
     if(raw) CASES = JSON.parse(raw);
   } catch(e) { CASES = []; }
+
+  // Evict any cases whose IDs are in the deleted registry on startup
+  // (silent: no save/badge update — initStorage's own save at the end handles persistence)
+  (function(){
+    var _delSet = new Set(getDeletedIds().map(function(x){return x.id;}));
+    if(_delSet.size) CASES = CASES.filter(function(c){ return !_delSet.has(c.id); });
+  })();
 
   // Purge any base64 file data from localStorage → move to IndexedDB
   var fileKeys = [];
@@ -7207,6 +7230,9 @@ function startFirebaseSync() {
 
     if(!changed) return;
 
+    // Evict any cases that were deleted — handles cases deleted before mp_deleted_ids existed
+    cleanDeletedFromCases();
+
     // Save merged cases to localStorage
     try { localStorage.setItem('mp_cases', JSON.stringify(CASES)); } catch(e){}
 
@@ -7320,6 +7346,33 @@ function deleteCaseFromFirestore(caseId) {
 
   // Delete the case document itself
   docRef.delete().catch(function(e){ console.warn('[Firebase] Delete failed:', e.message); });
+}
+
+// Purge Firebase ghost cases — cases in Firebase that are no longer in local CASES
+function purgeFirebaseGhosts() {
+  if(!FB_READY || !FB_DB) { toast('Connect to Firebase first'); return; }
+  ensureFBKeys();
+  if(!FB_COLLECTION) { toast('Firebase not configured'); return; }
+  toast('Scanning Firebase for ghost cases...');
+  FB_DB.collection(FB_COLLECTION).get().then(function(snapshot) {
+    var localIds = new Set(CASES.map(function(c){ return c.id; }));
+    var ghosts = [];
+    snapshot.forEach(function(doc) {
+      var data = doc.data();
+      if(data && data.id && !localIds.has(data.id)) ghosts.push(data);
+    });
+    if(!ghosts.length) { toast('No ghost cases found — Firebase is clean!'); return; }
+    var lines = ghosts.map(function(c){ return (c.caseNum||c.id)+(c.patient?' ('+c.patient+')':''); }).join('\n');
+    if(!confirm('Found '+ghosts.length+' case(s) in Firebase not in your local list:\n\n'+lines+'\n\nPermanently delete from Firebase?\n\nDo NOT confirm if teammates may have added these cases recently.')) return;
+    ghosts.forEach(function(c) {
+      addDeletedId(c.id);
+      deleteCaseFromFirestore(c.id);
+    });
+    // Persist deletion registry immediately
+    if(typeof pushToGist1==='function' && typeof gistReady1==='function' && gistReady1()) pushToGist1(true);
+    toast('🗑 Removed '+ghosts.length+' ghost case(s) from Firebase permanently');
+    console.log('[Firebase] Purged ghost cases:', ghosts.map(function(c){ return c.caseNum||c.id; }));
+  }).catch(function(e) { toast('Error scanning Firebase: '+e.message); });
 }
 
 // Push all policies to Firebase
@@ -7525,6 +7578,8 @@ function pullAllFromFirebase() {
       }
     });
     CASES.sort(function(a,b){ return new Date(b.created||0)-new Date(a.created||0); });
+    // Final pass: remove any deleted cases that may have slipped through
+    cleanDeletedFromCases();
     try { localStorage.setItem('mp_cases', JSON.stringify(CASES)); } catch(e){}
     if(typeof updBadges==='function') updBadges();
     // If a case detail is open and its eval was just restored, refresh the eval panel
@@ -9076,7 +9131,7 @@ async function pullFromGist1(silent){
     });
     // Only keep local-only cases that have NOT been deleted
     CASES.forEach(function(c){if(!remoteIds.has(c.id) && !_gistDelSet.has(c.id))merged.push(c);});
-    CASES=merged;save();updBadges();
+    CASES=merged;cleanDeletedFromCases();save();updBadges();
     if(parsed.policies&&parsed.policies.length) try { localStorage.setItem('mp_policies',JSON.stringify(parsed.policies)); } catch(e) { console.warn('[pullFromGist] policies not saved to localStorage:', e.message); }
     GIST1_LAST_SYNC=new Date();
     if(!silent)toast('Cases synced — '+CASES.length+' total');
