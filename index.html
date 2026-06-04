@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
-<meta name="version" content="1778695000">
+<meta name="version" content="1778800000">
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
@@ -6888,13 +6888,15 @@ function initStorage() {
   CASES.forEach(function(c){
     if(c.filesData){
       c.filesData = c.filesData.map(function(f){
+        var meta = {name:f.name,size:f.size,type:f.type,ext:f.ext,_key:f._key||null};
+        if(f._isEvalReport) { meta._isEvalReport=true; meta._decision=f._decision||''; meta._evalDate=f._evalDate||''; }
         if(f.data && f.data.length > 100){
           var key = f._key || ('fd_'+c.id+'_'+Date.now());
           idbSet(key, f.data).catch(function(){});
           changed = true;
-          return {name:f.name,size:f.size,type:f.type,ext:f.ext,_key:key};
+          meta._key = key;
         }
-        return {name:f.name,size:f.size,type:f.type,ext:f.ext,_key:f._key||null};
+        return meta;
       });
     }
   });
