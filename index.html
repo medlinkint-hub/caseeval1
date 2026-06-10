@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
-<meta name="version" content="1778920000">
+<meta name="version" content="1778930000">
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
@@ -7370,17 +7370,17 @@ function purgeFirebaseGhosts() {
         +'<div><b>'+esc(c.caseNum||c.id)+'</b>'+tag+'<span style="color:#6b7280;margin-left:8px">'+esc(c.patient||'—')+'</span></div>'
         +'</label>';
     }).join('');
-    var modal = '<div id="fb_purge_modal" style="position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px">'
-      +'<div style="background:#fff;border-radius:14px;width:100%;max-width:580px;max-height:88vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,.35)">'
-      +'<div style="padding:18px 20px 10px;border-bottom:1px solid #e5e7eb">'
+    var modal = '<div id="fb_purge_modal" style="position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:9999;display:flex;align-items:flex-start;justify-content:center;padding:16px;overflow-y:auto">'
+      +'<div style="background:#fff;border-radius:14px;width:100%;max-width:580px;height:min(88vh,100%);display:flex;flex-direction:column;overflow:hidden;box-shadow:0 20px 60px rgba(0,0,0,.35);margin:auto">'
+      +'<div style="padding:18px 20px 10px;border-bottom:1px solid #e5e7eb;flex-shrink:0">'
       +'<div style="font-weight:800;font-size:15px;margin-bottom:2px">🗑 Force Delete from Firebase</div>'
       +'<div style="font-size:12px;color:#6b7280">Check the cases you want to permanently delete. They will be removed from Firebase AND your local list.</div>'
       +'</div>'
-      +'<div style="padding:10px 14px 6px;border-bottom:1px solid #f3f4f6">'
+      +'<div style="padding:10px 14px 6px;border-bottom:1px solid #f3f4f6;flex-shrink:0">'
       +'<label style="font-size:12px;display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" id="fb_purge_all" onchange="document.querySelectorAll(\'.fb_purge_cb\').forEach(function(x){x.checked=document.getElementById(\'fb_purge_all\').checked;})"> Select all ('+fbCases.length+' cases in Firebase)</label>'
       +'</div>'
-      +'<div style="overflow-y:auto;flex:1">'+rows+'</div>'
-      +'<div style="padding:14px 20px;border-top:1px solid #e5e7eb;display:flex;gap:8px;justify-content:flex-end">'
+      +'<div style="overflow-y:auto;flex:1;min-height:0">'+rows+'</div>'
+      +'<div style="padding:14px 20px;border-top:1px solid #e5e7eb;display:flex;gap:8px;justify-content:flex-end;flex-shrink:0;background:#fff">'
       +'<button class="btn bs" onclick="document.getElementById(\'fb_purge_modal\').remove()">Cancel</button>'
       +'<button class="btn bd" onclick="doFbPurgeDelete()" style="background:#dc2626;border-color:#dc2626">Delete Selected</button>'
       +'</div>'
