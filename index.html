@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
-<meta name="version" content="1778940000">
+<meta name="version" content="1778950000">
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
@@ -6188,12 +6188,13 @@ function renderSet() {
     + '</div>';
 
   G('con').innerHTML=html;
-  // Fill policy library after DOM is ready
+  // Fill policy library after DOM is ready, then wire its buttons
   setTimeout(function(){
     var ph = document.getElementById('policy_lib_placeholder');
     if(ph && typeof buildPolicyLibraryHTML1==='function') {
       ph.innerHTML = buildPolicyLibraryHTML1();
     }
+    if(typeof wirePolicyLibrary1==='function') wirePolicyLibrary1();
     // If Firebase is connected, pull latest policies from Firestore on every Settings open
     setTimeout(function(){
       if(typeof FB_READY!=='undefined' && FB_READY && typeof syncPoliciesFromFirebase==='function') {
@@ -6217,7 +6218,6 @@ function renderSet() {
       });
     }
   })();
-  if(typeof wirePolicyLibrary1==='function')wirePolicyLibrary1();
 
   // ── Wire Firebase Settings buttons ──
   var btnFBConnect = document.getElementById('btn_fb_connect');
