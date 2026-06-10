@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
-<meta name="version" content="1778930000">
+<meta name="version" content="1778940000">
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
@@ -6884,11 +6884,17 @@ function initStorage() {
     if(raw) CASES = JSON.parse(raw);
   } catch(e) { CASES = []; }
 
-  // Evict any cases whose IDs are in the deleted registry on startup
-  // (silent: no save/badge update — initStorage's own save at the end handles persistence)
+  // Evict any cases whose IDs are in the deleted registry on startup.
+  // Must persist immediately — the file-migration save() below is conditional
+  // so we cannot rely on it to write the eviction back to localStorage.
   (function(){
     var _delSet = new Set(getDeletedIds().map(function(x){return x.id;}));
-    if(_delSet.size) CASES = CASES.filter(function(c){ return !_delSet.has(c.id); });
+    if(!_delSet.size) return;
+    var _before = CASES.length;
+    CASES = CASES.filter(function(c){ return !_delSet.has(c.id); });
+    if(CASES.length < _before) {
+      try { localStorage.setItem('mp_cases', JSON.stringify(CASES)); } catch(e){}
+    }
   })();
 
   // Purge any base64 file data from localStorage → move to IndexedDB
@@ -7234,8 +7240,8 @@ function startFirebaseSync() {
     // Evict any cases that were deleted — handles cases deleted before mp_deleted_ids existed
     cleanDeletedFromCases();
 
-    // Save merged cases to localStorage
-    try { localStorage.setItem('mp_cases', JSON.stringify(CASES)); } catch(e){}
+    // Persist via save() so truncation guards and size-safety logic are applied
+    save();
 
     // Always update badges
     if(typeof updBadges === 'function') updBadges();
@@ -7271,7 +7277,7 @@ function startFirebaseSync() {
               var ev = (c.lastDecision||'').toUpperCase();
               if(!ev && c.eval) { var cu=c.eval.slice(-400).toUpperCase(); ev=/DECLIN/.test(cu)?'DECLINED':/PARTIAL/.test(cu)?'PARTIALLY APPROVED':/APPROV/.test(cu)?'APPROVED':''; }
               var tag=!c.eval?'':(/^DECLIN/.test(ev)?' [DECLINED]':/^PARTIAL/.test(ev)?' [PARTIAL]':/^APPROV/.test(ev)?' [APPROVED]':/^PENDING/.test(ev)?' [PENDING]':' [Evaluated]');
-              opts+='<option value="'+c.id+'"'+(prevVal===c.id?' selected':'')+'>'+((c.caseNum||'?')+' -- '+(c.patient||'No patient')+tag)+'</option>';
+              opts+='<option value="'+esc(c.id)+'"'+(prevVal===c.id?' selected':'')+'>'+esc((c.caseNum||'?')+' -- '+(c.patient||'No patient')+tag)+'</option>';
             });
             dcs.innerHTML = opts;
             if(prevVal) dcs.value = prevVal;
@@ -7304,9 +7310,12 @@ function syncCaseToFirestore(caseObj) {
   if(!FB_COLLECTION) { console.warn('[Firebase] syncCaseToFirestore: FB_COLLECTION is empty'); return; }
 
   // Strip file data before syncing (files stay local in IndexedDB)
+  // Preserve _isEvalReport markers so eval-report files are not re-sent to Claude after sync
   var lean = Object.assign({}, caseObj, {
     filesData: (caseObj.filesData||[]).map(function(f){
-      return {name:f.name, size:f.size, type:f.type, ext:f.ext, _key:f._key||null};
+      var fm = {name:f.name, size:f.size, type:f.type, ext:f.ext, _key:f._key||null};
+      if(f._isEvalReport) { fm._isEvalReport=true; fm._decision=f._decision||''; fm._evalDate=f._evalDate||''; }
+      return fm;
     }),
     updatedAt: new Date().toISOString(),
     updatedBy: (typeof S === 'function' ? S().name : '') || 'Team Member',
@@ -7381,7 +7390,7 @@ function purgeFirebaseGhosts() {
       +'</div>'
       +'<div style="overflow-y:auto;flex:1;min-height:0">'+rows+'</div>'
       +'<div style="padding:14px 20px;border-top:1px solid #e5e7eb;display:flex;gap:8px;justify-content:flex-end;flex-shrink:0;background:#fff">'
-      +'<button class="btn bs" onclick="document.getElementById(\'fb_purge_modal\').remove()">Cancel</button>'
+      +'<button class="btn bs" onclick="var _m=document.getElementById(\'fb_purge_modal\');if(_m)_m.remove();window._fbPurgeCases=null;">Cancel</button>'
       +'<button class="btn bd" onclick="doFbPurgeDelete()" style="background:#dc2626;border-color:#dc2626">Delete Selected</button>'
       +'</div>'
       +'</div></div>';
@@ -7405,7 +7414,8 @@ function doFbPurgeDelete() {
   if(typeof renderCasesWithSearch==='function') renderCasesWithSearch();
   else if(typeof renderCases==='function') renderCases();
   if(typeof pushToGist1==='function' && typeof gistReady1==='function' && gistReady1()) pushToGist1(true);
-  document.getElementById('fb_purge_modal').remove();
+  var _pm = document.getElementById('fb_purge_modal'); if(_pm) _pm.remove();
+  window._fbPurgeCases = null;
   toast('🗑 Permanently deleted '+ids.length+' case(s) from Firebase and local list');
 }
 
@@ -7614,7 +7624,7 @@ function pullAllFromFirebase() {
     CASES.sort(function(a,b){ return new Date(b.created||0)-new Date(a.created||0); });
     // Final pass: remove any deleted cases that may have slipped through
     cleanDeletedFromCases();
-    try { localStorage.setItem('mp_cases', JSON.stringify(CASES)); } catch(e){}
+    save(); // use save() so truncation guards are applied (not raw setItem)
     if(typeof updBadges==='function') updBadges();
     // If a case detail is open and its eval was just restored, refresh the eval panel
     if(window._currentCaseId) {
