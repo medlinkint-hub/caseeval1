@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
-<meta name="version" content="1778910000">
+<meta name="version" content="1778920000">
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
@@ -6119,9 +6119,9 @@ function renderSet() {
   html += '<button class="btn bp" id="btn_fb_connect" style="background:#FF6B35;border-color:#FF6B35">🔥 Connect & Start Sync</button>';
   html += '<button class="btn bs" id="btn_fb_pull">⬇ Pull All Now</button>';
   html += '<button class="btn bs" id="btn_fb_push_pol">📋 Push Policies to Team</button>';
-  html += '<button class="btn bd" id="btn_fb_purge">🗑 Remove Ghost Cases</button>';
+  html += '<button class="btn bd" id="btn_fb_purge">🗑 Force Delete from Firebase</button>';
   html += '</div>';
-  html += '<div style="font-size:11px;color:var(--tx3);margin-top:6px"><b>Remove Ghost Cases:</b> deletes cases that exist in Firebase but not in your local list. Use after deleting cases that keep reappearing from Firebase.</div>';
+  html += '<div style="font-size:11px;color:var(--tx3);margin-top:6px"><b>Force Delete from Firebase:</b> opens a checklist of ALL cases in Firebase. Select which ones to permanently delete from both Firebase and your local list — stops deleted cases from reappearing.</div>';
   html += '<details style="margin-top:4px"><summary style="font-size:11px;font-weight:700;color:var(--navy);cursor:pointer">📋 Setup instructions (click to expand)</summary>';
   html += '<ol style="margin:10px 0;padding-left:18px;font-size:12px;line-height:2;color:var(--tx2)">';
   html += '<li>Go to <a href="https://console.firebase.google.com" target="_blank" style="color:#FF6B35;font-weight:600">console.firebase.google.com</a></li>';
@@ -7349,31 +7349,64 @@ function deleteCaseFromFirestore(caseId) {
   docRef.delete().catch(function(e){ console.warn('[Firebase] Delete failed:', e.message); });
 }
 
-// Purge Firebase ghost cases — cases in Firebase that are no longer in local CASES
+// Force-delete dialog — shows all Firebase cases as a checklist so the user
+// can permanently remove any case from both Firebase and the local list.
 function purgeFirebaseGhosts() {
   if(!FB_READY || !FB_DB) { toast('Connect to Firebase first'); return; }
   ensureFBKeys();
   if(!FB_COLLECTION) { toast('Firebase not configured'); return; }
-  toast('Scanning Firebase for ghost cases...');
+  toast('Loading cases from Firebase...');
   FB_DB.collection(FB_COLLECTION).get().then(function(snapshot) {
+    var fbCases = [];
+    snapshot.forEach(function(doc){ var d=doc.data(); if(d&&d.id) fbCases.push(d); });
+    if(!fbCases.length) { toast('Firebase has no cases'); return; }
+    fbCases.sort(function(a,b){ return (a.caseNum||'').localeCompare(b.caseNum||''); });
     var localIds = new Set(CASES.map(function(c){ return c.id; }));
-    var ghosts = [];
-    snapshot.forEach(function(doc) {
-      var data = doc.data();
-      if(data && data.id && !localIds.has(data.id)) ghosts.push(data);
-    });
-    if(!ghosts.length) { toast('No ghost cases found — Firebase is clean!'); return; }
-    var lines = ghosts.map(function(c){ return (c.caseNum||c.id)+(c.patient?' ('+c.patient+')':''); }).join('\n');
-    if(!confirm('Found '+ghosts.length+' case(s) in Firebase not in your local list:\n\n'+lines+'\n\nPermanently delete from Firebase?\n\nDo NOT confirm if teammates may have added these cases recently.')) return;
-    ghosts.forEach(function(c) {
-      addDeletedId(c.id);
-      deleteCaseFromFirestore(c.id);
-    });
-    // Persist deletion registry immediately
-    if(typeof pushToGist1==='function' && typeof gistReady1==='function' && gistReady1()) pushToGist1(true);
-    toast('🗑 Removed '+ghosts.length+' ghost case(s) from Firebase permanently');
-    console.log('[Firebase] Purged ghost cases:', ghosts.map(function(c){ return c.caseNum||c.id; }));
-  }).catch(function(e) { toast('Error scanning Firebase: '+e.message); });
+    window._fbPurgeCases = fbCases;
+    var rows = fbCases.map(function(c){
+      var tag = !localIds.has(c.id) ? '<span style="font-size:10px;background:#fee2e2;color:#991b1b;padding:1px 6px;border-radius:8px;margin-left:6px">not in local list</span>' : '';
+      return '<label style="display:flex;align-items:center;gap:10px;padding:7px 14px;border-bottom:1px solid #f3f4f6;cursor:pointer;font-size:13px">'
+        +'<input type="checkbox" class="fb_purge_cb" value="'+esc(c.id)+'" style="width:15px;height:15px;flex-shrink:0">'
+        +'<div><b>'+esc(c.caseNum||c.id)+'</b>'+tag+'<span style="color:#6b7280;margin-left:8px">'+esc(c.patient||'—')+'</span></div>'
+        +'</label>';
+    }).join('');
+    var modal = '<div id="fb_purge_modal" style="position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px">'
+      +'<div style="background:#fff;border-radius:14px;width:100%;max-width:580px;max-height:88vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,.35)">'
+      +'<div style="padding:18px 20px 10px;border-bottom:1px solid #e5e7eb">'
+      +'<div style="font-weight:800;font-size:15px;margin-bottom:2px">🗑 Force Delete from Firebase</div>'
+      +'<div style="font-size:12px;color:#6b7280">Check the cases you want to permanently delete. They will be removed from Firebase AND your local list.</div>'
+      +'</div>'
+      +'<div style="padding:10px 14px 6px;border-bottom:1px solid #f3f4f6">'
+      +'<label style="font-size:12px;display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" id="fb_purge_all" onchange="document.querySelectorAll(\'.fb_purge_cb\').forEach(function(x){x.checked=document.getElementById(\'fb_purge_all\').checked;})"> Select all ('+fbCases.length+' cases in Firebase)</label>'
+      +'</div>'
+      +'<div style="overflow-y:auto;flex:1">'+rows+'</div>'
+      +'<div style="padding:14px 20px;border-top:1px solid #e5e7eb;display:flex;gap:8px;justify-content:flex-end">'
+      +'<button class="btn bs" onclick="document.getElementById(\'fb_purge_modal\').remove()">Cancel</button>'
+      +'<button class="btn bd" onclick="doFbPurgeDelete()" style="background:#dc2626;border-color:#dc2626">Delete Selected</button>'
+      +'</div>'
+      +'</div></div>';
+    var old = document.getElementById('fb_purge_modal');
+    if(old) old.remove();
+    document.body.insertAdjacentHTML('beforeend', modal);
+  }).catch(function(e){ toast('Error loading Firebase: '+e.message); });
+}
+
+function doFbPurgeDelete() {
+  var checked = document.querySelectorAll('.fb_purge_cb:checked');
+  if(!checked.length) { toast('Select at least one case'); return; }
+  var ids = Array.from(checked).map(function(cb){ return cb.value; });
+  ids.forEach(function(id){
+    addDeletedId(id);
+    deleteCaseFromFirestore(id);
+    CASES = CASES.filter(function(c){ return c.id !== id; });
+  });
+  save();
+  if(typeof updBadges==='function') updBadges();
+  if(typeof renderCasesWithSearch==='function') renderCasesWithSearch();
+  else if(typeof renderCases==='function') renderCases();
+  if(typeof pushToGist1==='function' && typeof gistReady1==='function' && gistReady1()) pushToGist1(true);
+  document.getElementById('fb_purge_modal').remove();
+  toast('🗑 Permanently deleted '+ids.length+' case(s) from Firebase and local list');
 }
 
 // Push all policies to Firebase
