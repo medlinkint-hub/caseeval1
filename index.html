@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
-<meta name="version" content="1778960000">
+<meta name="version" content="1778970000">
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
@@ -618,7 +618,7 @@ var save = function() {
         localStorage.setItem('mp_cases', JSON.stringify(bare));
         toast('⚠ Storage full — evaluations cleared. Export cases to free space.');
       } catch(e3) {
-        toast('⚠ Storage critically full — delete old cases to continue.');
+        toast('⚠ Storage full — go to Settings → Export to back up cases, then delete old ones.', 6000);
       }
     }
   }
@@ -6593,9 +6593,23 @@ function deleteCase(id) {
 
   // 1a. Register deletion BEFORE save/sync so no sync path can re-add the case
   addDeletedId(id);
-  save();
 
-  // 1b. Push to Gist immediately — bypass the 2s debounce so the next pullFromGist1
+  // 1b. Free orphaned file keys first so save() has room even on a full storage
+  freeStorage();
+
+  // 1c. Persist — if full storage prevents normal save, strip evals as last resort
+  //     so the deletion is ALWAYS written (never silently lost)
+  try {
+    save();
+  } catch(e) {
+    // save() itself should not throw, but if it does, write a no-eval fallback
+    try {
+      var _bare = CASES.map(function(c){ return Object.assign({},c,{eval:''}); });
+      localStorage.setItem('mp_cases', JSON.stringify(_bare));
+    } catch(e2) { console.warn('[deleteCase] Could not persist deletion to localStorage:', e2); }
+  }
+
+  // 1d. Push to Gist immediately — bypass the 2s debounce so the next pullFromGist1
   //     (which runs every 60s) sees the deletion and cannot re-add the case
   if(typeof pushToGist1==='function' && typeof gistReady1==='function' && gistReady1()) {
     if(typeof save._pt1 !== 'undefined') clearTimeout(save._pt1);
@@ -6642,7 +6656,7 @@ function deleteCase(id) {
 
   updBadges();
   renderCases();
-  toast('✅ Case permanently deleted — storage freed');
+  toast('✅ Case deleted');
 }
 
 // ══════════════════════════════════════════════
