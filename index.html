@@ -7381,15 +7381,21 @@ function purgeFirebaseGhosts() {
   toast('Loading cases from Firebase...');
   FB_DB.collection(FB_COLLECTION).get().then(function(snapshot) {
     var fbCases = [];
-    snapshot.forEach(function(doc){ var d=doc.data(); if(d&&d.id) fbCases.push(d); });
+    // Store BOTH the Firestore document key (doc.id) and the data id (d.id)
+    // doc.id is the authoritative key for deletion; d.id is used to filter CASES[]
+    snapshot.forEach(function(doc){
+      var d=doc.data();
+      if(d) fbCases.push({_docId: doc.id, id: d.id||doc.id, caseNum: d.caseNum||'', patient: d.patient||''});
+    });
     if(!fbCases.length) { toast('Firebase has no cases'); return; }
     fbCases.sort(function(a,b){ return (a.caseNum||'').localeCompare(b.caseNum||''); });
     var localIds = new Set(CASES.map(function(c){ return c.id; }));
     window._fbPurgeCases = fbCases;
     var rows = fbCases.map(function(c){
       var tag = !localIds.has(c.id) ? '<span style="font-size:10px;background:#fee2e2;color:#991b1b;padding:1px 6px;border-radius:8px;margin-left:6px">not in local list</span>' : '';
+      // value = Firestore doc key; data-cid = data id for CASES[] filtering
       return '<label style="display:flex;align-items:center;gap:10px;padding:7px 14px;border-bottom:1px solid #f3f4f6;cursor:pointer;font-size:13px">'
-        +'<input type="checkbox" class="fb_purge_cb" value="'+esc(c.id)+'" style="width:15px;height:15px;flex-shrink:0">'
+        +'<input type="checkbox" class="fb_purge_cb" value="'+esc(c._docId)+'" data-cid="'+esc(c.id)+'" style="width:15px;height:15px;flex-shrink:0">'
         +'<div><b>'+esc(c.caseNum||c.id)+'</b>'+tag+'<span style="color:#6b7280;margin-left:8px">'+esc(c.patient||'—')+'</span></div>'
         +'</label>';
     }).join('');
@@ -7417,21 +7423,41 @@ function purgeFirebaseGhosts() {
 function doFbPurgeDelete() {
   var checked = document.querySelectorAll('.fb_purge_cb:checked');
   if(!checked.length) { toast('Select at least one case'); return; }
-  var ids = Array.from(checked).map(function(cb){ return cb.value; });
-  ids.forEach(function(id){
-    addDeletedId(id);
-    deleteCaseFromFirestore(id);
-    CASES = CASES.filter(function(c){ return c.id !== id; });
+
+  // Close modal and show feedback FIRST so user knows it worked
+  var _pm = document.getElementById('fb_purge_modal');
+  if(_pm) _pm.remove();
+  window._fbPurgeCases = null;
+
+  var count = checked.length;
+  toast('🗑 Deleting ' + count + ' case(s) from Firebase...');
+
+  Array.from(checked).forEach(function(cb){
+    var docId = cb.value;           // Firestore document key → used for FB deletion
+    var dataId = cb.dataset.cid || cb.value; // data id → used to filter CASES[]
+    addDeletedId(dataId);
+    if(docId) {
+      // Delete by Firestore document key (authoritative)
+      if(FB_READY && FB_DB && FB_COLLECTION) {
+        var docRef = FB_DB.collection(FB_COLLECTION).doc(docId);
+        ['provider_verification','medical_coding'].forEach(function(sub){
+          docRef.collection(sub).get().then(function(snap){ snap.forEach(function(d){d.ref.delete().catch(function(){});}); }).catch(function(){});
+        });
+        docRef.delete().catch(function(e){ console.warn('[purge] FB delete failed:', docId, e.message); });
+      }
+    }
+    CASES = CASES.filter(function(c){ return c.id !== dataId && c.id !== docId; });
   });
-  freeStorage(); // clear orphaned keys first so save() has room
+
+  freeStorage();
   save();
   if(typeof updBadges==='function') updBadges();
-  if(typeof renderCasesWithSearch==='function') renderCasesWithSearch();
-  else if(typeof renderCases==='function') renderCases();
+  // Only re-render cases list if already on that page; avoid overwriting Settings page
+  if(typeof CURRENT_PAGE !== 'undefined' && (CURRENT_PAGE === 'cases' || CURRENT_PAGE === 'dash')) {
+    if(typeof renderCasesWithSearch==='function') try { renderCasesWithSearch(); } catch(e){}
+  }
   if(typeof pushToGist1==='function' && typeof gistReady1==='function' && gistReady1()) pushToGist1(true);
-  var _pm = document.getElementById('fb_purge_modal'); if(_pm) _pm.remove();
-  window._fbPurgeCases = null;
-  toast('🗑 Permanently deleted '+ids.length+' case(s) from Firebase and local list');
+  setTimeout(function(){ toast('✅ Deleted ' + count + ' case(s) permanently'); }, 1200);
 }
 
 // Push all policies to Firebase
