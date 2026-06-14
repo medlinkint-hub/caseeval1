@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
-<meta name="version" content="1778980000">
+<meta name="version" content="1779020000">
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
@@ -1941,7 +1941,7 @@ async function runEval(caseId) {
   // without actual wording, no policy logic can be applied.
   var policyAbsent = !policyWording && !inlinePolicyDetected && !_uploadedPolicyFile;
 
-  if(policyWording&&policyWording.trim()){var pw=policyWording.trim();if(pw.length>30000)pw=pw.substring(0,30000)+'\n[...]';
+  if(policyWording&&policyWording.trim()){var pw=policyWording.trim();if(pw.length>100000)pw=pw.substring(0,100000)+'\n[...]';
     // Detect if a full policy PDF is also attached as a case file — it may be more complete than the library version
     var _policyKeywordsRx = /policy|wording|insurance|terms|conditions|certificate|coverage|benefits/i;
     var _hasUploadedPolicyFile = !!_uploadedPolicyFile || FILES.some(function(f){ return f.data && (_policyKeywordsRx.test(f.name||'') || f.ext==='pdf'); });
@@ -2818,7 +2818,7 @@ async function sendCaseChat(presetText, caseId) {
     '',
     qaPolicyAbsent
       ? '=== [POLICY-ABSENT MODE — IPMI STANDARDS ONLY] ===\nNo policy wording is available for this case. You MUST answer using only Lloyd\'s NMA 464, IPMI Forum standards, InterQual/Milliman criteria, and standard market exclusions. Do NOT invent any policy clause, deductible, copay, limit, or exclusion. Stamp every answer with: "⚠ Policy-absent mode — IPMI standards only. Reconcile with actual policy when available."'
-      : ('=== POLICY WORDING: ' + policyName + ' ===\n' + policyWording.substring(0, 8000))
+      : ('=== POLICY WORDING: ' + policyName + ' ===\n' + policyWording.substring(0, 80000))
   ].filter(Boolean).join('\n');
 
   // ── Include extracted invoice/spreadsheet data in chat context ──
@@ -7488,7 +7488,7 @@ function pushPoliciesToFirebase(silent) {
       policies.forEach(function(pol){
         if(!pol.id) pol.id = 'pol_'+Date.now()+'_'+Math.random().toString(36).slice(2,6);
         var lean = Object.assign({}, pol, {
-          wording: (pol.wording||'').substring(0, 50000)
+          wording: (pol.wording||'').substring(0, 200000)
         });
         pushPromises.push(FB_DB.collection(FB_POLICIES_KEY).doc(pol.id).set(lean)
           .catch(function(e){ console.warn('[Firebase] Policy push failed:', e.message); throw e; }));
@@ -7512,7 +7512,7 @@ function pushPoliciesToFirebase(silent) {
     setFBStatus('err', e.message.substring(0,40));
     policies.forEach(function(pol){
       if(!pol.id) pol.id = 'pol_'+Date.now()+'_'+Math.random().toString(36).slice(2,6);
-      var lean = Object.assign({}, pol, { wording: (pol.wording||'').substring(0, 50000) });
+      var lean = Object.assign({}, pol, { wording: (pol.wording||'').substring(0, 200000) });
       FB_DB.collection(FB_POLICIES_KEY).doc(pol.id).set(lean, {merge:true})
         .catch(function(e2){ console.warn('[Firebase] Policy push failed:', e2.message); });
     });
@@ -7597,7 +7597,7 @@ function forceSyncNow() {
       }).then(function(){
         var writes = policies.map(function(pol){
           if(!pol.id) pol.id = 'pol_'+Date.now()+'_'+Math.random().toString(36).slice(2,6);
-          return FB_DB.collection(FB_POLICIES_KEY).doc(pol.id).set(Object.assign({},pol,{wording:(pol.wording||'').substring(0,50000)}));
+          return FB_DB.collection(FB_POLICIES_KEY).doc(pol.id).set(Object.assign({},pol,{wording:(pol.wording||'').substring(0,200000)}));
         });
         return Promise.all(writes);
       }).then(function(){
@@ -9020,13 +9020,13 @@ function wirePolicyLibrary1() {
         }
       } else {
         var nm = pl[idx].name, wd = pl[idx].wording || '';
-        pl.splice(idx, 1);
-        savePolicies1(pl);
+        // Keep the policy in the saved list until the user clicks Save — prevents data loss on navigate-away
+        window._editingPolicyName = nm;
         // Refresh only the policy list (not the whole page — avoids scroll reset)
         var _ph = document.getElementById('policy_lib_placeholder');
         if(_ph && typeof buildPolicyLibraryHTML1==='function') {
           _ph.innerHTML = buildPolicyLibraryHTML1();
-          setTimeout(function(){ wirePolicyLibrary1(); }, 20);
+          wirePolicyLibrary1(); // synchronous — DOM already populated
         }
         // Fill form, scroll into view, and notify user
         setTimeout(function() {
@@ -9038,7 +9038,7 @@ function wirePolicyLibrary1() {
           if(wc) wc.textContent = (wd.trim().split(/\s+/).filter(Boolean).length).toLocaleString()+' words';
           if(n) n.scrollIntoView({behavior:'smooth', block:'center'});
           toast('✏️ Editing "'+nm+'" — change name/wording then click Save Policy');
-        }, 40);
+        }, 20);
       }
     };
   });
@@ -9059,6 +9059,11 @@ function wirePolicyLibrary1() {
     if(!name.trim()){toast('Enter a policy name');return;}
     if(!text.trim()){toast('No wording — upload a document or paste text');return;}
     var pl=getPolicies1();
+    // If editing an existing policy, replace it rather than duplicating
+    if(window._editingPolicyName) {
+      pl = pl.filter(function(p){ return p.name !== window._editingPolicyName; });
+      window._editingPolicyName = null;
+    }
     pl.push({name:name.trim(),wording:text.trim(),updated:new Date().toISOString(),addedBy:(typeof S==='function'?S().name:'')||'Unknown',source:'local'});
     savePolicies1(pl);
     toast('Policy "'+name.trim()+'" saved — '+text.trim().split(/\s+/).filter(Boolean).length.toLocaleString()+' words');
@@ -9082,6 +9087,7 @@ function wirePolicyLibrary1() {
   };
   var bc=document.getElementById('btn_clear_policy');
   if(bc) bc.onclick=function(){
+    window._editingPolicyName = null;
     ['pol_name','pol_text'].forEach(function(id){var el=document.getElementById(id);if(el)el.value='';});
     var wc=document.getElementById('pol_wc');if(wc)wc.textContent='0 words';
     var st=document.getElementById('pol_upload_status');if(st)st.style.display='none';
@@ -9114,7 +9120,7 @@ async function processPolicyFile1(file) {
       if(ext==='pdf'){
         setS('Extracting text from PDF...','run');
         var b64=data.split(',')[1]||data;
-        var resp=await fetch('https://api.anthropic.com/v1/messages',{method:'POST',headers:{'Content-Type':'application/json','x-api-key':key,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},body:JSON.stringify({model:localStorage.getItem('mp_mod')||'claude-sonnet-4-6',max_tokens:4000,messages:[{role:'user',content:[{type:'document',source:{type:'base64',media_type:'application/pdf',data:b64},title:file.name},{type:'text',text:'Extract the COMPLETE full text of this insurance policy document. The document may be in Greek (Ελληνικά) or English. Preserve the original language exactly. Include all sections, clauses, exclusions, limits and conditions. Output plain text only, preserving Greek characters.'}]}]})});
+        var resp=await fetch('https://api.anthropic.com/v1/messages',{method:'POST',headers:{'Content-Type':'application/json','x-api-key':key,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},body:JSON.stringify({model:localStorage.getItem('mp_mod')||'claude-sonnet-4-6',max_tokens:16000,messages:[{role:'user',content:[{type:'document',source:{type:'base64',media_type:'application/pdf',data:b64},title:file.name},{type:'text',text:'Extract the COMPLETE full text of this insurance policy document. The document may be in Greek (Ελληνικά) or English. Preserve the original language exactly. Include all sections, clauses, exclusions, limits and conditions. Output plain text only, preserving Greek characters.'}]}]})});
         var rdata=await resp.json();
         rawText=(rdata.content&&rdata.content[0]&&rdata.content[0].text)||'';
         usedAI=true;
@@ -9136,9 +9142,9 @@ async function processPolicyFile1(file) {
                   headers:{'Content-Type':'application/json','x-api-key':structKey,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
                   body:JSON.stringify({
                     model: localStorage.getItem('mp_mod')||'claude-sonnet-4-6',
-                    max_tokens: 4000,
+                    max_tokens: 16000,
                     temperature: 0,
-                    messages:[{role:'user',content:'You are an insurance policy analyst. The policy may be in Greek (Ελληνικά) or English. CRITICAL: Write your output in the SAME LANGUAGE as the policy. Greek policy → Greek output. Extract and structure: Policy Name/Ονομασία, Insurer/Ασφαλιστής, Territory/Γεωγραφική Κάλυψη, Annual Limit/Ετήσιο Όριο, Benefits/Παροχές (exact amounts), Pre-existing/Προϋπάρχουσες (exact wording), Exclusions/Εξαιρέσεις (numbered), Waiting Periods/Αναμονή, PA/Προέγκριση, Network/Δίκτυο, Deductible/Απαλλαγή, Co-pay/Συμμετοχή, Claims/Διαδικασία. Keep exact clause numbers and monetary amounts.\n\nPOLICY TEXT:\n'+fullText.substring(0,30000)}]
+                    messages:[{role:'user',content:'You are an insurance policy analyst. The policy may be in Greek (Ελληνικά) or English. CRITICAL: Write your output in the SAME LANGUAGE as the policy. Greek policy → Greek output. Extract and structure: Policy Name/Ονομασία, Insurer/Ασφαλιστής, Territory/Γεωγραφική Κάλυψη, Annual Limit/Ετήσιο Όριο, Benefits/Παροχές (exact amounts), Pre-existing/Προϋπάρχουσες (exact wording), Exclusions/Εξαιρέσεις (numbered), Waiting Periods/Αναμονή, PA/Προέγκριση, Network/Δίκτυο, Deductible/Απαλλαγή, Co-pay/Συμμετοχή, Claims/Διαδικασία. Keep exact clause numbers and monetary amounts.\n\nPOLICY TEXT:\n'+fullText}]
                   })
                 });
                 var structData = await structResp.json();
