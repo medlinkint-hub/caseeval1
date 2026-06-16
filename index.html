@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
-<meta name="version" content="1779020000">
+<meta name="version" content="1779050000">
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
@@ -11744,6 +11744,9 @@ async function extractFromNewFile(fd) {
       if(/\d+\.\d{3},\d{2}$/.test(s)) s = s.replace(/\./g,'').replace(',','.');
       // Detect Indian format: 1,23,456 or 12,34,567 — groups of 2 after first 3
       else if(/^\d{1,3}(,\d{2})+,\d{3}(\.\d+)?$/.test(s) || /^\d{1,2},\d{2},\d{3}/.test(s)) s = s.replace(/,/g,'');
+      // Simple comma-decimal, no thousands separator: "186,00" → "186.00"
+      // (without this, the final [^0-9.] strip below drops the comma and "186,00" becomes 18600)
+      else if(/,\d{1,2}$/.test(s)) s = s.replace(',','.');
       // Standard: remove thousands commas, keep decimal dot
       else s = s.replace(/,(?=\d{3}(\D|$))/g,'');
       return parseFloat(s.replace(/[^0-9.]/g,'')) || 0;
