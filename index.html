@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
-<meta name="version" content="1779050000">
+<meta name="version" content="1779080000">
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
@@ -991,14 +991,10 @@ function pseudonymise(text) {
     return _pseudoMap[match];
   });
 
-  // 2. Dates of birth and admission dates — DD/MM/YYYY, DD-MM-YYYY, YYYY-MM-DD
-  result = result.replace(/\b(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}|\d{4}[\/\-]\d{2}[\/\-]\d{2})\b/g, function(match) {
-    if(!_pseudoMap[match]) {
-      _pseudoCounters.DOB++;
-      _pseudoMap[match] = '[DOB-' + String(_pseudoCounters.DOB).padStart(3,'0') + ']';
-    }
-    return _pseudoMap[match];
-  });
+  // 2. Dates are NOT masked — policy start/issue dates, trip dates and diagnosis
+  //    dates are coverage-determinative (pre-existing checks, cancellation timing).
+  //    With names, passports, phones and emails masked, dates alone do not
+  //    identify a person, and masking them blocks the evaluation entirely.
 
   // 3. Policy / membership numbers — e.g. AEG-2024-00123, HDI/123456, CANOP-789
   result = result.replace(/\b([A-Z]{2,8}[\-\/]\d{3,12}(?:[\-\/]\d{3,10})?)\b/g, function(match) {
@@ -2279,6 +2275,12 @@ async function runEval(caseId) {
     for(var _ai = 0; _ai < _approvedPatterns.length && !_approvedFromEval; _ai++) {
       var _am = finalResult.match(_approvedPatterns[_ai]);
       if(_am) { var _av = parseFloat(_am[1].replace(/,/g,'')); if(_av > 0) _approvedFromEval = _av.toFixed(2); }
+    }
+
+    // Re-identify: swap pseudonymisation tokens back to real values for local
+    // display/storage. Only the API submission stays masked (GDPR Art. 25).
+    if(pseudoMapSnapshot && Object.keys(pseudoMapSnapshot).length && typeof reidentify === 'function') {
+      finalResult = reidentify(finalResult, pseudoMapSnapshot);
     }
 
     // Parse field corrections block from eval response and auto-correct case data
@@ -7119,7 +7121,7 @@ async function changePassword() {
 // ══════════════════════════════════════════════════════════════
 
 // ── App version — update on every significant deployment ──
-var APP_BUILD = 1778695000; // epoch-style build number (matches <meta name="version">)
+var APP_BUILD = 1779080000; // epoch-style build number (matches <meta name="version">)
 
 var FB_APP = null;
 var FB_DB = null;
