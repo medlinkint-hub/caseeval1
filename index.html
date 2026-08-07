@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
-<meta name="version" content="1779110000">
+<meta name="version" content="1779140000">
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
@@ -791,7 +791,7 @@ async function apiCall(messages, systemPrompt, maxTokens) {
     throw new Error('No API key configured');
   }
   const mod = getMod();
-  const body = { model: mod, max_tokens: maxTokens||1500, messages: messages, temperature: 0 };
+  const body = { model: mod, max_tokens: maxTokens||1500, messages: messages };
   if(systemPrompt) body.system = systemPrompt;
 
   // Check if any message contains a PDF document block — need beta header
@@ -862,7 +862,7 @@ async function apiCallStream(messages, systemPrompt, maxTokens, onChunk) {
   // Try streaming first, fall back to regular if not supported
   if(typeof ReadableStream !== 'undefined' && typeof TextDecoder !== 'undefined') {
     try {
-      const body = { model: mod, max_tokens: maxTokens||1500, messages: messages, stream: true, temperature: 0 };
+      const body = { model: mod, max_tokens: maxTokens||1500, messages: messages, stream: true };
       if(systemPrompt) body.system = systemPrompt;
 
       // Check if any message contains a PDF document block — need beta header
@@ -929,7 +929,7 @@ async function apiCallStream(messages, systemPrompt, maxTokens, onChunk) {
 
   // Non-streaming fallback
   console.log('[Stream] Using non-streaming fetch');
-  const body2 = { model: mod, max_tokens: maxTokens||1500, messages: messages, temperature: 0 };
+  const body2 = { model: mod, max_tokens: maxTokens||1500, messages: messages };
   if(systemPrompt) body2.system = systemPrompt;
   var hasPDF2 = messages.some(function(m){
     var c = Array.isArray(m.content) ? m.content : [];
@@ -2510,7 +2510,7 @@ async function _apiCallQA(messages, systemPrompt, maxTokens) {
   var mod = getMod();
   var body = {
     model: mod, max_tokens: maxTokens||2000,
-    messages: messages, system: systemPrompt, temperature: 0,
+    messages: messages, system: systemPrompt,
     tools: [{ type: 'web_search_20250305', name: 'web_search' }]
   };
   var res = await fetch('https://api.anthropic.com/v1/messages', {
@@ -2542,7 +2542,7 @@ async function _apiCallQA(messages, systemPrompt, maxTokens) {
 async function _apiCallQAPlain(messages, systemPrompt, maxTokens) {
   var key = getKey(); if(!key) throw new Error('No API key configured');
   var mod = getMod();
-  var body = { model: mod, max_tokens: maxTokens||2000, messages: messages, system: systemPrompt, temperature: 0 };
+  var body = { model: mod, max_tokens: maxTokens||2000, messages: messages, system: systemPrompt };
   var res = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST', mode: 'cors', credentials: 'omit',
     headers: { 'Content-Type': 'application/json', 'x-api-key': key, 'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' },
@@ -7122,7 +7122,7 @@ async function changePassword() {
 // ══════════════════════════════════════════════════════════════
 
 // ── App version — update on every significant deployment ──
-var APP_BUILD = 1779110000; // epoch-style build number (matches <meta name="version">)
+var APP_BUILD = 1779140000; // epoch-style build number (matches <meta name="version">)
 
 var FB_APP = null;
 var FB_DB = null;
@@ -9146,7 +9146,6 @@ async function processPolicyFile1(file) {
                   body:JSON.stringify({
                     model: localStorage.getItem('mp_mod')||'claude-sonnet-5',
                     max_tokens: 16000,
-                    temperature: 0,
                     messages:[{role:'user',content:'You are an insurance policy analyst. The policy may be in Greek (Ελληνικά) or English. CRITICAL: Write your output in the SAME LANGUAGE as the policy. Greek policy → Greek output. Extract and structure: Policy Name/Ονομασία, Insurer/Ασφαλιστής, Territory/Γεωγραφική Κάλυψη, Annual Limit/Ετήσιο Όριο, Benefits/Παροχές (exact amounts), Pre-existing/Προϋπάρχουσες (exact wording), Exclusions/Εξαιρέσεις (numbered), Waiting Periods/Αναμονή, PA/Προέγκριση, Network/Δίκτυο, Deductible/Απαλλαγή, Co-pay/Συμμετοχή, Claims/Διαδικασία. Keep exact clause numbers and monetary amounts.\n\nPOLICY TEXT:\n'+fullText}]
                   })
                 });
