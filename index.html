@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
-<meta name="version" content="1779210000">
+<meta name="version" content="1779240000">
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
@@ -809,11 +809,17 @@ async function apiCall(messages, systemPrompt, maxTokens) {
       toast('⏳ API busy — retrying in '+waitSec+' seconds... (attempt '+(attempt+1)+'/'+maxRetries+')');
       await new Promise(function(resolve){ setTimeout(resolve, waitSec * 1000); });
     }
+    // Hard timeout per attempt — a plain fetch() has no default timeout, so a
+    // stalled/dead connection would otherwise hang this call (and its caller)
+    // forever, same failure mode fixed for the streaming path.
+    var _acCtrl = new AbortController();
+    var _acTimer = setTimeout(function(){ _acCtrl.abort(); }, 90000);
     try {
       const res = await fetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
         mode: 'cors',
         credentials: 'omit',
+        signal: _acCtrl.signal,
         headers: Object.assign({
           'Content-Type': 'application/json',
           'x-api-key': key,
@@ -822,6 +828,7 @@ async function apiCall(messages, systemPrompt, maxTokens) {
         }, hasPDF ? {'anthropic-beta': 'pdfs-2024-09-25'} : {}),
         body: JSON.stringify(body)
       });
+      clearTimeout(_acTimer);
 
       if(res.status === 529 || res.status === 503) {
         // Overloaded — retry
@@ -843,6 +850,12 @@ async function apiCall(messages, systemPrompt, maxTokens) {
       }
       return (data.content||[]).map(b=>b.text||'').join('');
     } catch(fetchErr) {
+      clearTimeout(_acTimer);
+      if(fetchErr.name === 'AbortError') {
+        lastError = new Error('Request timed out after 90 seconds.');
+        console.warn('[API] Timed out attempt', attempt+1, '— will retry');
+        continue;
+      }
       if(fetchErr.message && fetchErr.message.includes('overloaded')) {
         lastError = fetchErr; continue;
       }
@@ -2389,7 +2402,10 @@ async function runEval(caseId) {
       lastDecision: savedDecision, evalHistory: evalHist,
       pseudoMap: pseudoMapSnapshot || {}
     };
-    if(_verificationFlag) _evalSave.verificationFlag = _verificationFlag;
+    // Always write verificationFlag explicitly (never omit it) — updC() merges via
+    // Object.assign, which only sets keys present in the update, so a stale flag
+    // from a prior run would otherwise survive a later clean re-evaluation forever.
+    _evalSave.verificationFlag = _verificationFlag || '';
     if(_approvedFromEval) _evalSave.amountApproved = _approvedFromEval;
     if(_fieldCorrections) {
       // Apply only recognised safe fields — never overwrite case ID or patient name
@@ -7213,7 +7229,7 @@ async function changePassword() {
 // ══════════════════════════════════════════════════════════════
 
 // ── App version — update on every significant deployment ──
-var APP_BUILD = 1779210000; // epoch-style build number (matches <meta name="version">)
+var APP_BUILD = 1779240000; // epoch-style build number (matches <meta name="version">)
 
 var FB_APP = null;
 var FB_DB = null;
@@ -9119,6 +9135,11 @@ function wirePolicyLibrary1() {
         var nm = pl[idx].name, wd = pl[idx].wording || '';
         // Keep the policy in the saved list until the user clicks Save — prevents data loss on navigate-away
         window._editingPolicyName = nm;
+        // Clear any PDF stashed from a previous, unrelated upload — otherwise it can
+        // get attached to THIS policy's saved record if the user saves without
+        // re-uploading a file (e.g. uploaded Policy A's PDF, then edited Policy B).
+        window._lastPolicyPdfB64 = null;
+        window._lastPolicyPdfName = null;
         // Refresh only the policy list (not the whole page — avoids scroll reset)
         var _ph = document.getElementById('policy_lib_placeholder');
         if(_ph && typeof buildPolicyLibraryHTML1==='function') {
@@ -9298,13 +9319,13 @@ async function processPolicyFile1(file) {
         var resp2=await fetch('https://api.anthropic.com/v1/messages',{method:'POST',headers:{'Content-Type':'application/json','x-api-key':key,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},body:JSON.stringify({model:localStorage.getItem('mp_mod')||'claude-sonnet-5',max_tokens:2000,messages:[{role:'user',content:[{type:'image',source:{type:'base64',media_type:mt,data:imgB64}},{type:'text',text:'Extract ALL text from this insurance policy document or membership card. Include policy number, insurer, plan, dates, limits, exclusions. Plain text only.'}]}]})});
         var rdata2=await resp2.json();rawText=(rdata2.content&&rdata2.content[0]&&rdata2.content[0].text)||'';usedAI=true;
       }
-      if(!rawText||rawText.length<10){setS('Could not extract text. Try a different format.','err');return;}
+      if(!rawText||rawText.length<10){window._lastPolicyPdfB64=null;window._lastPolicyPdfName=null;setS('Could not extract text. Try a different format.','err');return;}
       if(textEl){textEl.value=rawText;if(wcEl)wcEl.textContent=rawText.split(/\s+/).filter(Boolean).length.toLocaleString()+' words';}
       if(nameEl&&!nameEl.value.trim()){nameEl.value=file.name.replace(/\.(pdf|docx?|txt|png|jpe?g|webp)$/i,'').replace(/[-_]/g,' ').replace(/\b\w/g,function(l){return l.toUpperCase();});}
       if(dz)dz.style.borderColor='var(--bor)';
       setS((usedAI?'AI extracted':'Extracted')+' '+rawText.split(/\s+/).filter(Boolean).length.toLocaleString()+' words — review then click Save Policy','ok');
       toast('Policy text extracted. Review and click Save Policy.');
-    } catch(err){setS('Error: '+err.message,'err');if(dz)dz.style.borderColor='var(--bor)';}
+    } catch(err){window._lastPolicyPdfB64=null;window._lastPolicyPdfName=null;setS('Error: '+err.message,'err');if(dz)dz.style.borderColor='var(--bor)';}
   };
   reader.onerror=function(){setS('Could not read file','err');if(dz)dz.style.borderColor='var(--bor)';};
   reader.readAsDataURL(file);
