@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
-<meta name="version" content="1779140000">
+<meta name="version" content="1779170000">
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
@@ -872,7 +872,16 @@ async function apiCallStream(messages, systemPrompt, maxTokens, onChunk) {
       });
 
       const evalAbortCtrl = new AbortController();
-      const evalTimeout = setTimeout(function(){ evalAbortCtrl.abort(); }, 300000); // 5 min timeout
+      // Idle timeout: aborts if no data (connection or stream) arrives for 90s,
+      // rather than capping the whole request at a flat 5 minutes — a slow but
+      // still-streaming response should not be killed, but a stalled/dead
+      // connection (no timeout previously covered the read loop) must not hang forever.
+      var evalIdleTimer = null;
+      function armEvalIdleTimeout() {
+        if(evalIdleTimer) clearTimeout(evalIdleTimer);
+        evalIdleTimer = setTimeout(function(){ evalAbortCtrl.abort(); }, 90000);
+      }
+      armEvalIdleTimeout();
       const res = await fetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
         mode: 'cors',
@@ -886,42 +895,48 @@ async function apiCallStream(messages, systemPrompt, maxTokens, onChunk) {
         }, hasPDFStream ? {'anthropic-beta': 'pdfs-2024-09-25'} : {}),
         body: JSON.stringify(body)
       });
-      clearTimeout(evalTimeout);
+      armEvalIdleTimeout(); // headers received — re-arm for the streaming phase
 
       if(!res.ok) {
+        clearTimeout(evalIdleTimer);
         const err = await res.json().catch(()=>({}));
         throw new Error((err.error&&err.error.message)||'HTTP '+res.status);
       }
 
-      if(!res.body) throw new Error('Streaming not supported');
+      if(!res.body) { clearTimeout(evalIdleTimer); throw new Error('Streaming not supported'); }
 
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
       let fullText = '';
 
-      while(true) {
-        const {done, value} = await reader.read();
-        if(done) break;
-        const chunk = decoder.decode(value, {stream:true});
-        const lines = chunk.split('\n');
-        for(const line of lines) {
-          if(!line.startsWith('data: ')) continue;
-          const data = line.slice(6).trim();
-          if(data === '[DONE]') continue;
-          try {
-            const parsed = JSON.parse(data);
-            if(parsed.type === 'content_block_delta' && parsed.delta && parsed.delta.text) {
-              fullText += parsed.delta.text;
-              if(onChunk) onChunk(parsed.delta.text, fullText);
-            }
-          } catch(e) {}
+      try {
+        while(true) {
+          const {done, value} = await reader.read();
+          if(done) break;
+          armEvalIdleTimeout(); // data arrived — connection is alive, reset the idle clock
+          const chunk = decoder.decode(value, {stream:true});
+          const lines = chunk.split('\n');
+          for(const line of lines) {
+            if(!line.startsWith('data: ')) continue;
+            const data = line.slice(6).trim();
+            if(data === '[DONE]') continue;
+            try {
+              const parsed = JSON.parse(data);
+              if(parsed.type === 'content_block_delta' && parsed.delta && parsed.delta.text) {
+                fullText += parsed.delta.text;
+                if(onChunk) onChunk(parsed.delta.text, fullText);
+              }
+            } catch(e) {}
+          }
         }
+      } finally {
+        clearTimeout(evalIdleTimer);
       }
       return fullText;
     } catch(streamErr) {
       console.warn('[Stream] Failed, falling back to regular fetch:', streamErr.message);
       if(streamErr.name === 'AbortError') {
-        throw new Error('Evaluation timed out after 5 minutes. Try with fewer documents or shorter case description.');
+        throw new Error('Evaluation stalled — no response received for 90 seconds. Please try again.');
       }
       // Fall through to non-streaming below
     }
@@ -7122,7 +7137,7 @@ async function changePassword() {
 // ══════════════════════════════════════════════════════════════
 
 // ── App version — update on every significant deployment ──
-var APP_BUILD = 1779140000; // epoch-style build number (matches <meta name="version">)
+var APP_BUILD = 1779170000; // epoch-style build number (matches <meta name="version">)
 
 var FB_APP = null;
 var FB_DB = null;
