@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
-<meta name="version" content="1779170000">
+<meta name="version" content="1779210000">
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
@@ -854,16 +854,22 @@ async function apiCall(messages, systemPrompt, maxTokens) {
 }
 
 // Streaming API call - renders text word by word into a DOM element
-async function apiCallStream(messages, systemPrompt, maxTokens, onChunk) {
+async function apiCallStream(messages, systemPrompt, maxTokens, onChunk, opts) {
   const key = getKey();
   if(!key) throw new Error('No API key configured');
   const mod = getMod();
+  // Adaptive thinking, opt-in per call (evaluation calls use it; quick Q&A/extraction
+  // calls don't, to avoid added latency where deliberation isn't worth it).
+  // Haiku 4.5 doesn't support adaptive thinking — only {type:"enabled",budget_tokens}
+  // on older models — so it's excluded rather than risk a 400 on that model.
+  const wantsThinking = !!(opts && opts.thinking) && mod.indexOf('haiku') === -1;
 
   // Try streaming first, fall back to regular if not supported
   if(typeof ReadableStream !== 'undefined' && typeof TextDecoder !== 'undefined') {
     try {
       const body = { model: mod, max_tokens: maxTokens||1500, messages: messages, stream: true };
       if(systemPrompt) body.system = systemPrompt;
+      if(wantsThinking) body.thinking = {type:'adaptive'};
 
       // Check if any message contains a PDF document block — need beta header
       var hasPDFStream = messages.some(function(m){
@@ -946,6 +952,7 @@ async function apiCallStream(messages, systemPrompt, maxTokens, onChunk) {
   console.log('[Stream] Using non-streaming fetch');
   const body2 = { model: mod, max_tokens: maxTokens||1500, messages: messages };
   if(systemPrompt) body2.system = systemPrompt;
+  if(wantsThinking) body2.thinking = {type:'adaptive'};
   var hasPDF2 = messages.some(function(m){
     var c = Array.isArray(m.content) ? m.content : [];
     return c.some(function(b){ return b.type==='document' && b.source && b.source.media_type==='application/pdf'; });
@@ -1775,6 +1782,7 @@ async function runEval(caseId) {
   // regardless of what follows (policy wording, IPMI framework, etc.)
   sys = SECTION_0 + '\n\n' + sys;
   var policyWording='',policySource='';
+  var _matchedLibraryPolicy=null; // library policy object behind policyWording, if any — used to attach its original PDF below
 
   // ── Determine the case product type (travel vs IPMI) from available signals ──
   var _caseInsType = (liveVals&&liveVals.insuranceType||c.insuranceType||'').toLowerCase();
@@ -1822,6 +1830,7 @@ async function runEval(caseId) {
       if(mpMatch && mpMatch.wording) {
         policyWording = mpMatch.wording;
         policySource = mpMatch.name + ' ✓ manually selected';
+        _matchedLibraryPolicy = mpMatch;
         setEvSt('run', '📋 '+mpMatch.name+' loaded from library — evaluating...');
         console.log('[runEval] PRIORITY 1 — manual library policy:', policySource);
       } else {
@@ -1876,6 +1885,7 @@ async function runEval(caseId) {
           policyWording = _matched.wording;
           policySource = _matched.name + ' ✓ matched from uploaded document';
           _uploadedPolicyFile = _pf.name;
+          _matchedLibraryPolicy = _matched;
           console.log('[runEval] PRIORITY 2 — uploaded file matched to library:', _pf.name, '→', _matched.name);
         } else if(_extractedText.length > 500 && (policyKeywords.test(_extractedText) || policyKeywords.test(_pf.name||''))) {
           policyWording = _extractedText;
@@ -1917,7 +1927,7 @@ async function runEval(caseId) {
         });
       }
       if(!match&&compatiblePolicies.length===1) match=compatiblePolicies[0];
-      if(match&&match.wording){policyWording=match.wording;policySource=match.name;console.log('[runEval] PRIORITY 3 — auto-matched:', match.name);}
+      if(match&&match.wording){policyWording=match.wording;policySource=match.name;_matchedLibraryPolicy=match;console.log('[runEval] PRIORITY 3 — auto-matched:', match.name);}
     }
   } catch(e){}
 
@@ -2116,6 +2126,22 @@ async function runEval(caseId) {
     }
   });
 
+  // ── Attach the original policy PDF, if one was stored when it was uploaded ──
+  // The library previously kept only extracted/AI-structured text. Attaching the
+  // source PDF alongside it lets Claude cross-check exact tables, amounts, and
+  // clause wording against the original document instead of relying solely on
+  // a possibly-lossy extraction pass.
+  if(_matchedLibraryPolicy && _matchedLibraryPolicy.id && _matchedLibraryPolicy.pdfStored) {
+    try {
+      var _polPdf = await idbGet('policy_pdf_' + _matchedLibraryPolicy.id);
+      if(_polPdf && _polPdf.data) {
+        msgContent.push({type:'text', text:'NOTE: The following PDF is the original source document for policy "'+(_matchedLibraryPolicy.name||'')+'", whose extracted wording appears later in this message. Use it to verify exact amounts, tables and clause text if anything in the extracted wording is unclear or ambiguous.'});
+        msgContent.push({type:'document', source:{type:'base64', media_type:'application/pdf', data:_polPdf.data}, title:_polPdf.name||(_matchedLibraryPolicy.name+' (original policy PDF)')});
+        console.log('[runEval] Attached original policy PDF:', _polPdf.name);
+      }
+    } catch(_polPdfErr) { console.warn('[runEval] Could not load stored policy PDF:', _polPdfErr.message); }
+  }
+
   // Add note about skipped files to the prompt
   var skipNote = '';
   if(skippedFiles.length > 0) {
@@ -2196,16 +2222,17 @@ async function runEval(caseId) {
     await apiCallStream(
       [{role:'user', content:msgContent}],
       sys,
-      12000,
+      24000, // raised from 12000 — thinking output shares this budget with the final answer
       (chunk, full) => {
         fullResult = full;
         clearInterval(iv);
         // Strip machine-readable corrections block before streaming display
         if(streamEl) streamEl.textContent = full.replace(/<corrections>[^<]*<\/corrections>/gi, '').trim();
         if(window._currentCaseId === caseId) setEvSt('run', 'Writing decision...');
-      }
+      },
+      {thinking:true} // let the model deliberate through the multi-section IPMI evaluation
     );
-    
+
     clearInterval(iv);
     
     let finalResult = fullResult;
@@ -2266,6 +2293,47 @@ async function runEval(caseId) {
       else if(/^PARTIAL/.test(sd)) finalStatus = 'partial';
       else if(/^PENDING/.test(sd)) finalStatus = 'reviewing';
     }
+
+    // ── Verification pass for DECLINE / PARTIALLY APPROVED decisions ──
+    // A wrong approval costs money; a wrong decline costs a legitimate claim
+    // (and possibly a complaint). Before finalizing a decline/partial, run a
+    // cheap, separate check: does the actual policy wording support the cited
+    // clause and reason? This does NOT re-run the evaluation or change the
+    // decision — it only flags a citation that can't be confirmed, so a human
+    // reviews it before it is communicated to the claimant.
+    var _verificationFlag = '';
+    if((finalStatus === 'declined' || finalStatus === 'partial') && policyWording && policyWording.trim().length > 200) {
+      try {
+        setEvSt('run', '🔍 Verifying cited policy clause...');
+        var _citedClause = (finalResult.match(/POLICY CLAUSE\s*:\s*([^\n]+)/i)||[])[1] || '';
+        var _citedReason = (finalResult.match(/REASON\s*:\s*([^\n]+)/i)||[])[1] || '';
+        if(_citedClause) {
+          var _verifyPrompt = 'Audit ONE thing only: does the POLICY WORDING below actually support the cited clause and reason for this '+finalStatus.toUpperCase()+' decision? Do not re-evaluate the claim or suggest a different decision — only judge whether the citation is accurate.\n\n'
+            + 'DECISION: '+savedDecision+'\n'
+            + 'CITED POLICY CLAUSE: '+_citedClause+'\n'
+            + 'STATED REASON: '+_citedReason+'\n\n'
+            + '=== POLICY WORDING ===\n'+policyWording.trim().substring(0,60000)+'\n=== END POLICY WORDING ===\n\n'
+            + 'Reply in EXACTLY this format, nothing else:\n'
+            + 'SUPPORTED: yes OR no\n'
+            + 'ISSUE: [one sentence describing the problem, or "none" if supported]';
+          var _verifyResult = await apiCall(
+            [{role:'user', content:_verifyPrompt}],
+            'You are a meticulous insurance compliance auditor. Be skeptical — answer SUPPORTED: yes only if the clause and reason are clearly and directly backed by the exact policy text quoted above.',
+            300
+          );
+          var _supported = /SUPPORTED\s*:\s*yes/i.test(_verifyResult||'');
+          var _issueMatch = (_verifyResult||'').match(/ISSUE\s*:\s*([^\n]+)/i);
+          var _issueText = _issueMatch ? _issueMatch[1].trim() : '';
+          if(!_supported && _issueText && !/^none$/i.test(_issueText)) {
+            _verificationFlag = _issueText;
+            console.warn('[runEval] Verification flagged decision:', _issueText);
+          }
+        }
+      } catch(verifyErr) {
+        console.warn('[runEval] Verification pass failed (non-blocking):', verifyErr.message);
+      }
+    }
+
     // Store eval history (keep last 5 evaluations)
     var currentCase = getC(caseId);
     var evalHist = (currentCase && currentCase.evalHistory) ? [...currentCase.evalHistory] : [];
@@ -2310,10 +2378,18 @@ async function runEval(caseId) {
       } catch(e) { console.warn('[runEval] Could not parse corrections block:', e.message); }
     }
 
-    var _evalSave = {eval: evalHeader + finalResult, status: finalStatus,
+    var _verificationBanner = _verificationFlag
+      ? '⚠ VERIFICATION FLAG — REQUIRES HUMAN REVIEW\n'
+        + 'An automated accuracy check could not confirm the cited policy clause supports this '+finalStatus.toUpperCase()+' decision.\n'
+        + 'Issue: '+_verificationFlag+'\n'
+        + 'Please have a senior reviewer confirm the clause citation before this decision is communicated to the claimant.\n'
+        + '============================================================\n\n'
+      : '';
+    var _evalSave = {eval: _verificationBanner + evalHeader + finalResult, status: finalStatus,
       lastDecision: savedDecision, evalHistory: evalHist,
       pseudoMap: pseudoMapSnapshot || {}
     };
+    if(_verificationFlag) _evalSave.verificationFlag = _verificationFlag;
     if(_approvedFromEval) _evalSave.amountApproved = _approvedFromEval;
     if(_fieldCorrections) {
       // Apply only recognised safe fields — never overwrite case ID or patient name
@@ -2331,11 +2407,11 @@ async function runEval(caseId) {
     // Show verdict toast
     var verdictColors = {declined:'#e8231a', approved:'#16a34a', partial:'#f59e0b', reviewing:'#1a2a72'};
     var verdictMsg = {declined:'⛔ DECLINED', approved:'✅ APPROVED', partial:'⚠ PARTIALLY APPROVED', reviewing:'⏳ PENDING INFORMATION'};
-    toast((verdictMsg[finalStatus]||'Evaluation complete') + ' — ' + (savedDecision||''));
+    toast((verdictMsg[finalStatus]||'Evaluation complete') + ' — ' + (savedDecision||'') + (_verificationFlag ? '  ⚠ Clause citation unverified — please review' : ''));
     // Only update DOM elements if user is still viewing the evaluated case
     if(window._currentCaseId === caseId) {
       // Render with proper formatting
-      if(erDiv) erDiv.innerHTML = renderEvalTxt(finalResult);
+      if(erDiv) erDiv.innerHTML = renderEvalTxt(_verificationBanner + finalResult);
       setEvSt('done', 'Done — '+new Date().toLocaleTimeString());
       // Update all visible badges for this case
       const cb = G('cbdg'); if(cb) { const cc=getC(caseId); cb.innerHTML=tBadge(cc.type)+' '+pBadge(cc.priority)+' '+sBadge(cc.status); }
@@ -7137,7 +7213,7 @@ async function changePassword() {
 // ══════════════════════════════════════════════════════════════
 
 // ── App version — update on every significant deployment ──
-var APP_BUILD = 1779170000; // epoch-style build number (matches <meta name="version">)
+var APP_BUILD = 1779210000; // epoch-style build number (matches <meta name="version">)
 
 var FB_APP = null;
 var FB_DB = null;
@@ -9026,6 +9102,9 @@ function wirePolicyLibrary1() {
           var delPol = pl[idx];
           pl.splice(idx, 1);
           savePolicies1(pl);
+          if(delPol.pdfStored && delPol.id && typeof idbDelete === 'function') {
+            idbDelete('policy_pdf_' + delPol.id).catch(function(){});
+          }
           // Also delete from Firebase so it doesn't come back
           if(typeof FB_READY!=='undefined' && FB_READY && FB_DB && delPol.id) {
             FB_DB.collection(typeof FB_POLICIES_KEY!=='undefined'?FB_POLICIES_KEY:'policies')
@@ -9077,12 +9156,30 @@ function wirePolicyLibrary1() {
     if(!name.trim()){toast('Enter a policy name');return;}
     if(!text.trim()){toast('No wording — upload a document or paste text');return;}
     var pl=getPolicies1();
+    var _existingPol = null;
     // If editing an existing policy, replace it rather than duplicating
     if(window._editingPolicyName) {
+      _existingPol = pl.find(function(p){ return p.name === window._editingPolicyName; }) || null;
       pl = pl.filter(function(p){ return p.name !== window._editingPolicyName; });
       window._editingPolicyName = null;
     }
-    pl.push({name:name.trim(),wording:text.trim(),updated:new Date().toISOString(),addedBy:(typeof S==='function'?S().name:'')||'Unknown',source:'local'});
+    var _polId = (_existingPol && _existingPol.id) || ('pol_'+Date.now()+'_'+Math.random().toString(36).slice(2,8));
+    var _newPol = {id:_polId, name:name.trim(),wording:text.trim(),updated:new Date().toISOString(),addedBy:(typeof S==='function'?S().name:'')||'Unknown',source:'local'};
+    if(window._lastPolicyPdfB64) {
+      // A PDF was uploaded this session — retain it in IndexedDB (large binaries
+      // don't belong in localStorage) so evaluations can attach the original
+      // document, not just its extracted text.
+      _newPol.pdfStored = true;
+      if(typeof idbSet === 'function') {
+        idbSet('policy_pdf_' + _polId, {data: window._lastPolicyPdfB64, name: window._lastPolicyPdfName || (name.trim()+'.pdf'), savedAt: new Date().toISOString()})
+          .catch(function(e){ console.warn('[Policies] Could not store policy PDF:', e && e.message || e); });
+      }
+    } else if(_existingPol && _existingPol.pdfStored) {
+      _newPol.pdfStored = true; // no new upload this time — keep the previously stored PDF
+    }
+    window._lastPolicyPdfB64 = null;
+    window._lastPolicyPdfName = null;
+    pl.push(_newPol);
     savePolicies1(pl);
     toast('Policy "'+name.trim()+'" saved — '+text.trim().split(/\s+/).filter(Boolean).length.toLocaleString()+' words');
     renderSet();
@@ -9106,6 +9203,8 @@ function wirePolicyLibrary1() {
   var bc=document.getElementById('btn_clear_policy');
   if(bc) bc.onclick=function(){
     window._editingPolicyName = null;
+    window._lastPolicyPdfB64 = null;
+    window._lastPolicyPdfName = null;
     ['pol_name','pol_text'].forEach(function(id){var el=document.getElementById(id);if(el)el.value='';});
     var wc=document.getElementById('pol_wc');if(wc)wc.textContent='0 words';
     var st=document.getElementById('pol_upload_status');if(st)st.style.display='none';
@@ -9130,6 +9229,11 @@ async function processPolicyFile1(file) {
   setS('Reading '+file.name+'...','run');
   var ext=file.name.split('.').pop().toLowerCase();
   var reader=new FileReader();
+  // Reset any PDF stashed from a previous upload — only set again below if this
+  // upload is itself a PDF, so a Word/text/image re-upload doesn't attach a
+  // stale, unrelated PDF to the policy on save.
+  window._lastPolicyPdfB64 = null;
+  window._lastPolicyPdfName = null;
   reader.onload=async function(e){
     var data=e.target.result, rawText='', usedAI=false;
     try {
@@ -9138,6 +9242,10 @@ async function processPolicyFile1(file) {
       if(ext==='pdf'){
         setS('Extracting text from PDF...','run');
         var b64=data.split(',')[1]||data;
+        // Keep the original PDF bytes so Save Policy can retain them in IndexedDB —
+        // lets evaluations attach the source document alongside the extracted text.
+        window._lastPolicyPdfB64 = b64;
+        window._lastPolicyPdfName = file.name;
         var resp=await fetch('https://api.anthropic.com/v1/messages',{method:'POST',headers:{'Content-Type':'application/json','x-api-key':key,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},body:JSON.stringify({model:localStorage.getItem('mp_mod')||'claude-sonnet-5',max_tokens:16000,messages:[{role:'user',content:[{type:'document',source:{type:'base64',media_type:'application/pdf',data:b64},title:file.name},{type:'text',text:'Extract the COMPLETE full text of this insurance policy document. The document may be in Greek (Ελληνικά) or English. Preserve the original language exactly. Include all sections, clauses, exclusions, limits and conditions. Output plain text only, preserving Greek characters.'}]}]})});
         var rdata=await resp.json();
         rawText=(rdata.content&&rdata.content[0]&&rdata.content[0].text)||'';
