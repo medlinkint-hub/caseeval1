@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
-<meta name="version" content="1779240000">
+<meta name="version" content="1779270000">
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
@@ -2235,7 +2235,7 @@ async function runEval(caseId) {
     await apiCallStream(
       [{role:'user', content:msgContent}],
       sys,
-      24000, // raised from 12000 — thinking output shares this budget with the final answer
+      32000, // thinking output shares this budget with the final answer — see retry-without-thinking safety net below
       (chunk, full) => {
         fullResult = full;
         clearInterval(iv);
@@ -2247,9 +2247,49 @@ async function runEval(caseId) {
     );
 
     clearInterval(iv);
-    
+
     let finalResult = fullResult;
-    if(fullResult && !/DECISION\s*:/i.test(fullResult)) {
+
+    // Safety net: adaptive thinking competes with the visible answer for the same
+    // max_tokens budget. On a complex/long case, thinking can consume the entire
+    // budget before any answer text is written, leaving fullResult empty or
+    // near-empty — the DECISION-completion block below only runs on a non-empty
+    // result, so without this it would silently save a blank evaluation (just
+    // the header, no body). Retry once with thinking OFF so the full budget goes
+    // to the visible answer instead.
+    if(!fullResult || fullResult.trim().length < 150) {
+      console.warn('[runEval] Result too short/empty after primary call (thinking may have exhausted the token budget) — retrying without thinking');
+      if(window._currentCaseId === caseId) setEvSt('run', '⏳ Retrying — writing full evaluation...');
+      try {
+        var _retryFull = '';
+        await apiCallStream(
+          [{role:'user', content:msgContent}],
+          sys,
+          16000,
+          function(chunk, full){
+            _retryFull = full;
+            if(streamEl) streamEl.textContent = full.replace(/<corrections>[^<]*<\/corrections>/gi, '').trim();
+            if(window._currentCaseId === caseId) setEvSt('run', 'Writing decision...');
+          }
+          // opts omitted — no thinking, so the entire budget goes to the visible answer
+        );
+        if(_retryFull && _retryFull.trim().length >= 150) {
+          fullResult = _retryFull;
+          finalResult = fullResult;
+        }
+      } catch(retryErr) {
+        console.warn('[runEval] Non-thinking retry failed:', retryErr.message);
+      }
+    }
+
+    if(!fullResult) {
+      // Both the primary call and the retry produced nothing — surface a clear,
+      // actionable message instead of saving a blank evaluation.
+      finalResult = 'The evaluation could not be completed — the AI returned no response after two attempts.\n\n'
+        + 'DECISION: PENDING INFORMATION\n'
+        + 'REASON: No response received from the evaluation model.\n'
+        + 'NEXT STEPS: Re-run the evaluation. If this persists, check your API key and account credit balance in Settings.';
+    } else if(!/DECISION\s*:/i.test(fullResult)) {
       // Evaluation ended without DECISION: — make a fast second call for verdict only
       if(window._currentCaseId === caseId) setEvSt('run', '⏳ Completing final decision...');
       try {
@@ -7229,7 +7269,7 @@ async function changePassword() {
 // ══════════════════════════════════════════════════════════════
 
 // ── App version — update on every significant deployment ──
-var APP_BUILD = 1779240000; // epoch-style build number (matches <meta name="version">)
+var APP_BUILD = 1779270000; // epoch-style build number (matches <meta name="version">)
 
 var FB_APP = null;
 var FB_DB = null;
