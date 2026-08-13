@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
-<meta name="version" content="1779390000">
+<meta name="version" content="1779420000">
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
@@ -826,8 +826,14 @@ async function apiCall(messages, systemPrompt, maxTokens) {
     // Hard timeout per attempt — a plain fetch() has no default timeout, so a
     // stalled/dead connection would otherwise hang this call (and its caller)
     // forever, same failure mode fixed for the streaming path.
+    // apiCall() is non-streaming: the caller gets nothing until the FULL
+    // response arrives, so the timeout must scale with the requested
+    // max_tokens — a flat 90s is fine for a 500-token verdict call but too
+    // tight for an 8000-token completion (e.g. Medical Coding & Pricing),
+    // which can legitimately take several minutes to fully generate.
     var _acCtrl = new AbortController();
-    var _acTimer = setTimeout(function(){ _acCtrl.abort(); }, 90000);
+    var _acTimeoutMs = Math.max(90000, (maxTokens||1500) * 50);
+    var _acTimer = setTimeout(function(){ _acCtrl.abort(); }, _acTimeoutMs);
     try {
       const res = await fetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
@@ -866,7 +872,7 @@ async function apiCall(messages, systemPrompt, maxTokens) {
     } catch(fetchErr) {
       clearTimeout(_acTimer);
       if(fetchErr.name === 'AbortError') {
-        lastError = new Error('Request timed out after 90 seconds.');
+        lastError = new Error('Request timed out after '+Math.round(_acTimeoutMs/1000)+' seconds.');
         console.warn('[API] Timed out attempt', attempt+1, '— will retry');
         continue;
       }
@@ -2358,6 +2364,10 @@ async function runEval(caseId) {
         if(_retryFull && _retryFull.trim().length >= 150) {
           fullResult = _retryFull;
           finalResult = fullResult;
+          // The saved text now came from the non-thinking retry, not the primary
+          // call — reflect that in the cost line/toast so it doesn't claim
+          // "thinking on" for output that thinking actually failed to produce.
+          _thinkOn = false;
         }
         // Retry cost is additive on top of the primary (failed) call
         _evalUsage.input_tokens = (_evalUsage.input_tokens||0) + (_retryUsage.input_tokens||0);
@@ -4260,7 +4270,12 @@ function renderCD(c) {
   // Case context
   html += '<div style="padding:7px 10px;border-radius:5px;background:rgba(26,42,114,.06);border:1px solid rgba(26,42,114,.1);font-size:11px;color:var(--navy);margin-bottom:10px">';
   html += esc(c.caseNum||'—')+' · '+esc(c.patient||'—')+' · '+esc(c.insurer||'—');
-  var evBadge = !c.eval?'⏳ Not evaluated':/(DECLIN|DENIED)/i.test(c.eval)?'🔴 Declined':/PARTIAL/i.test(c.eval)?'🟡 Partial':/(APPROVED|COVERED)/i.test(c.eval)?'🟢 Approved':'✓ Evaluated';
+  // Prefer the structured lastDecision field over scanning eval text — a
+  // supplementary re-evaluation's "Previous: DECLINED / New: APPROVED" summary
+  // line would otherwise make a stale DECLINED keyword win over the real,
+  // current decision when scanning the raw text.
+  var _evBadgeSrc = c.lastDecision || c.eval;
+  var evBadge = !c.eval?'⏳ Not evaluated':/(DECLIN|DENIED)/i.test(_evBadgeSrc)?'🔴 Declined':/PARTIAL/i.test(_evBadgeSrc)?'🟡 Partial':/(APPROVED|COVERED)/i.test(_evBadgeSrc)?'🟢 Approved':'✓ Evaluated';
   if(c.patientEmail) html += ' · '+esc(c.patientEmail);
   html += ' · <b>'+evBadge+'</b>';
   html += '</div>';
@@ -7394,7 +7409,7 @@ async function changePassword() {
 // ══════════════════════════════════════════════════════════════
 
 // ── App version — update on every significant deployment ──
-var APP_BUILD = 1779390000; // epoch-style build number (matches <meta name="version">)
+var APP_BUILD = 1779420000; // epoch-style build number (matches <meta name="version">)
 
 var FB_APP = null;
 var FB_DB = null;
@@ -9305,6 +9320,7 @@ function wirePolicyLibrary1() {
         // re-uploading a file (e.g. uploaded Policy A's PDF, then edited Policy B).
         window._lastPolicyPdfB64 = null;
         window._lastPolicyPdfName = null;
+        window._lastPolicyFileUploaded = null;
         // Refresh only the policy list (not the whole page — avoids scroll reset)
         var _ph = document.getElementById('policy_lib_placeholder');
         if(_ph && typeof buildPolicyLibraryHTML1==='function') {
@@ -9360,11 +9376,21 @@ function wirePolicyLibrary1() {
         idbSet('policy_pdf_' + _polId, {data: window._lastPolicyPdfB64, name: window._lastPolicyPdfName || (name.trim()+'.pdf'), savedAt: new Date().toISOString()})
           .catch(function(e){ console.warn('[Policies] Could not store policy PDF:', e && e.message || e); });
       }
+    } else if(window._lastPolicyFileUploaded) {
+      // A new non-PDF file (Word/text/image) replaced the wording this session —
+      // any previously stored PDF may no longer match the new text. Drop the
+      // stale link rather than have evaluations cross-check against a document
+      // that could now contradict the saved wording.
+      _newPol.pdfStored = false;
+      if(_existingPol && _existingPol.pdfStored && _existingPol.id && typeof idbDelete === 'function') {
+        idbDelete('policy_pdf_' + _existingPol.id).catch(function(){});
+      }
     } else if(_existingPol && _existingPol.pdfStored) {
-      _newPol.pdfStored = true; // no new upload this time — keep the previously stored PDF
+      _newPol.pdfStored = true; // no new upload this time (pure text edit) — keep the previously stored PDF
     }
     window._lastPolicyPdfB64 = null;
     window._lastPolicyPdfName = null;
+    window._lastPolicyFileUploaded = null;
     pl.push(_newPol);
     savePolicies1(pl);
     toast('Policy "'+name.trim()+'" saved — '+text.trim().split(/\s+/).filter(Boolean).length.toLocaleString()+' words');
@@ -9391,6 +9417,7 @@ function wirePolicyLibrary1() {
     window._editingPolicyName = null;
     window._lastPolicyPdfB64 = null;
     window._lastPolicyPdfName = null;
+    window._lastPolicyFileUploaded = null;
     ['pol_name','pol_text'].forEach(function(id){var el=document.getElementById(id);if(el)el.value='';});
     var wc=document.getElementById('pol_wc');if(wc)wc.textContent='0 words';
     var st=document.getElementById('pol_upload_status');if(st)st.style.display='none';
@@ -9420,6 +9447,7 @@ async function processPolicyFile1(file) {
   // stale, unrelated PDF to the policy on save.
   window._lastPolicyPdfB64 = null;
   window._lastPolicyPdfName = null;
+  window._lastPolicyFileUploaded = null;
   reader.onload=async function(e){
     var data=e.target.result, rawText='', usedAI=false;
     try {
@@ -9485,6 +9513,9 @@ async function processPolicyFile1(file) {
         var rdata2=await resp2.json();rawText=(rdata2.content&&rdata2.content[0]&&rdata2.content[0].text)||'';usedAI=true;
       }
       if(!rawText||rawText.length<10){window._lastPolicyPdfB64=null;window._lastPolicyPdfName=null;setS('Could not extract text. Try a different format.','err');return;}
+      // A new file's text is about to replace the wording — Save Policy uses this
+      // to decide whether a previously stored PDF is still trustworthy (see below).
+      window._lastPolicyFileUploaded = true;
       if(textEl){textEl.value=rawText;if(wcEl)wcEl.textContent=rawText.split(/\s+/).filter(Boolean).length.toLocaleString()+' words';}
       if(nameEl&&!nameEl.value.trim()){nameEl.value=file.name.replace(/\.(pdf|docx?|txt|png|jpe?g|webp)$/i,'').replace(/[-_]/g,' ').replace(/\b\w/g,function(l){return l.toUpperCase();});}
       if(dz)dz.style.borderColor='var(--bor)';
