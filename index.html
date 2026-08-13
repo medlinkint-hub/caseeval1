@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
-<meta name="version" content="1779270000">
+<meta name="version" content="1779300000">
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
@@ -566,6 +566,20 @@ function toast(m,dur) {
 // ══════════════════════════════════════════════
 const MODELS = ['claude-sonnet-5','claude-sonnet-4-6','claude-opus-4-8','claude-opus-4-7','claude-haiku-4-5-20251001'];
 
+// USD per million tokens — for the approximate cost estimate shown after each evaluation.
+// Not billing-accurate (ignores cache discounts); intended as a rough usage indicator only.
+const MODEL_PRICING = {
+  'claude-sonnet-5':           {in: 2.00, out: 10.00}, // introductory pricing through 2026-08-31
+  'claude-sonnet-4-6':         {in: 3.00, out: 15.00},
+  'claude-opus-4-8':           {in: 5.00, out: 25.00},
+  'claude-opus-4-7':           {in: 5.00, out: 25.00},
+  'claude-haiku-4-5-20251001': {in: 1.00, out: 5.00}
+};
+function estimateCostUSD(mod, inputTokens, outputTokens) {
+  var p = MODEL_PRICING[mod] || {in: 3.00, out: 15.00};
+  return ((inputTokens||0)/1e6)*p.in + ((outputTokens||0)/1e6)*p.out;
+}
+function evalThinkingEnabled() { return (localStorage.getItem('mp_eval_thinking')||'on') !== 'off'; }
 
 function getKey() { return (localStorage.getItem('mp_key')||'').trim(); }
 function getMod() {
@@ -944,6 +958,15 @@ async function apiCallStream(messages, systemPrompt, maxTokens, onChunk, opts) {
               if(parsed.type === 'content_block_delta' && parsed.delta && parsed.delta.text) {
                 fullText += parsed.delta.text;
                 if(onChunk) onChunk(parsed.delta.text, fullText);
+              } else if(opts && opts.usage) {
+                // Capture token usage for cost estimation — no effect on the response text.
+                if(parsed.type === 'message_start' && parsed.message && parsed.message.usage) {
+                  opts.usage.input_tokens = parsed.message.usage.input_tokens || 0;
+                  opts.usage.cache_read_input_tokens = parsed.message.usage.cache_read_input_tokens || 0;
+                  opts.usage.cache_creation_input_tokens = parsed.message.usage.cache_creation_input_tokens || 0;
+                } else if(parsed.type === 'message_delta' && parsed.usage) {
+                  opts.usage.output_tokens = parsed.usage.output_tokens || 0;
+                }
               }
             } catch(e) {}
           }
@@ -984,6 +1007,12 @@ async function apiCallStream(messages, systemPrompt, maxTokens, onChunk, opts) {
   });
   const data2 = await res2.json();
   if(!res2.ok) throw new Error((data2.error&&data2.error.message)||'HTTP '+res2.status);
+  if(opts && opts.usage && data2.usage) {
+    opts.usage.input_tokens = data2.usage.input_tokens || 0;
+    opts.usage.output_tokens = data2.usage.output_tokens || 0;
+    opts.usage.cache_read_input_tokens = data2.usage.cache_read_input_tokens || 0;
+    opts.usage.cache_creation_input_tokens = data2.usage.cache_creation_input_tokens || 0;
+  }
   const result = (data2.content||[]).map(b=>b.text||'').join('');
   if(onChunk) onChunk(result, result); // single chunk callback
   return result;
@@ -2231,11 +2260,13 @@ async function runEval(caseId) {
     if(erDiv) erDiv.innerHTML = '<div class="er" id="evStream" style="white-space:pre-wrap;font-size:13px;line-height:1.7;color:var(--tx2)"></div>';
     const streamEl = G('evStream');
     
+    var _thinkOn = evalThinkingEnabled();
+    var _evalUsage = {}; // populated by apiCallStream with input/output token counts
     let fullResult = '';
     await apiCallStream(
       [{role:'user', content:msgContent}],
       sys,
-      32000, // thinking output shares this budget with the final answer — see retry-without-thinking safety net below
+      _thinkOn ? 32000 : 16000, // thinking output shares this budget with the final answer — see retry-without-thinking safety net below
       (chunk, full) => {
         fullResult = full;
         clearInterval(iv);
@@ -2243,7 +2274,7 @@ async function runEval(caseId) {
         if(streamEl) streamEl.textContent = full.replace(/<corrections>[^<]*<\/corrections>/gi, '').trim();
         if(window._currentCaseId === caseId) setEvSt('run', 'Writing decision...');
       },
-      {thinking:true} // let the model deliberate through the multi-section IPMI evaluation
+      {thinking:_thinkOn, usage:_evalUsage} // Settings → Evaluation Reasoning controls whether the model deliberates
     );
 
     clearInterval(iv);
@@ -2262,6 +2293,7 @@ async function runEval(caseId) {
       if(window._currentCaseId === caseId) setEvSt('run', '⏳ Retrying — writing full evaluation...');
       try {
         var _retryFull = '';
+        var _retryUsage = {};
         await apiCallStream(
           [{role:'user', content:msgContent}],
           sys,
@@ -2270,13 +2302,16 @@ async function runEval(caseId) {
             _retryFull = full;
             if(streamEl) streamEl.textContent = full.replace(/<corrections>[^<]*<\/corrections>/gi, '').trim();
             if(window._currentCaseId === caseId) setEvSt('run', 'Writing decision...');
-          }
-          // opts omitted — no thinking, so the entire budget goes to the visible answer
+          },
+          {usage:_retryUsage} // no thinking — the entire budget goes to the visible answer
         );
         if(_retryFull && _retryFull.trim().length >= 150) {
           fullResult = _retryFull;
           finalResult = fullResult;
         }
+        // Retry cost is additive on top of the primary (failed) call
+        _evalUsage.input_tokens = (_evalUsage.input_tokens||0) + (_retryUsage.input_tokens||0);
+        _evalUsage.output_tokens = (_evalUsage.output_tokens||0) + (_retryUsage.output_tokens||0);
       } catch(retryErr) {
         console.warn('[runEval] Non-thinking retry failed:', retryErr.message);
       }
@@ -2323,6 +2358,15 @@ async function runEval(caseId) {
         + 'reconciled against the actual policy wording once available.\n'
         + '============================================================\n\n'
       : '';
+    // Approximate token usage / cost for this evaluation (primary call + retry, if any).
+    // Not billing-accurate (ignores cache discounts, and excludes the small
+    // verdict-completion / clause-verification calls) — intended as a usage indicator
+    // so cost drivers (model choice, thinking) are visible per case, not just on the bill.
+    var _usageLine = '';
+    if(_evalUsage && (_evalUsage.input_tokens || _evalUsage.output_tokens)) {
+      var _estCost = estimateCostUSD(getMod(), _evalUsage.input_tokens, _evalUsage.output_tokens);
+      _usageLine = 'Tokens Used: '+(_evalUsage.input_tokens||0).toLocaleString()+' in / '+(_evalUsage.output_tokens||0).toLocaleString()+' out — Est. Cost: $'+_estCost.toFixed(3)+' ('+getMod()+(_thinkOn?', thinking on':'')+')\n';
+    }
     var evalHeader = policyAbsentBanner
       + '=== EVALUATION ===\n'
       + 'Date: '+new Date().toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'})+'\n'
@@ -2330,6 +2374,7 @@ async function runEval(caseId) {
       + 'Evaluator: '+(typeof S==='function'?S().name||'Team Member':'Team Member')+'\n'
       + 'Policy Source: '+(policyAbsent ? 'NONE — IPMI standards only' : (policySource||'matched'))+'\n'
       + (policyWording && policyWording.length > 50 ? 'Policy Preview: '+policyWording.trim().substring(0,120).replace(/\n/g,' ')+'...\n' : '')
+      + _usageLine
       + '=================\n\n';
     // Extract and save the decision verdict separately for reliability
     var savedDecision = 'UNKNOWN';
@@ -2463,7 +2508,10 @@ async function runEval(caseId) {
     // Show verdict toast
     var verdictColors = {declined:'#e8231a', approved:'#16a34a', partial:'#f59e0b', reviewing:'#1a2a72'};
     var verdictMsg = {declined:'⛔ DECLINED', approved:'✅ APPROVED', partial:'⚠ PARTIALLY APPROVED', reviewing:'⏳ PENDING INFORMATION'};
-    toast((verdictMsg[finalStatus]||'Evaluation complete') + ' — ' + (savedDecision||'') + (_verificationFlag ? '  ⚠ Clause citation unverified — please review' : ''));
+    var _costSuffix = (_evalUsage && (_evalUsage.input_tokens || _evalUsage.output_tokens))
+      ? '  (~$'+estimateCostUSD(getMod(), _evalUsage.input_tokens, _evalUsage.output_tokens).toFixed(3)+')'
+      : '';
+    toast((verdictMsg[finalStatus]||'Evaluation complete') + ' — ' + (savedDecision||'') + (_verificationFlag ? '  ⚠ Clause citation unverified — please review' : '') + _costSuffix);
     // Only update DOM elements if user is still viewing the evaluated case
     if(window._currentCaseId === caseId) {
       // Render with proper formatting
@@ -6214,6 +6262,13 @@ function renderSet() {
   html+='<option value="claude-opus-4-7"'+(s.mod==='claude-opus-4-7'?' selected':'')+'>Claude Opus 4.7 &mdash; Previous Generation</option>';
   html+='<option value="claude-haiku-4-5-20251001"'+(s.mod==='claude-haiku-4-5-20251001'?' selected':'')+'>Claude Haiku 4.5 &mdash; Fastest</option>';
   html+='</select></div></div>';
+  html+='<div class="g2" style="margin-bottom:14px">';
+  html+='<div class="fg"><label>Evaluation Reasoning</label><select id="s_think">';
+  var _thinkMode = localStorage.getItem('mp_eval_thinking')||'on';
+  html+='<option value="on"'+(_thinkMode==='on'?' selected':'')+'>Full Reasoning (Adaptive Thinking) — most accurate, highest cost</option>';
+  html+='<option value="off"'+(_thinkMode==='off'?' selected':'')+'>Standard (No Thinking) — faster, lower cost</option>';
+  html+='</select><span style="font-size:11px;color:var(--tx3);margin-top:4px;display:block">Adaptive thinking lets Claude deliberate through complex claims before answering, but that reasoning is billed as output tokens — the most expensive rate. Switch to Standard for routine/simple cases to cut cost.</span></div>';
+  html+='<div></div></div>';
   html+='<div class="fg" style="margin-bottom:14px"><label>Anthropic API Key</label>';
   html+='<input type="password" id="s_k" value="'+esc(s.key)+'" placeholder="sk-ant-api03-...">';
   html+='<span style="font-size:11px;color:var(--tx3);margin-top:4px;display:block">Stored only in your browser.</span></div>';
@@ -6421,12 +6476,14 @@ function saveSet() {
   const mod  = (G('s_m')||{}).value||'claude-sonnet-5';
   const pol  = localStorage.getItem('mp_pol')||'';
   const name = (G('s_n')||{}).value||'Team Member';
+  const thinkMode = (G('s_think')||{}).value === 'off' ? 'off' : 'on';
   if(!MODELS.includes(mod)) { toast('Invalid model selected'); return; }
   try {
     localStorage.setItem('mp_key', key);
     localStorage.setItem('mp_mod', mod);
     localStorage.setItem('mp_pol', pol);
     localStorage.setItem('mp_name', name);
+    localStorage.setItem('mp_eval_thinking', thinkMode);
   } catch(e) {
     toast('Storage full — settings could not be saved');
     console.warn('[saveSet] Storage write failed:', e.message);
@@ -7269,7 +7326,7 @@ async function changePassword() {
 // ══════════════════════════════════════════════════════════════
 
 // ── App version — update on every significant deployment ──
-var APP_BUILD = 1779270000; // epoch-style build number (matches <meta name="version">)
+var APP_BUILD = 1779300000; // epoch-style build number (matches <meta name="version">)
 
 var FB_APP = null;
 var FB_DB = null;
