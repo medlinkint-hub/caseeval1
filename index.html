@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
-<meta name="version" content="1779360000">
+<meta name="version" content="1779390000">
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
@@ -4412,6 +4412,7 @@ function renderCD(c) {
   html += '</div>';
   html += '<div class="brow">';
   html += '<button class="btn br2" id="bRun"><svg viewBox="0 0 24 24"><polygon points="5 3 19 12 5 21 5 3"/></svg>Run Evaluation</button>';
+  html += '<button class="btn bs" type="button" onclick="var _fic=document.getElementById(\'fi_c\'); if(_fic){_fic.click();}else{toast(\'Scroll down to the Documents section to upload\');}">📎 Add Documents</button>';
   html += '<button class="btn bs" id="bClear">Clear</button>';
   html += '<button class="btn bs" id="bExportEval" style="margin-left:auto" onclick="exportEvalPDF(window._currentCaseId)"><svg viewBox="0 0 24 24" style="width:14px;height:14px;stroke:currentColor;fill:none;stroke-width:2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/></svg>&nbsp;Save PDF</button>';
   html += '</div>';
@@ -7393,7 +7394,7 @@ async function changePassword() {
 // ══════════════════════════════════════════════════════════════
 
 // ── App version — update on every significant deployment ──
-var APP_BUILD = 1779360000; // epoch-style build number (matches <meta name="version">)
+var APP_BUILD = 1779390000; // epoch-style build number (matches <meta name="version">)
 
 var FB_APP = null;
 var FB_DB = null;
