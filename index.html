@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
-<meta name="version" content="1779330000">
+<meta name="version" content="1779360000">
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
@@ -7393,7 +7393,7 @@ async function changePassword() {
 // ══════════════════════════════════════════════════════════════
 
 // ── App version — update on every significant deployment ──
-var APP_BUILD = 1779330000; // epoch-style build number (matches <meta name="version">)
+var APP_BUILD = 1779360000; // epoch-style build number (matches <meta name="version">)
 
 var FB_APP = null;
 var FB_DB = null;
@@ -12789,9 +12789,9 @@ function renderFL_C(caseId) {
       h += '</div>';
       h += '</div>';
     });
-    h += '<div style="display:flex;gap:8px;margin-top:4px">';
-    h += '<label for="fi_c" style="flex:1;text-align:center;font-size:11px;color:var(--navy);cursor:pointer;text-decoration:underline;padding:4px">+ Add more documents</label>';
-    h += '<button onclick="clearSessionFiles(\''+caseId+'\');renderFL_C(\''+caseId+'\')" style="font-size:11px;color:#e8231a;background:transparent;border:none;cursor:pointer;padding:4px">✕ Clear all</button>';
+    h += '<div style="display:flex;gap:8px;margin-top:8px">';
+    h += '<label for="fi_c" style="flex:1;display:flex;align-items:center;justify-content:center;gap:6px;text-align:center;font-size:12px;font-weight:700;color:var(--navy);cursor:pointer;padding:10px 12px;background:rgba(26,42,114,.06);border:1.5px dashed var(--navy);border-radius:8px">📎 Add more documents (e.g. for re-evaluation)</label>';
+    h += '<button onclick="clearSessionFiles(\''+caseId+'\');renderFL_C(\''+caseId+'\')" style="font-size:11px;color:#e8231a;background:transparent;border:none;cursor:pointer;padding:4px;flex-shrink:0">✕ Clear all</button>';
     h += '</div></div>';
   }
 
