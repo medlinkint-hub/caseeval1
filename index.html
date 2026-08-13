@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
-<meta name="version" content="1779300000">
+<meta name="version" content="1779330000">
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
@@ -687,7 +687,7 @@ var updC = function(id,o) {
     // Strip base64 data from any filesData in the update
     if(o.filesData) {
       o = {...o, filesData: o.filesData.map(f => ({
-        name:f.name, size:f.size, type:f.type, ext:f.ext, _key:f._key||null,
+        name:f.name, size:f.size, type:f.type, ext:f.ext, _key:f._key||null, addedAt:f.addedAt||null,
         ...(f._isEvalReport ? {_isEvalReport:true, _decision:f._decision||'', _evalDate:f._evalDate||''} : {})
       }))};
     }
@@ -1808,10 +1808,37 @@ async function runEval(caseId) {
   const c = getC(caseId);
   if(!c) { toast('Case not found'); return; }
 
+  // ── Supplementary evaluation detection ──
+  // If this case already has an evaluation, treat this run as a follow-up rather
+  // than a blind redo: tell the AI what was previously decided, which documents
+  // are new since then, and ask it to state whether they resolve what was
+  // previously missing.
+  // IMPORTANT: `c` is a live reference into the CASES array, not a snapshot —
+  // updC() later mutates this same object in place. Snapshot the prior values
+  // into plain variables now, before anything can overwrite them, rather than
+  // reading c.* again after the case record has been updated.
+  var _isSupplementary = !!(c && c.eval && c.eval.length > 100);
+  var _priorEvalText = c && c.eval || '';
+  var _priorDecisionText = (c && c.lastDecision) || 'UNKNOWN';
+  var _priorAmountText = c && c.amountApproved || '';
+  var _newDocsSinceEval = [];
+  if(_isSupplementary && c.lastEvalAt && c.filesData && c.filesData.length) {
+    var _prevEvalTime = new Date(c.lastEvalAt).getTime();
+    if(!isNaN(_prevEvalTime)) {
+      c.filesData.forEach(function(fdMeta){
+        if(fdMeta.addedAt && new Date(fdMeta.addedAt).getTime() > _prevEvalTime) _newDocsSinceEval.push(fdMeta.name);
+      });
+    }
+  }
+
   // Warn if case already has evaluation
-  const existingEval = getC(caseId);
-  if(existingEval && existingEval.eval && existingEval.eval.length > 100) {
-    if(!confirm('This case already has an evaluation.\n\nRe-evaluating will replace it with a new one.\n\nAre you sure?')) {
+  if(_isSupplementary) {
+    var _confirmMsg = 'This case already has an evaluation.\n\n'
+      + (_newDocsSinceEval.length
+          ? 'Re-evaluating with ' + _newDocsSinceEval.length + ' newly added document(s): ' + _newDocsSinceEval.join(', ') + '.\n'
+          : 'Re-evaluating will replace it with a new one.\n')
+      + '\nAre you sure?';
+    if(!confirm(_confirmMsg)) {
       if(btn) btn.disabled = false;
       return;
     }
@@ -2238,9 +2265,32 @@ async function runEval(caseId) {
     + 'append a machine-readable corrections block ON ITS OWN LINE immediately after the DECISION line:\n'
     + '<corrections>{"amountClaimed":"1867.00","amountClaimedOriginal":"THB 70000","amountClaimedCurrency":"THB"}</corrections>\n'
     + 'Only include fields that need correction. Omit this block entirely if no corrections are needed.';
+  // ── Supplementary evaluation context — tell the AI this is a follow-up ──
+  function _lastRegexMatch(text, rx) {
+    var matches = [...String(text||'').matchAll(rx)];
+    return matches.length ? matches[matches.length-1][1].trim() : '';
+  }
+  var _supplementaryContext = '';
+  if(_isSupplementary) {
+    var _priorReason = _lastRegexMatch(_priorEvalText, /REASON\s*:\s*([^\n]+)/gi);
+    var _priorNextSteps = _lastRegexMatch(_priorEvalText, /NEXT STEPS\s*:\s*([^\n]+)/gi);
+    _supplementaryContext = '=== SUPPLEMENTARY EVALUATION — THIS CASE WAS PREVIOUSLY EVALUATED ===\n'
+      + 'Previous decision: ' + _priorDecisionText + '\n'
+      + (_priorReason ? 'Previous reason: ' + _priorReason + '\n' : '')
+      + (_priorNextSteps ? 'Previous next steps requested: ' + _priorNextSteps + '\n' : '')
+      + (_newDocsSinceEval.length
+          ? 'Newly added document(s) since that evaluation: ' + _newDocsSinceEval.join(', ') + '\n'
+          : 'No reliable new-document timestamps are available — treat all attached documents as needing review.\n')
+      + 'INSTRUCTION: This is a follow-up evaluation, not a first look. Explicitly state whether the newly '
+      + 'provided information resolves what the previous evaluation identified as missing or problematic. '
+      + 'If resolved, proceed to a full updated decision using all current information. If something is still '
+      + 'missing, say precisely what. Do not simply repeat the previous evaluation verbatim — reassess.\n'
+      + '========================================\n\n';
+  }
+
   // ── PSEUDONYMISATION: strip patient identifiers before sending to Anthropic ──
   pseudoReset(); // fresh map per evaluation
-  var txtPseudo = pseudonymise(docManifest + txt); // docManifest prepended so filenames also get pseudonymised
+  var txtPseudo = pseudonymise(_supplementaryContext + docManifest + txt); // supplementary context + docManifest prepended so all get pseudonymised together
   var pseudoMapSnapshot = getPseudoMap();
   var pseudoCount = Object.keys(pseudoMapSnapshot).length;
   if(pseudoCount > 0) {
@@ -2483,8 +2533,24 @@ async function runEval(caseId) {
         + 'Please have a senior reviewer confirm the clause citation before this decision is communicated to the claimant.\n'
         + '============================================================\n\n'
       : '';
-    var _evalSave = {eval: _verificationBanner + evalHeader + finalResult, status: finalStatus,
+
+    // ── "What changed" summary for supplementary evaluations ──
+    var _decisionChanged = false;
+    var _changeSummary = '';
+    if(_isSupplementary) {
+      var _prevDecisionWord = _priorDecisionText.trim().split(/\s/)[0].toUpperCase();
+      var _newDecisionWord = (savedDecision||'UNKNOWN').trim().split(/\s/)[0].toUpperCase();
+      _decisionChanged = _prevDecisionWord !== _newDecisionWord;
+      _changeSummary = '📋 SUPPLEMENTARY EVALUATION — ' + (_decisionChanged ? 'DECISION CHANGED' : 'DECISION UNCHANGED') + '\n'
+        + 'Previous: ' + _priorDecisionText + (_priorAmountText ? ' (EUR '+_priorAmountText+')' : '') + '\n'
+        + 'New: ' + (savedDecision||'UNKNOWN') + (_approvedFromEval ? ' (EUR '+_approvedFromEval+')' : '') + '\n'
+        + (_newDocsSinceEval.length ? 'Based on newly added: ' + _newDocsSinceEval.join(', ') + '\n' : '')
+        + '========================================\n\n';
+    }
+
+    var _evalSave = {eval: _verificationBanner + _changeSummary + evalHeader + finalResult, status: finalStatus,
       lastDecision: savedDecision, evalHistory: evalHist,
+      lastEvalAt: new Date().toISOString(),
       pseudoMap: pseudoMapSnapshot || {}
     };
     // Always write verificationFlag explicitly (never omit it) — updC() merges via
@@ -2511,11 +2577,12 @@ async function runEval(caseId) {
     var _costSuffix = (_evalUsage && (_evalUsage.input_tokens || _evalUsage.output_tokens))
       ? '  (~$'+estimateCostUSD(getMod(), _evalUsage.input_tokens, _evalUsage.output_tokens).toFixed(3)+')'
       : '';
-    toast((verdictMsg[finalStatus]||'Evaluation complete') + ' — ' + (savedDecision||'') + (_verificationFlag ? '  ⚠ Clause citation unverified — please review' : '') + _costSuffix);
+    var _changeSuffix = _isSupplementary ? ('  (was: ' + _priorDecisionText + (_decisionChanged?' → CHANGED':' → unchanged') + ')') : '';
+    toast((verdictMsg[finalStatus]||'Evaluation complete') + ' — ' + (savedDecision||'') + (_verificationFlag ? '  ⚠ Clause citation unverified — please review' : '') + _costSuffix + _changeSuffix);
     // Only update DOM elements if user is still viewing the evaluated case
     if(window._currentCaseId === caseId) {
       // Render with proper formatting
-      if(erDiv) erDiv.innerHTML = renderEvalTxt(_verificationBanner + finalResult);
+      if(erDiv) erDiv.innerHTML = renderEvalTxt(_verificationBanner + _changeSummary + finalResult);
       setEvSt('done', 'Done — '+new Date().toLocaleTimeString());
       // Update all visible badges for this case
       const cb = G('cbdg'); if(cb) { const cc=getC(caseId); cb.innerHTML=tBadge(cc.type)+' '+pBadge(cc.priority)+' '+sBadge(cc.status); }
@@ -7326,7 +7393,7 @@ async function changePassword() {
 // ══════════════════════════════════════════════════════════════
 
 // ── App version — update on every significant deployment ──
-var APP_BUILD = 1779300000; // epoch-style build number (matches <meta name="version">)
+var APP_BUILD = 1779330000; // epoch-style build number (matches <meta name="version">)
 
 var FB_APP = null;
 var FB_DB = null;
@@ -7534,7 +7601,7 @@ function syncCaseToFirestore(caseObj) {
   // Preserve _isEvalReport markers so eval-report files are not re-sent to Claude after sync
   var lean = Object.assign({}, caseObj, {
     filesData: (caseObj.filesData||[]).map(function(f){
-      var fm = {name:f.name, size:f.size, type:f.type, ext:f.ext, _key:f._key||null};
+      var fm = {name:f.name, size:f.size, type:f.type, ext:f.ext, _key:f._key||null, addedAt:f.addedAt||null};
       if(f._isEvalReport) { fm._isEvalReport=true; fm._decision=f._decision||''; fm._evalDate=f._evalDate||''; }
       return fm;
     }),
@@ -11893,7 +11960,8 @@ function addFiles(list, caseId) {
         console.warn('[addFiles] Case switched during file load — discarding', f.name);
         return;
       }
-      var fd = {name:f.name, size:f.size, type:f.type, ext:fxt(f.name), data:e.target.result};
+      var _addedAt = new Date().toISOString();
+      var fd = {name:f.name, size:f.size, type:f.type, ext:fxt(f.name), data:e.target.result, addedAt:_addedAt};
       var fileKey = 'fd_'+caseId+'_'+Date.now()+'_'+FILES.length;
       fd._key = fileKey;
       FILES.push(fd);
@@ -11903,10 +11971,13 @@ function addFiles(list, caseId) {
       }).catch(function(err){
         console.warn('[Files] IndexedDB failed, session-only:', err.message);
       });
-      // Save metadata to case
-      var meta = {name:f.name, size:f.size, type:f.type, ext:fd.ext, _key:fileKey};
+      // Save metadata to case — addedAt lets a later re-evaluation detect which
+      // documents were uploaded after the previous evaluation ran (see runEval's
+      // supplementary-evaluation logic). Must be preserved on existing entries too,
+      // or every re-upload would wipe the timestamp off files added earlier.
+      var meta = {name:f.name, size:f.size, type:f.type, ext:fd.ext, _key:fileKey, addedAt:_addedAt};
       var existing = (getC(caseId)||{}).filesData||[];
-      var metas = existing.map(function(m){ return {name:m.name,size:m.size,type:m.type,ext:m.ext,_key:m._key||null}; });
+      var metas = existing.map(function(m){ return {name:m.name,size:m.size,type:m.type,ext:m.ext,_key:m._key||null,addedAt:m.addedAt||null}; });
       metas.push(meta);
       updC(caseId, {filesData:metas});
       renderFL_C(caseId);
