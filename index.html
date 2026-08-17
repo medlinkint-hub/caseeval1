@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
-<meta name="version" content="1779480000">
+<meta name="version" content="1779510000">
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
@@ -803,7 +803,12 @@ function pyBadge(p) {
 var SLA_DAYS = {critical:1, high:3, medium:7, routine:14};
 var SLA_TERMINAL_STATUSES = ['approved','declined','closed'];
 function caseAgeDays(c) {
-  var ref = (c && (c.updatedAt || c.created)) || null;
+  // SLA age must track time since the case was OPENED, not last touched.
+  // updC() stamps updatedAt on every single mutation (any note, field edit,
+  // or file upload) — using updatedAt here would reset the SLA clock to 0 on
+  // routine administrative activity, hiding cases that have genuinely been
+  // open and unresolved for a long time. c.created is the correct anchor.
+  var ref = (c && c.created) || null;
   if(!ref) return null;
   var t = new Date(ref).getTime();
   if(isNaN(t)) return null;
@@ -832,12 +837,21 @@ function findDuplicateClaims(caseId) {
   var cDol = (c.dol||'').trim();
   var cHospital = (c.paHospital||'').trim().toLowerCase();
   if(!cDol && !cHospital) return []; // not enough signal to compare on
+  var cDolTime = cDol ? new Date(cDol).getTime() : NaN;
   return CASES.filter(function(o){
     if(o.id === caseId) return false;
     if(!o.patient || o.patient.trim().toLowerCase() !== pName) return false;
     var oDol = (o.dol||'').trim();
+    // Exact date-of-loss match — strongest signal, same incident submitted twice
     if(cDol && oDol && oDol === cDol) return true;
-    if(cHospital && cDol && oDol===cDol && (o.paHospital||'').trim().toLowerCase()===cHospital) return true;
+    // Same hospital + dates within a few days — catches a mistyped/near-miss DOL
+    // on an otherwise-matching submission, without requiring an exact date match
+    // (which would make this branch identical to the one above and never add
+    // anything — the bug this replaces).
+    if(cHospital && oDol && !isNaN(cDolTime) && (o.paHospital||'').trim().toLowerCase()===cHospital) {
+      var oDolTime = new Date(oDol).getTime();
+      if(!isNaN(oDolTime) && Math.abs(cDolTime - oDolTime) <= 3*86400000) return true;
+    }
     return false;
   }).map(function(o){
     return {id:o.id, caseNum:o.caseNum||o.id, dol:o.dol||'', status:o.status||'', insurer:o.insurer||''};
@@ -2410,12 +2424,18 @@ async function runEval(caseId) {
         }
       );
     } catch(primaryErr) {
-      // A stall/timeout (or any other failure) on the primary call is handled the
-      // same as an empty result below — the non-thinking retry directly addresses
-      // the most common cause (thinking ran long with no visible output yet) and
-      // is a safe fallback for other transient failures too, instead of
-      // immediately surfacing a bare error the user has to manually retry.
-      console.warn('[runEval] Primary evaluation call failed:', primaryErr.message);
+      // Only a stall/timeout is safe to recover from here by falling through to
+      // the empty-result retry below (disabling thinking directly addresses the
+      // cause — thinking ran long with no visible output yet). Anything else
+      // (no API key, invalid key, quota/billing, network failure, HTTP 4xx/5xx)
+      // must re-throw to the outer catch, which has the real handling for those
+      // (a precise toast, or the file-too-large retry-without-attachments path).
+      // Swallowing everything here would silently save a fabricated "PENDING
+      // INFORMATION" evaluation into the case in place of surfacing a real
+      // config/auth error — and that fake record would then be fed into the
+      // NEXT evaluation as if it were genuine case history.
+      if(!/stalled|no response received/i.test(primaryErr.message||'')) throw primaryErr;
+      console.warn('[runEval] Primary evaluation call stalled:', primaryErr.message);
       fullResult = '';
     }
 
@@ -7623,7 +7643,7 @@ async function changePassword() {
 // ══════════════════════════════════════════════════════════════
 
 // ── App version — update on every significant deployment ──
-var APP_BUILD = 1779480000; // epoch-style build number (matches <meta name="version">)
+var APP_BUILD = 1779510000; // epoch-style build number (matches <meta name="version">)
 
 var FB_APP = null;
 var FB_DB = null;
