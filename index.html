@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
-<meta name="version" content="1779420000">
+<meta name="version" content="1779450000">
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
@@ -911,14 +911,20 @@ async function apiCallStream(messages, systemPrompt, maxTokens, onChunk, opts) {
       });
 
       const evalAbortCtrl = new AbortController();
-      // Idle timeout: aborts if no data (connection or stream) arrives for 90s,
-      // rather than capping the whole request at a flat 5 minutes — a slow but
-      // still-streaming response should not be killed, but a stalled/dead
-      // connection (no timeout previously covered the read loop) must not hang forever.
+      // Idle timeout: aborts if no data (connection or stream) arrives for this
+      // long, rather than capping the whole request at a flat duration — a slow
+      // but still-streaming response should not be killed, but a stalled/dead
+      // connection (no timeout previously covered the read loop) must not hang
+      // forever. Default 90s; callers doing adaptive thinking (which can go
+      // silent for well over 90s while the model deliberates, with zero bytes
+      // reaching the client in the meantime) should pass a longer value via
+      // opts.idleTimeoutMs — otherwise this fires on legitimate long-thinking
+      // responses, not just genuinely dead connections.
+      var _idleTimeoutMs = (opts && opts.idleTimeoutMs) || 90000;
       var evalIdleTimer = null;
       function armEvalIdleTimeout() {
         if(evalIdleTimer) clearTimeout(evalIdleTimer);
-        evalIdleTimer = setTimeout(function(){ evalAbortCtrl.abort(); }, 90000);
+        evalIdleTimer = setTimeout(function(){ evalAbortCtrl.abort(); }, _idleTimeoutMs);
       }
       armEvalIdleTimeout();
       const res = await fetch('https://api.anthropic.com/v1/messages', {
@@ -984,7 +990,7 @@ async function apiCallStream(messages, systemPrompt, maxTokens, onChunk, opts) {
     } catch(streamErr) {
       console.warn('[Stream] Failed, falling back to regular fetch:', streamErr.message);
       if(streamErr.name === 'AbortError') {
-        throw new Error('Evaluation stalled — no response received for 90 seconds. Please try again.');
+        throw new Error('Evaluation stalled — no response received for '+Math.round(_idleTimeoutMs/1000)+' seconds. Please try again.');
       }
       // Fall through to non-streaming below
     }
@@ -2319,19 +2325,37 @@ async function runEval(caseId) {
     var _thinkOn = evalThinkingEnabled();
     var _evalUsage = {}; // populated by apiCallStream with input/output token counts
     let fullResult = '';
-    await apiCallStream(
-      [{role:'user', content:msgContent}],
-      sys,
-      _thinkOn ? 32000 : 16000, // thinking output shares this budget with the final answer — see retry-without-thinking safety net below
-      (chunk, full) => {
-        fullResult = full;
-        clearInterval(iv);
-        // Strip machine-readable corrections block before streaming display
-        if(streamEl) streamEl.textContent = full.replace(/<corrections>[^<]*<\/corrections>/gi, '').trim();
-        if(window._currentCaseId === caseId) setEvSt('run', 'Writing decision...');
-      },
-      {thinking:_thinkOn, usage:_evalUsage} // Settings → Evaluation Reasoning controls whether the model deliberates
-    );
+    try {
+      await apiCallStream(
+        [{role:'user', content:msgContent}],
+        sys,
+        _thinkOn ? 32000 : 16000, // thinking output shares this budget with the final answer — see retry-without-thinking safety net below
+        (chunk, full) => {
+          fullResult = full;
+          clearInterval(iv);
+          // Strip machine-readable corrections block before streaming display
+          if(streamEl) streamEl.textContent = full.replace(/<corrections>[^<]*<\/corrections>/gi, '').trim();
+          if(window._currentCaseId === caseId) setEvSt('run', 'Writing decision...');
+        },
+        {
+          thinking:_thinkOn, usage:_evalUsage, // Settings → Evaluation Reasoning controls whether the model deliberates
+          // Adaptive thinking can legitimately go silent for well over the default
+          // 90s idle timeout while the model deliberates through a complex case —
+          // zero bytes reach the client during that time, indistinguishable from a
+          // dead connection at the network level. Give the thinking-enabled primary
+          // call more headroom; the non-thinking retry below stays at the default.
+          idleTimeoutMs: _thinkOn ? 240000 : 90000
+        }
+      );
+    } catch(primaryErr) {
+      // A stall/timeout (or any other failure) on the primary call is handled the
+      // same as an empty result below — the non-thinking retry directly addresses
+      // the most common cause (thinking ran long with no visible output yet) and
+      // is a safe fallback for other transient failures too, instead of
+      // immediately surfacing a bare error the user has to manually retry.
+      console.warn('[runEval] Primary evaluation call failed:', primaryErr.message);
+      fullResult = '';
+    }
 
     clearInterval(iv);
 
@@ -7409,7 +7433,7 @@ async function changePassword() {
 // ══════════════════════════════════════════════════════════════
 
 // ── App version — update on every significant deployment ──
-var APP_BUILD = 1779420000; // epoch-style build number (matches <meta name="version">)
+var APP_BUILD = 1779450000; // epoch-style build number (matches <meta name="version">)
 
 var FB_APP = null;
 var FB_DB = null;
