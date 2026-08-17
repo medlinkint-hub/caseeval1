@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
-<meta name="version" content="1779450000">
+<meta name="version" content="1779480000">
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
@@ -481,7 +481,7 @@ function delFileCur(i){
 function toggleDT(el){var b=el.parentElement.querySelector('.dtb');if(b)b.classList.toggle('open');}
 function goNew(){navTo('new')}
 function goDash(){navTo('dash')}
-function goCases(){SEARCH_QUERY='';SEARCH_FILTERS={status:'',type:'',insurer:'',priority:''};renderCasesWithSearch();}
+function goCases(){SEARCH_QUERY='';SEARCH_FILTERS={status:'',type:'',insurer:'',priority:'',slaBreach:false};renderCasesWithSearch();}
 function goOpenCritical(){renderCases(c=>c.priority==='critical')}
 function goOpenStatus(){renderCases(c=>['new','reviewing','pending'].includes(c.status))}
 function goMedical(){renderCases(c=>c.type==='medclaim')}
@@ -793,6 +793,55 @@ function pyBadge(p) {
   const m = {pending:'bam Pending',processing:'bbl Processing',paid:'bgr Paid',disputed:'brd Disputed'};
   const [c,l] = (m[p]||'bam Pending').split(' ');
   return '<span class="badge '+c+'">'+l+'</span>';
+}
+
+// ── SLA / aging tracking helpers ──────────────────────────────
+// Shared source of truth for both the Dashboard's slaBadge() (further below,
+// which renders the pill) and the Cases list's SLA-breach filter. Matches the
+// thresholds the existing Dashboard badge already used (critical:1, high:3,
+// medium:7, routine:14).
+var SLA_DAYS = {critical:1, high:3, medium:7, routine:14};
+var SLA_TERMINAL_STATUSES = ['approved','declined','closed'];
+function caseAgeDays(c) {
+  var ref = (c && (c.updatedAt || c.created)) || null;
+  if(!ref) return null;
+  var t = new Date(ref).getTime();
+  if(isNaN(t)) return null;
+  return Math.floor((Date.now() - t) / 86400000);
+}
+function isSlaBreached(c) {
+  if(!c || SLA_TERMINAL_STATUSES.indexOf(c.status)!==-1) return false;
+  var days = caseAgeDays(c);
+  if(days === null) return false;
+  var limit = SLA_DAYS[c.priority] || SLA_DAYS.routine;
+  return days >= limit;
+}
+
+// ── Duplicate / related claim detection ───────────────────────
+// Purely local — scans CASES already in the browser, no data leaves the app.
+// Flags same-patient claims that share a date of loss (the strongest signal:
+// the exact same incident being submitted more than once) or share both a
+// date of loss and treating hospital (catches near-duplicate submissions
+// where the DOL was mistyped slightly differently). This is a proactive
+// signal for the fraud/subrogation check already in the evaluation prompt —
+// it does not decide anything on its own.
+function findDuplicateClaims(caseId) {
+  var c = getC(caseId);
+  if(!c || !c.patient || !c.patient.trim()) return [];
+  var pName = c.patient.trim().toLowerCase();
+  var cDol = (c.dol||'').trim();
+  var cHospital = (c.paHospital||'').trim().toLowerCase();
+  if(!cDol && !cHospital) return []; // not enough signal to compare on
+  return CASES.filter(function(o){
+    if(o.id === caseId) return false;
+    if(!o.patient || o.patient.trim().toLowerCase() !== pName) return false;
+    var oDol = (o.dol||'').trim();
+    if(cDol && oDol && oDol === cDol) return true;
+    if(cHospital && cDol && oDol===cDol && (o.paHospital||'').trim().toLowerCase()===cHospital) return true;
+    return false;
+  }).map(function(o){
+    return {id:o.id, caseNum:o.caseNum||o.id, dol:o.dol||'', status:o.status||'', insurer:o.insurer||''};
+  });
 }
 
 // ══════════════════════════════════════════════
@@ -1710,7 +1759,7 @@ function buildInvoiceBreakdown(caseId) {
     lines.push('  TOTAL ELIGIBLE (EUR): '+allEligible.toFixed(2));
     lines.push('  TOTAL EXCLUDED (EUR): '+allExcluded.toFixed(2));
   }
-  lines.push('  (Exchange rates: approximate market rates at time of evaluation)');
+  lines.push('  (Exchange rates: '+(typeof FX_LIVE!=='undefined' && FX_LIVE ? 'live rates, updated '+getFxRatesAge()+' min ago' : 'built-in approximate rates, not live')+')');
   lines.push('=== END INVOICES ===\n');
   return lines.join('\n');
 }
@@ -2300,9 +2349,22 @@ async function runEval(caseId) {
       + '========================================\n\n';
   }
 
+  // ── Duplicate / related claim warning ──
+  var _dupClaims = (typeof findDuplicateClaims==='function') ? findDuplicateClaims(caseId) : [];
+  var _dupContext = '';
+  if(_dupClaims.length) {
+    _dupContext = '=== ⚠ POTENTIAL DUPLICATE / RELATED CLAIM DETECTED ===\n'
+      + 'This patient and date of loss match ' + _dupClaims.length + ' other case(s) already in the system:\n'
+      + _dupClaims.map(function(d){ return '  • ' + (d.caseNum||d.id) + ' — status: ' + (d.status||'unknown') + ', DOL: ' + (d.dol||'unknown'); }).join('\n') + '\n'
+      + 'INSTRUCTION: Investigate whether this is a duplicate submission of the same claim, a legitimate '
+      + 'related claim (e.g. different providers for the same incident), or a coincidental match. Address this '
+      + 'explicitly in your fraud/subrogation check section — do not silently ignore it.\n'
+      + '========================================\n\n';
+  }
+
   // ── PSEUDONYMISATION: strip patient identifiers before sending to Anthropic ──
   pseudoReset(); // fresh map per evaluation
-  var txtPseudo = pseudonymise(_supplementaryContext + docManifest + txt); // supplementary context + docManifest prepended so all get pseudonymised together
+  var txtPseudo = pseudonymise(_dupContext + _supplementaryContext + docManifest + txt); // all prepended context gets pseudonymised together
   var pseudoMapSnapshot = getPseudoMap();
   var pseudoCount = Object.keys(pseudoMapSnapshot).length;
   if(pseudoCount > 0) {
@@ -3603,9 +3665,10 @@ function wireDZ(dzId, fiId, onFiles) {
 // ══════════════════════════════════════════════
 
 function slaBadge(c){
-  if(!c||['closed','approved','declined'].indexOf(c.status)!==-1) return '<span style="color:var(--tx3);font-size:11px">—</span>';
-  var d=Math.floor((Date.now()-new Date(c.created||Date.now()).getTime())/86400000);
-  var l=c.priority==='critical'?1:c.priority==='high'?3:c.priority==='medium'?7:14;
+  if(!c||SLA_TERMINAL_STATUSES.indexOf(c.status)!==-1) return '<span style="color:var(--tx3);font-size:11px">—</span>';
+  var d=caseAgeDays(c);
+  if(d===null) return '<span style="color:var(--tx3);font-size:11px">—</span>';
+  var l=SLA_DAYS[c.priority]||SLA_DAYS.routine;
   if(d>l) return '<span style="background:#fee2e2;color:#dc2626;padding:2px 7px;border-radius:12px;font-size:11px;font-weight:700">+' +(d-l)+'d OVERDUE</span>';
   if(d>=l*0.8) return '<span style="background:#fef3c7;color:#d97706;padding:2px 7px;border-radius:12px;font-size:11px;font-weight:600">'+d+'d/'+l+'d</span>';
   return '<span style="background:#d1fae5;color:#059669;padding:2px 7px;border-radius:12px;font-size:11px">'+d+'d/'+l+'d</span>';
@@ -4081,6 +4144,75 @@ function showOldEval(idx) {
   headerEl.querySelector('button').onclick = function(){ modal.remove(); };
 }
 
+// ── Simple line-based diff (LCS) — no external library ──
+function _lineDiff(oldText, newText) {
+  var oldLines = (oldText||'').split('\n');
+  var newLines = (newText||'').split('\n');
+  var n = oldLines.length, m = newLines.length;
+  var dp = new Array(n+1);
+  for(var i=0;i<=n;i++){ dp[i] = new Array(m+1).fill(0); }
+  for(var i2=n-1;i2>=0;i2--){
+    for(var j2=m-1;j2>=0;j2--){
+      dp[i2][j2] = oldLines[i2]===newLines[j2] ? dp[i2+1][j2+1]+1 : Math.max(dp[i2+1][j2], dp[i2][j2+1]);
+    }
+  }
+  var result = [];
+  var i=0, j=0;
+  while(i<n && j<m) {
+    if(oldLines[i]===newLines[j]) { result.push({type:'same', text:oldLines[i]}); i++; j++; }
+    else if(dp[i+1][j] >= dp[i][j+1]) { result.push({type:'del', text:oldLines[i]}); i++; }
+    else { result.push({type:'add', text:newLines[j]}); j++; }
+  }
+  while(i<n) { result.push({type:'del', text:oldLines[i]}); i++; }
+  while(j<m) { result.push({type:'add', text:newLines[j]}); j++; }
+  return result;
+}
+
+function compareEvalToCurrent(idx) {
+  var c = getC(window._currentCaseId);
+  if(!c || !c.evalHistory || !c.evalHistory[idx]) return;
+  var h = c.evalHistory[idx];
+  var oldText = h.eval || '';
+  var newText = c.eval || '';
+
+  var modal = document.createElement('div');
+  modal.setAttribute('data-modal','1');
+  modal.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,.55);z-index:9999;display:flex;align-items:flex-start;justify-content:center;padding:16px;box-sizing:border-box;overflow-y:auto';
+
+  var inner = document.createElement('div');
+  inner.style.cssText = 'background:#fff;border-radius:12px;width:100%;max-width:900px;padding:0;overflow:hidden;margin:auto;flex-shrink:0';
+
+  var headerEl = document.createElement('div');
+  headerEl.style.cssText = 'display:flex;align-items:center;gap:12px;padding:16px 20px;background:#f8fafc;border-bottom:1px solid #e5e7eb;position:sticky;top:0;z-index:2';
+  headerEl.innerHTML = '<div style="flex:1"><div style="font-weight:700;font-size:14px;color:#1a2a72">Compare Evaluations</div>'
+    + '<div style="font-size:12px;color:#64748b;margin-top:2px">'+esc(h.decision||'UNKNOWN')+' ('+fdts(h.date)+')  →  '+esc(c.lastDecision||'UNKNOWN')+' (current)</div>'
+    + '<div style="font-size:11px;color:#64748b;margin-top:6px"><span style="background:#fee2e2;color:#991b1b;padding:1px 6px;border-radius:4px;margin-right:6px">removed</span><span style="background:#d1fae5;color:#065f46;padding:1px 6px;border-radius:4px">added</span></div></div>'
+    + '<button onclick="this.closest(\'[data-modal]\').remove()" style="background:none;border:1px solid #e5e7eb;border-radius:6px;font-size:13px;cursor:pointer;color:#64748b;padding:5px 12px;flex-shrink:0">Close ✕</button>';
+
+  var body = document.createElement('div');
+  body.style.cssText = 'padding:20px;overflow-y:auto;max-height:calc(90vh - 90px);font-family:DM Mono,monospace;font-size:12px;line-height:1.6';
+
+  if(oldText.split('\n').length > 2000 || newText.split('\n').length > 2000) {
+    body.innerHTML = '<div style="color:#92400e;background:#fef3c7;padding:10px;border-radius:6px;margin-bottom:10px">Evaluations are too long for a line-by-line comparison — showing the current evaluation only.</div>'
+      + '<div style="white-space:pre-wrap">'+esc(newText)+'</div>';
+  } else {
+    var diff = _lineDiff(oldText, newText);
+    body.innerHTML = diff.map(function(d){
+      var t = esc(d.text||' ');
+      if(d.type==='add') return '<div style="background:#d1fae5;color:#065f46;padding:1px 8px;white-space:pre-wrap">+ '+t+'</div>';
+      if(d.type==='del') return '<div style="background:#fee2e2;color:#991b1b;padding:1px 8px;white-space:pre-wrap;text-decoration:line-through">- '+t+'</div>';
+      return '<div style="color:#374151;padding:1px 8px;white-space:pre-wrap">&nbsp;&nbsp;'+t+'</div>';
+    }).join('');
+  }
+
+  inner.appendChild(headerEl);
+  inner.appendChild(body);
+  modal.appendChild(inner);
+  document.body.appendChild(modal);
+  modal.onclick = function(e){ if(e.target===modal) modal.remove(); };
+  headerEl.querySelector('button').onclick = function(){ modal.remove(); };
+}
+
 function renderCD(c) {
   const cid = c.id;
   let html = '';
@@ -4397,6 +4529,7 @@ function renderCD(c) {
       html += '<span style="color:' + hc + ';font-weight:700;min-width:90px">' + esc(h.decision||'UNKNOWN') + '</span>';
       html += '<span style="color:var(--tx3)">' + fdts(h.date) + '</span>';
       html += '<button onclick="showOldEval(' + hidx + ')" class="tbtn" style="margin-left:auto;font-size:11px;padding:3px 10px">View</button>';
+      html += '<button onclick="compareEvalToCurrent(' + hidx + ')" class="tbtn" style="font-size:11px;padding:3px 10px">⇄ Compare to Current</button>';
       html += '</div>';
     });
     html += '</div>';
@@ -4441,6 +4574,14 @@ function renderCD(c) {
     html += '</div>';
   }
 
+  // ── Duplicate / related claim warning — shown before evaluation runs, not just after ──
+  var _cdDupClaims = (typeof findDuplicateClaims==='function') ? findDuplicateClaims(cid) : [];
+  if(_cdDupClaims.length) {
+    html += '<div style="margin-bottom:10px;padding:10px 14px;background:#fef3c7;border:1.5px solid #f59e0b;border-radius:8px;font-size:12px;color:#92400e">';
+    html += '<b>⚠ Potential duplicate/related claim</b> — same patient + date of loss as: ';
+    html += _cdDupClaims.map(function(d){ return '<a href="javascript:void(0)" onclick="openCase(\''+d.id+'\')" style="color:#92400e;font-weight:700;text-decoration:underline">'+esc(d.caseNum||d.id)+'</a> ('+esc(d.status||'')+')'; }).join(', ');
+    html += '</div>';
+  }
   var _evalToShow = c.eval || (c.evalHistory && c.evalHistory.length ? c.evalHistory[0].eval : '');
   var _evalIsHistory = !c.eval && _evalToShow;
   html += '<div id="evR" style="overflow-y:auto;padding-right:4px;max-height:none">';
@@ -6381,6 +6522,11 @@ function renderSet() {
   html+='<span style="font-size:11px;color:var(--tx3);margin-top:4px;display:block">Stored only in your browser.</span></div>';
   html+='<div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn bp" onclick="saveSet()">Save Settings</button><button class="btn bs" id="testBtn" onclick="testAPI()">Test API Connection</button></div>';
   html+='<div id="testResult" style="display:none;margin-top:10px"></div>';
+  // ── FX rate status ──
+  html += '<div style="margin-top:14px;padding:10px 14px;background:var(--bg3);border:1px solid var(--bor);border-radius:8px;display:flex;align-items:center;gap:10px;flex-wrap:wrap" id="fx_status_row">';
+  html += '<span style="font-size:12px;color:var(--tx3)">💱 Exchange rates: <b id="fx_status_text" style="color:var(--navy)">'+(FX_LIVE ? ('live, updated '+getFxRatesAge()+' min ago') : 'built-in static table (not live)')+'</b></span>';
+  html += '<button class="btn bs" style="font-size:11px;padding:4px 10px;margin-left:auto" onclick="fetchLiveFXRates(true).then(function(ok){toast(ok?\'✅ Exchange rates refreshed\':\'⚠ Could not fetch live rates — using built-in table\');renderSet();})">🔄 Refresh Rates</button>';
+  html += '</div>';
   // ── Global policy warning ──
   var _gPol = localStorage.getItem('mp_pol')||'';
   if(_gPol && _gPol.length > 50) {
@@ -7339,6 +7485,50 @@ var FX = {
   'THB':0.026, 'BAHT':0.026, 'B':0.026
 };
 
+// ── Live FX rates ──────────────────────────────────────────────
+// FX above is a static, hand-maintained table (accurate only as of whenever
+// this file was last edited). Fetch live rates from a free, no-key-required
+// API on app start, cache for 12h in localStorage, and prefer them in toEUR()
+// when available — falling back to the static table if the fetch fails, is
+// stale beyond the cache window with no network, or a currency is missing
+// from the live response.
+var FX_LIVE = null;
+var FX_LIVE_AT = null;
+function getFxRatesAge() {
+  if(!FX_LIVE_AT) return null;
+  return Math.round((Date.now() - new Date(FX_LIVE_AT).getTime()) / 60000); // minutes
+}
+async function fetchLiveFXRates(force) {
+  try {
+    if(!force) {
+      var cached = null, cachedAt = null;
+      try { cached = JSON.parse(localStorage.getItem('mp_fx_live')||'null'); cachedAt = localStorage.getItem('mp_fx_live_at'); } catch(e){}
+      if(cached && cachedAt && (Date.now() - new Date(cachedAt).getTime()) < 12*60*60*1000) {
+        FX_LIVE = cached; FX_LIVE_AT = cachedAt;
+        return true;
+      }
+    }
+    var resp = await fetch('https://open.er-api.com/v6/latest/EUR');
+    if(!resp.ok) throw new Error('HTTP '+resp.status);
+    var data = await resp.json();
+    if(!data || data.result !== 'success' || !data.rates) throw new Error('Unexpected response shape');
+    var rates = {};
+    Object.keys(data.rates).forEach(function(cur){
+      var perEur = data.rates[cur]; // e.g. USD: 1.08 means 1 EUR = 1.08 USD
+      if(perEur > 0) rates[cur] = 1/perEur; // convert to our convention: EUR per 1 unit of cur
+    });
+    rates.EUR = 1;
+    FX_LIVE = rates;
+    FX_LIVE_AT = new Date().toISOString();
+    try { localStorage.setItem('mp_fx_live', JSON.stringify(FX_LIVE)); localStorage.setItem('mp_fx_live_at', FX_LIVE_AT); } catch(e){}
+    console.log('[FX] Live rates refreshed:', Object.keys(FX_LIVE).length, 'currencies');
+    return true;
+  } catch(e) {
+    console.warn('[FX] Live rate fetch failed, using built-in static rates:', e.message);
+    return false;
+  }
+}
+
 function toEUR(amount, cur) {
   if(!amount || isNaN(parseFloat(amount))) return 0;
   if(!cur) return parseFloat(amount);
@@ -7346,7 +7536,7 @@ function toEUR(amount, cur) {
   // Map common currency symbols and aliases to ISO codes
   var symMap = {'₹':'INR','RS':'INR','RS.':'INR','฿':'THB','£':'GBP','€':'EUR','$':'USD','¥':'JPY','₺':'TRY','₱':'PHP','元':'CNY','RM':'MYR','RP':'IDR','HK$':'HKD','S$':'SGD','د.إ':'AED'};
   var key = symMap[raw] || symMap[raw.toUpperCase()] || raw.toUpperCase().trim().replace(/[^A-Z]/g,'');
-  var r = FX[key];
+  var r = (FX_LIVE && FX_LIVE[key]) || FX[key];
   if(!r) {
     // Try partial match for common aliases
     if(key.indexOf('BAHT')!==-1) r=0.026;
@@ -7433,7 +7623,7 @@ async function changePassword() {
 // ══════════════════════════════════════════════════════════════
 
 // ── App version — update on every significant deployment ──
-var APP_BUILD = 1779450000; // epoch-style build number (matches <meta name="version">)
+var APP_BUILD = 1779480000; // epoch-style build number (matches <meta name="version">)
 
 var FB_APP = null;
 var FB_DB = null;
@@ -8249,7 +8439,7 @@ function fbStaticConnect() {
 // ═══════════════════════════════════════════════════════════════
 
 var SEARCH_QUERY = '';
-var SEARCH_FILTERS = { status:'', type:'', insurer:'', priority:'' };
+var SEARCH_FILTERS = { status:'', type:'', insurer:'', priority:'', slaBreach:false };
 
 function renderCasesWithSearch() {
   // Re-sync CASES from localStorage to catch any recently saved field changes
@@ -8282,7 +8472,7 @@ function renderCasesWithSearch() {
   html += 'style="width:100%;padding:9px 12px 9px 34px;border:1px solid var(--bor);border-radius:8px;font-size:13px;box-sizing:border-box;outline:none" ';
   html += 'oninput="SEARCH_QUERY=this.value;renderCasesWithSearch()">';
   html += '</div>';
-  html += '<button class="btn bs" onclick="SEARCH_QUERY=\'\';SEARCH_FILTERS={status:\'\',type:\'\',insurer:\'\',priority:\'\'};renderCasesWithSearch()" style="white-space:nowrap;font-size:12px">Clear</button>';
+  html += '<button class="btn bs" onclick="SEARCH_QUERY=\'\';SEARCH_FILTERS={status:\'\',type:\'\',insurer:\'\',priority:\'\',slaBreach:false};renderCasesWithSearch()" style="white-space:nowrap;font-size:12px">Clear</button>';
   html += '</div>';
   
   // Filter chips
@@ -8310,7 +8500,14 @@ function renderCasesWithSearch() {
     html += '<button onclick="SEARCH_FILTERS.priority=SEARCH_FILTERS.priority===\''+p+'\'?\'\':\''+p+'\';renderCasesWithSearch()" ';
     html += 'style="padding:3px 10px;border-radius:20px;border:1px solid '+(active?col:'var(--bor)')+';background:'+(active?col:'#fff')+';color:'+(active?'#fff':'var(--tx2)')+';font-size:11px;font-weight:600;cursor:pointer">'+p.charAt(0).toUpperCase()+p.slice(1)+'</button>';
   });
-  
+
+  html += '<span style="width:1px;height:16px;background:var(--bor);margin:0 2px"></span>';
+  // SLA breach filter
+  var slaBreachCount = CASES.filter(isSlaBreached).length;
+  var slaActive = !!SEARCH_FILTERS.slaBreach;
+  html += '<button onclick="SEARCH_FILTERS.slaBreach=!SEARCH_FILTERS.slaBreach;renderCasesWithSearch()" ';
+  html += 'style="padding:3px 10px;border-radius:20px;border:1px solid '+(slaActive?'#dc2626':'var(--bor)')+';background:'+(slaActive?'#dc2626':'#fff')+';color:'+(slaActive?'#fff':'var(--tx2)')+';font-size:11px;font-weight:600;cursor:pointer">⚠ SLA Breach ('+slaBreachCount+')</button>';
+
   html += '</div></div>';
   
   // Apply search + filters
@@ -8327,6 +8524,7 @@ function renderCasesWithSearch() {
     if(SEARCH_FILTERS.status && c.status !== SEARCH_FILTERS.status) return false;
     if(SEARCH_FILTERS.priority && c.priority !== SEARCH_FILTERS.priority) return false;
     if(SEARCH_FILTERS.type && c.type !== SEARCH_FILTERS.type) return false;
+    if(SEARCH_FILTERS.slaBreach && !isSlaBreached(c)) return false;
     return true;
   });
   
@@ -8344,7 +8542,7 @@ function renderCasesWithSearch() {
   // Cases table
   html += '<div class="card" style="padding:0;overflow:hidden">';
   if(results.length) {
-    html += '<table><thead><tr><th>Case</th><th>Patient</th><th>Insurer</th><th>Priority</th><th>Status</th><th>Decision</th><th>Claimed</th><th>Date of Loss</th><th style="width:40px"></th></tr></thead><tbody>';
+    html += '<table><thead><tr><th>Case</th><th>Patient</th><th>Insurer</th><th>Priority</th><th>Status</th><th>Decision</th><th>Claimed</th><th>Date of Loss</th><th>Age</th><th style="width:40px"></th></tr></thead><tbody>';
     results.forEach(function(c) {
       // Build decision badge
       var dec = (c.lastDecision||'').toUpperCase().trim();
@@ -8366,6 +8564,7 @@ function renderCasesWithSearch() {
       html += '<td>'+decBadge+'</td>';
       html += '<td class="tmo">'+(parseFloat(c.amountClaimed)>0 ? fmtAmt(parseFloat(c.amountClaimed),c.currency||'EUR').split('(')[0].trim() : parseFloat(c.amountApproved)>0 ? '≈'+fmtAmt(parseFloat(c.amountApproved),c.currency||'EUR').split('(')[0].trim() : '—')+'</td>';
       html += '<td class="tmo">'+fdts(c.dol||c.created)+'</td>';
+      html += '<td>'+slaBadge(c)+'</td>';
       html += '<td onclick="event.stopPropagation();toggleEvalRow(\''+c.id+'\')" style="cursor:pointer;text-align:center;padding:0 8px">';
       if(hasEval) html += '<span id="ev_arrow_'+c.id+'" style="font-size:16px;color:var(--navy);user-select:none;transition:transform .2s;display:inline-block">▾</span>';
       html += '</td>';
@@ -8373,7 +8572,7 @@ function renderCasesWithSearch() {
       
       // Expandable evaluation row — hidden by default
       if(hasEval) {
-        html += '<tr id="'+rowId+'" style="display:none"><td colspan="9" style="padding:0;border-bottom:2px solid var(--navy)">';
+        html += '<tr id="'+rowId+'" style="display:none"><td colspan="10" style="padding:0;border-bottom:2px solid var(--navy)">';
         html += '<div style="padding:16px 20px;background:linear-gradient(180deg,rgba(26,42,114,.03) 0%,#fff 100%)">';
         // Eval date + evaluator header
         var evalDate = '';
@@ -13177,6 +13376,10 @@ function showForgot() {
   var inp = document.getElementById('pw-input');
   if(inp) { inp.value = ''; inp.focus(); }
 }
+
+// Fetch live FX rates once at app start — non-blocking, falls back to the
+// built-in static table silently if it fails (see fetchLiveFXRates above).
+if(typeof fetchLiveFXRates === 'function') fetchLiveFXRates();
 
 // Allow Enter key + restore session on reload
 document.addEventListener('DOMContentLoaded', function() {
