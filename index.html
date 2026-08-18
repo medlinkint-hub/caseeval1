@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
-<meta name="version" content="1779510000">
+<meta name="version" content="1779540000">
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
@@ -2333,7 +2333,9 @@ async function runEval(caseId) {
     + 'DECISION: APPROVED\n'
     + 'DECISION: PARTIALLY APPROVED\n'
     + 'DECISION: PENDING INFORMATION\n'
-    + 'If you are running low on space, skip sections 8-11 and go directly to section 12. '
+    + 'Write ALL 12 sections in full — you have a large output budget, so skipping or abbreviating sections '
+    + '8-11 should not be necessary. Only skip directly to section 12 if you are genuinely about to run out of '
+    + 'output space; this should be rare. '
     + 'DO NOT end your response without a DECISION: line.\n\n'
     + 'FIELD CORRECTIONS: If you detect that any case header field contains a data entry error '
     + '(e.g. the amount field says EUR X but the actual documents show a different currency/amount), '
@@ -7643,7 +7645,7 @@ async function changePassword() {
 // ══════════════════════════════════════════════════════════════
 
 // ── App version — update on every significant deployment ──
-var APP_BUILD = 1779510000; // epoch-style build number (matches <meta name="version">)
+var APP_BUILD = 1779540000; // epoch-style build number (matches <meta name="version">)
 
 var FB_APP = null;
 var FB_DB = null;
