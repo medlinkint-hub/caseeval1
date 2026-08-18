@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
-<meta name="version" content="1779660000">
+<meta name="version" content="1779690000">
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
@@ -906,6 +906,20 @@ function refreshEvalModeHint(caseId) {
   var c = getC(caseId);
   if(!c) return;
   hintEl.innerHTML = evalModeHintHTML(recommendEvalMode(c));
+}
+
+// Releases a decision that runEval() held at status "reviewing" because its
+// citation-verification pass couldn't confirm the cited policy clause. Only
+// this explicit action (not the status dropdown) can finalize such a case —
+// see the sign-off banner in renderCD().
+function confirmVerificationSignoff(caseId) {
+  var c = getC(caseId);
+  if(!c || !c.verificationFlag || !c.pendingStatus) return;
+  var finalStat = c.pendingStatus;
+  updC(caseId, {status: finalStat, pendingStatus: '', verifiedBy: S().name, verifiedAt: new Date().toISOString()});
+  addTL(caseId, '✅ Second-reviewer sign-off: clause citation confirmed — case finalized as ' + finalStat.toUpperCase());
+  toast('✅ Signed off — case finalized as ' + finalStat.toUpperCase());
+  if(window._currentCaseId === caseId) renderCD(getC(caseId));
 }
 
 // ══════════════════════════════════════════════
@@ -2731,7 +2745,12 @@ async function runEval(caseId) {
         + '========================================\n\n';
     }
 
-    var _evalSave = {eval: _verificationBanner + _changeSummary + evalHeader + finalResult, status: finalStatus,
+    var _evalSave = {eval: _verificationBanner + _changeSummary + evalHeader + finalResult,
+      // A flagged decision is held at "reviewing" — not auto-finalized to its real
+      // outcome — until a second reviewer confirms the citation and signs off (see
+      // confirmVerificationSignoff()). A wrong auto-finalized decline is worse than
+      // one extra click. pendingStatus below records what it will become on sign-off.
+      status: _verificationFlag ? 'reviewing' : finalStatus,
       lastDecision: savedDecision, evalHistory: evalHist,
       lastEvalAt: new Date().toISOString(),
       pseudoMap: pseudoMapSnapshot || {}
@@ -2739,7 +2758,10 @@ async function runEval(caseId) {
     // Always write verificationFlag explicitly (never omit it) — updC() merges via
     // Object.assign, which only sets keys present in the update, so a stale flag
     // from a prior run would otherwise survive a later clean re-evaluation forever.
+    // Same reasoning for pendingStatus: a clean re-evaluation must clear any earlier
+    // hold so it can't leak forward and gate a decision that no longer needs review.
     _evalSave.verificationFlag = _verificationFlag || '';
+    _evalSave.pendingStatus = _verificationFlag ? finalStatus : '';
     if(_approvedFromEval) _evalSave.amountApproved = _approvedFromEval;
     if(_fieldCorrections) {
       // Apply only recognised safe fields — never overwrite case ID or patient name
@@ -2761,7 +2783,7 @@ async function runEval(caseId) {
       ? '  (~$'+estimateCostUSD(getMod(), _evalUsage.input_tokens, _evalUsage.output_tokens).toFixed(3)+')'
       : '';
     var _changeSuffix = _isSupplementary ? ('  (was: ' + _priorDecisionText + (_decisionChanged?' → CHANGED':' → unchanged') + ')') : '';
-    toast((verdictMsg[finalStatus]||'Evaluation complete') + ' — ' + (savedDecision||'') + (_verificationFlag ? '  ⚠ Clause citation unverified — please review' : '') + _costSuffix + _changeSuffix);
+    toast((verdictMsg[finalStatus]||'Evaluation complete') + ' — ' + (savedDecision||'') + (_verificationFlag ? '  ⚠ Clause citation unverified — held at Reviewing pending second-reviewer sign-off' : '') + _costSuffix + _changeSuffix);
     // Only update DOM elements if user is still viewing the evaluated case
     if(window._currentCaseId === caseId) {
       // Render with proper formatting
@@ -4621,6 +4643,22 @@ function renderCD(c) {
     });
     html += '</div>';
   }
+  // ── Second-reviewer sign-off gate ──────────────────────────────
+  // runEval() holds a flagged decision at status "reviewing" (see pendingStatus)
+  // instead of finalizing it to APPROVED/DECLINED/PARTIAL — a wrong auto-finalized
+  // decline is worse than an extra click. This banner is the only way to release
+  // it, and it requires an explicit human confirmation click, not just a status
+  // dropdown change (that's blocked separately below).
+  if(c.verificationFlag && c.pendingStatus) {
+    html += '<div style="border:2px solid #f59e0b;border-radius:10px;background:#fef3c7;padding:14px 16px;margin-bottom:12px">';
+    html += '<div style="font-size:13px;font-weight:800;color:#92400e;margin-bottom:4px">⚠ Second-reviewer sign-off required</div>';
+    html += '<div style="font-size:12px;color:#78350f;margin-bottom:8px">An automated check could not confirm the policy clause cited for this <b>'+esc(c.pendingStatus.toUpperCase())+'</b> decision. Issue: '+esc(c.verificationFlag)+'</div>';
+    html += '<div style="font-size:12px;color:#78350f;margin-bottom:10px">The case stays at <b>Reviewing</b> until a second reviewer checks the citation against the policy wording and signs off below.</div>';
+    html += '<button class="btn br2" style="background:#f59e0b;border-color:#f59e0b" onclick="confirmVerificationSignoff(\''+cid+'\')">✓ Confirm citation — finalize as '+esc(c.pendingStatus.toUpperCase())+'</button>';
+    html += '</div>';
+  } else if(c.verifiedBy && c.verifiedAt) {
+    html += '<div style="font-size:11px;color:var(--tx3);margin-bottom:8px">✓ Second-reviewer sign-off by <b>'+esc(c.verifiedBy)+'</b> — '+fdts(c.verifiedAt)+'</div>';
+  }
   // ── Pinned decision summary if eval exists ──
   if(c.eval && c.eval.length > 50) {
     var dec = (c.lastDecision||'').toUpperCase().trim();
@@ -4908,6 +4946,12 @@ function renderCD(c) {
   // Status/priority dropdowns
   const selStatus = G('sel_status');
   if(selStatus) selStatus.onchange = function(){
+    var _cNow = getC(cid);
+    if(_cNow && _cNow.verificationFlag && _cNow.pendingStatus) {
+      this.value = _cNow.status; // revert the dropdown — it never actually changed
+      toast('⚠ This case has an unconfirmed policy-clause citation — use the sign-off banner above to finalize it, not the status dropdown');
+      return;
+    }
     updC(cid,{status:this.value});
     const cb=G('cbdg'); if(cb){const cc=getC(cid);cb.innerHTML=tBadge(cc.type)+' '+pBadge(cc.priority)+' '+sBadge(cc.status);}
     toast('Status updated');
@@ -7720,7 +7764,7 @@ async function changePassword() {
 // ══════════════════════════════════════════════════════════════
 
 // ── App version — update on every significant deployment ──
-var APP_BUILD = 1779660000; // epoch-style build number (matches <meta name="version">)
+var APP_BUILD = 1779690000; // epoch-style build number (matches <meta name="version">)
 
 var FB_APP = null;
 var FB_DB = null;
@@ -11691,16 +11735,18 @@ async function extractFromFile(fd) {
     + 'CRITICAL: These are REAL medical insurance claims. Invented or guessed data causes wrongful claim decisions and financial harm. '
     + 'Output ONLY a raw JSON object — no markdown, no explanation, nothing else. '
     + 'First character MUST be { and last character MUST be }. '
-    + 'ZERO HALLUCINATION RULES: (1) Extract ONLY information explicitly visible in the document. (2) NEVER infer, guess, or derive missing fields. (3) NEVER assign ICD/CPT codes yourself — only if printed. (4) NEVER infer diagnosis from medications. (5) NEVER fill dates from context. (6) Unknown or absent fields = null, never a plausible-sounding substitute. (7) Mark uncertain readings as [UNCERTAIN]. '
+    + 'ZERO HALLUCINATION RULES: (1) Extract ONLY information explicitly visible in the document. (2) NEVER infer, guess, or derive missing fields. (3) NEVER assign ICD/CPT codes yourself — only if printed. (4) NEVER infer diagnosis from medications. (5) NEVER fill dates from context. (6) Unknown or absent fields = null, never a plausible-sounding substitute. (7) Report uncertain or hard-to-read fields in the extraction_warnings array, and normally-expected-but-absent fields in critical_fields_missing — do not embed markers like [UNCERTAIN] inside a field value itself. '
     + 'If you cannot read the document, return: {"document_type":"unreadable","confidence":"low","notes":"could not read"} '
     + 'NEVER refuse. NEVER say you cannot extract. ALWAYS return valid JSON.';
 
   // ── Short reliable extraction prompt ───────────────────────
   // Kept deliberately short — long prompts cause Claude to explain instead of extract
   var PROMPT = 'Read this document completely — every page, table, stamp, handwritten note. Extract ALL visible information. Translate everything to English. For amounts: copy exact numbers and currency symbol EXACTLY as printed — DO NOT calculate or guess any amount. For dates: use DD/MM/YYYY. '
-    + 'ACCURACY RULES (MANDATORY): (1) Extract ONLY what is physically visible — absent field = null. (2) NEVER infer diagnosis from medications. (3) NEVER assign ICD codes — only extract if printed. (4) NEVER fill a date field from context. (5) If a value is uncertain write it + [UNCERTAIN]. (6) Copy names exactly as written — never complete or guess a name. '
+    + 'ACCURACY RULES (MANDATORY): (1) Extract ONLY what is physically visible — absent field = null. (2) NEVER infer diagnosis from medications. (3) NEVER assign ICD codes — only extract if printed. (4) NEVER fill a date field from context. (5) If a value is uncertain or hard to read, still give your best reading in the field itself, then add a short note to extraction_warnings (e.g. "total_amount: stamp partially obscures the last digit") — never embed a marker like [UNCERTAIN] inside the field value itself. (6) Copy names exactly as written — never complete or guess a name. '
     + 'Return ONLY this JSON:\n'
     + '{"document_type":null,"document_language":null,"document_date":null,"confidence":"high/medium/low","quality_issues":null,'
+    + '"extraction_warnings":["short note per uncertain/hard-to-read field, empty array if none"],'
+    + '"critical_fields_missing":["key claim fields this document type would normally contain but genuinely does not — e.g. patient name, date of loss, diagnosis, amount — empty array if none"],'
     + '"patient":null,"patient_original_script":null,"dob":null,"age":null,"gender":null,"nationality":null,"passport_number":null,"id_number":null,"address":null,"email":null,"phone":null,'
     + '"insurer":null,"policy_holder":null,"policy_number":null,"claim_number":null,"policy_type":null,"plan_name":null,"policy_start":null,"policy_end":null,"coverage_area":null,"sum_insured":null,"deductible":null,"copayment_pct":null,'
     + '"trip_type":null,"departure_date":null,"return_date":null,"destination":null,"origin":null,"airline":null,"flight_number":null,"ticket_purchase_date":null,"ticket_amount":null,"ticket_currency":null,"airline_refund":null,"cancellation_reason":null,"hotel_name":null,"hotel_amount":null,'
