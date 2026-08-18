@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
-<meta name="version" content="1779600000">
+<meta name="version" content="1779630000">
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
@@ -476,7 +476,8 @@ function delFileCur(i){
     toast('Error: wrong case context. Please reopen the case and try again.');
     return;
   }
-  FILES.splice(i,1);updC(CURID,{filesData:FILES.map(function(f){return {name:f.name,size:f.size,type:f.type||'',ext:f.ext,_key:f._key||null};})});renderFL_C(CURID);
+  FILES.splice(i,1);updC(CURID,{filesData:FILES.map(function(f){return {name:f.name,size:f.size,type:f.type||'',ext:f.ext,_key:f._key||null,addedAt:f.addedAt||null};})});renderFL_C(CURID);
+  if(typeof refreshEvalModeHint==='function') refreshEvalModeHint(CURID);
 }
 function toggleDT(el){var b=el.parentElement.querySelector('.dtb');if(b)b.classList.toggle('open');}
 function goNew(){navTo('new')}
@@ -856,6 +857,54 @@ function findDuplicateClaims(caseId) {
   }).map(function(o){
     return {id:o.id, caseNum:o.caseNum||o.id, dol:o.dol||'', status:o.status||'', insurer:o.insurer||''};
   });
+}
+
+// ── Recommend Best Quality vs Economic for a case ──────────────
+// Heuristic, not a model call — cheap and instant. Weighs signals already
+// available once documents are uploaded and fields are filled: claim value,
+// priority, document count, a detected duplicate/related claim, and a prior
+// evaluation that was flagged for review. Two or more signals -> recommend
+// Best Quality; otherwise Economic is judged sufficient.
+function recommendEvalMode(c) {
+  var reasons = [];
+  var score = 0;
+  if(!c) return {mode:'eco', reasons:['no case data yet'], score:0};
+
+  var amtEUR = 0;
+  try {
+    var amt = parseFloat(c.amountClaimed||c.amountApproved||0);
+    if(amt > 0) amtEUR = (typeof toEUR==='function') ? toEUR(amt, c.currency||'EUR') : amt;
+  } catch(e){}
+  if(amtEUR >= 5000) { score++; reasons.push('high claim value (≥€5,000)'); }
+
+  if(c.priority === 'critical' || c.priority === 'high') { score++; reasons.push((c.priority)+' priority'); }
+
+  var fileCount = (c.filesData||[]).length;
+  if(fileCount >= 4) { score++; reasons.push(fileCount+' documents attached'); }
+
+  var dupCount = (typeof findDuplicateClaims==='function') ? findDuplicateClaims(c.id).length : 0;
+  if(dupCount) { score++; reasons.push('potential duplicate/related claim detected'); }
+
+  if(c.verificationFlag) { score++; reasons.push('a previous evaluation on this case was flagged for review'); }
+
+  var mode = score >= 2 ? 'max' : 'eco';
+  if(!reasons.length) reasons.push('routine, low-complexity case so far');
+  return {mode:mode, reasons:reasons, score:score};
+}
+
+function evalModeHintHTML(rec) {
+  return '💡 Recommended: <b>'+(rec.mode==='max'?'Best Quality':'Economic')+'</b> — '+esc(rec.reasons.join(', '));
+}
+
+// Re-computes the recommendation and updates the hint text in place after a
+// document is added — the <select> itself is left untouched so a choice the
+// user already made manually is never silently overwritten.
+function refreshEvalModeHint(caseId) {
+  var hintEl = document.getElementById('eval_mode_hint');
+  if(!hintEl) return;
+  var c = getC(caseId);
+  if(!c) return;
+  hintEl.innerHTML = evalModeHintHTML(recommendEvalMode(c));
 }
 
 // ══════════════════════════════════════════════
@@ -4627,14 +4676,16 @@ function renderCD(c) {
     html += renderEvalTxt(_evalToShow);
   }
   html += '</div>';
-  // ── Per-evaluation quality/cost choice — overrides the Settings default for THIS run only ──
-  html += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap">';
+  // ── Per-evaluation quality/cost choice — pre-selected by recommendation, overrides the Settings default for THIS run only ──
+  var _evalRec = recommendEvalMode(c);
+  html += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;flex-wrap:wrap">';
   html += '<label style="font-size:11px;font-weight:600;color:var(--tx3);white-space:nowrap">For this evaluation:</label>';
   html += '<select id="eval_mode_sel" style="padding:5px 8px;border:1px solid var(--bor);border-radius:6px;font-size:12px;color:var(--navy);outline:none">';
-  html += '<option value="max"'+(evalThinkingEnabled()?' selected':'')+'>🎯 Best Quality — max effort, highest cost</option>';
-  html += '<option value="eco"'+(!evalThinkingEnabled()?' selected':'')+'>💰 Economic — faster, lower cost</option>';
+  html += '<option value="max"'+(_evalRec.mode==='max'?' selected':'')+'>🎯 Best Quality — max effort, highest cost</option>';
+  html += '<option value="eco"'+(_evalRec.mode==='eco'?' selected':'')+'>💰 Economic — faster, lower cost</option>';
   html += '</select>';
   html += '</div>';
+  html += '<div id="eval_mode_hint" style="font-size:11px;color:var(--tx3);margin-bottom:8px">'+evalModeHintHTML(_evalRec)+'</div>';
   html += '<div class="brow">';
   html += '<button class="btn br2" id="bRun"><svg viewBox="0 0 24 24"><polygon points="5 3 19 12 5 21 5 3"/></svg>Run Evaluation</button>';
   html += '<button class="btn bs" type="button" onclick="var _fic=document.getElementById(\'fi_c\'); if(_fic){_fic.click();}else{toast(\'Scroll down to the Documents section to upload\');}">📎 Add Documents</button>';
@@ -7668,7 +7719,7 @@ async function changePassword() {
 // ══════════════════════════════════════════════════════════════
 
 // ── App version — update on every significant deployment ──
-var APP_BUILD = 1779600000; // epoch-style build number (matches <meta name="version">)
+var APP_BUILD = 1779630000; // epoch-style build number (matches <meta name="version">)
 
 var FB_APP = null;
 var FB_DB = null;
@@ -12281,14 +12332,18 @@ function addFiles(list, caseId) {
       metas.push(meta);
       updC(caseId, {filesData:metas});
       renderFL_C(caseId);
+      if(typeof refreshEvalModeHint==='function') refreshEvalModeHint(caseId);
       // Auto-extract from all supported types
       if(EXTRACTABLE.indexOf(fd.ext)!==-1) {
         var fileIdx = FILES.length - 1;
         extractAndMerge(fd, caseId).then(function(){
-          // Update file list UI after extraction
+          // Update file list UI after extraction — extraction can fill amount/priority
+          // fields that the eval-mode recommendation also weighs, so refresh it too.
           renderFL_C(caseId);
+          if(typeof refreshEvalModeHint==='function') refreshEvalModeHint(caseId);
         }).catch(function(){
           renderFL_C(caseId);
+          if(typeof refreshEvalModeHint==='function') refreshEvalModeHint(caseId);
         });
       }
     };
