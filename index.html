@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
-<meta name="version" content="1779690000">
+<meta name="version" content="1779720000">
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
@@ -5930,8 +5930,13 @@ function loadDC(id) {
   const isPartial  = verdict === 'PARTIALLY APPROVED';
   const isApproved = verdict === 'APPROVED';
   const isPending  = verdict === 'PENDING';
-  // Auto-sync status field to match evaluation verdict (prevents mismatch)
-  if(verdict !== 'UNKNOWN' && c.id) {
+  // Auto-sync status field to match evaluation verdict (prevents mismatch) —
+  // but NEVER while the case is held pending second-reviewer sign-off
+  // (verificationFlag + pendingStatus, see runEval()/confirmVerificationSignoff()).
+  // Without this guard, simply opening Documents & Letters for a flagged case
+  // would silently finalize its status from the eval text, bypassing the sign-off
+  // gate entirely while the case-detail banner still claims sign-off is required.
+  if(verdict !== 'UNKNOWN' && c.id && !(c.verificationFlag && c.pendingStatus)) {
     var correctStatus = verdict==='DECLINED'?'declined':verdict==='APPROVED'?'approved':verdict.toLowerCase().includes('partial')?'partial':'reviewing';
     if(c.status !== correctStatus) {
       // Silently fix the status to match the eval verdict
@@ -7764,7 +7769,7 @@ async function changePassword() {
 // ══════════════════════════════════════════════════════════════
 
 // ── App version — update on every significant deployment ──
-var APP_BUILD = 1779690000; // epoch-style build number (matches <meta name="version">)
+var APP_BUILD = 1779720000; // epoch-style build number (matches <meta name="version">)
 
 var FB_APP = null;
 var FB_DB = null;
