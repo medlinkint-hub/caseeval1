@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
-<meta name="version" content="1779630000">
+<meta name="version" content="1779660000">
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
@@ -476,7 +476,8 @@ function delFileCur(i){
     toast('Error: wrong case context. Please reopen the case and try again.');
     return;
   }
-  FILES.splice(i,1);updC(CURID,{filesData:FILES.map(function(f){return {name:f.name,size:f.size,type:f.type||'',ext:f.ext,_key:f._key||null,addedAt:f.addedAt||null};})});renderFL_C(CURID);
+  FILES.splice(i,1);updC(CURID,{filesData:FILES.map(function(f){return {name:f.name,size:f.size,type:f.type||'',ext:f.ext,_key:f._key||null,addedAt:f.addedAt||null,
+    ...(f._isEvalReport ? {_isEvalReport:true, _decision:f._decision||'', _evalDate:f._evalDate||''} : {})};})});renderFL_C(CURID);
   if(typeof refreshEvalModeHint==='function') refreshEvalModeHint(CURID);
 }
 function toggleDT(el){var b=el.parentElement.querySelector('.dtb');if(b)b.classList.toggle('open');}
@@ -7719,7 +7720,7 @@ async function changePassword() {
 // ══════════════════════════════════════════════════════════════
 
 // ── App version — update on every significant deployment ──
-var APP_BUILD = 1779630000; // epoch-style build number (matches <meta name="version">)
+var APP_BUILD = 1779660000; // epoch-style build number (matches <meta name="version">)
 
 var FB_APP = null;
 var FB_DB = null;
@@ -12337,11 +12338,16 @@ function addFiles(list, caseId) {
       if(EXTRACTABLE.indexOf(fd.ext)!==-1) {
         var fileIdx = FILES.length - 1;
         extractAndMerge(fd, caseId).then(function(){
+          // Extraction is async and can resolve after the user has switched to a
+          // different case — only refresh the DOM (shared per-case ids) if we're
+          // still looking at the case this file belongs to.
+          if(_filesForCaseId !== caseId) return;
           // Update file list UI after extraction — extraction can fill amount/priority
           // fields that the eval-mode recommendation also weighs, so refresh it too.
           renderFL_C(caseId);
           if(typeof refreshEvalModeHint==='function') refreshEvalModeHint(caseId);
         }).catch(function(){
+          if(_filesForCaseId !== caseId) return;
           renderFL_C(caseId);
           if(typeof refreshEvalModeHint==='function') refreshEvalModeHint(caseId);
         });
