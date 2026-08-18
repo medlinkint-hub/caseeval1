@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
-<meta name="version" content="1779570000">
+<meta name="version" content="1779600000">
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
@@ -2405,7 +2405,11 @@ async function runEval(caseId) {
     if(erDiv) erDiv.innerHTML = '<div class="er" id="evStream" style="white-space:pre-wrap;font-size:13px;line-height:1.7;color:var(--tx2)"></div>';
     const streamEl = G('evStream');
     
-    var _thinkOn = evalThinkingEnabled();
+    // Per-evaluation selector (next to Run Evaluation) overrides the Settings
+    // default for this run only — lets you pick Best Quality vs Economic per
+    // case without changing your global default in Settings.
+    var _evalModeEl = G('eval_mode_sel');
+    var _thinkOn = _evalModeEl ? (_evalModeEl.value === 'max') : evalThinkingEnabled();
     var _evalUsage = {}; // populated by apiCallStream with input/output token counts
     let fullResult = '';
     try {
@@ -4622,6 +4626,14 @@ function renderCD(c) {
     if(_evalIsHistory) html += '<div style="font-size:11px;font-weight:600;color:#92400e;background:#fef3c7;border:1px solid #f59e0b;border-radius:6px;padding:5px 10px;margin-bottom:8px">⚠ Current eval missing — showing most recent saved evaluation from history</div>';
     html += renderEvalTxt(_evalToShow);
   }
+  html += '</div>';
+  // ── Per-evaluation quality/cost choice — overrides the Settings default for THIS run only ──
+  html += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap">';
+  html += '<label style="font-size:11px;font-weight:600;color:var(--tx3);white-space:nowrap">For this evaluation:</label>';
+  html += '<select id="eval_mode_sel" style="padding:5px 8px;border:1px solid var(--bor);border-radius:6px;font-size:12px;color:var(--navy);outline:none">';
+  html += '<option value="max"'+(evalThinkingEnabled()?' selected':'')+'>🎯 Best Quality — max effort, highest cost</option>';
+  html += '<option value="eco"'+(!evalThinkingEnabled()?' selected':'')+'>💰 Economic — faster, lower cost</option>';
+  html += '</select>';
   html += '</div>';
   html += '<div class="brow">';
   html += '<button class="btn br2" id="bRun"><svg viewBox="0 0 24 24"><polygon points="5 3 19 12 5 21 5 3"/></svg>Run Evaluation</button>';
@@ -7656,7 +7668,7 @@ async function changePassword() {
 // ══════════════════════════════════════════════════════════════
 
 // ── App version — update on every significant deployment ──
-var APP_BUILD = 1779570000; // epoch-style build number (matches <meta name="version">)
+var APP_BUILD = 1779600000; // epoch-style build number (matches <meta name="version">)
 
 var FB_APP = null;
 var FB_DB = null;
