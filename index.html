@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
-<meta name="version" content="1779540000">
+<meta name="version" content="1779570000">
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
@@ -959,6 +959,9 @@ async function apiCallStream(messages, systemPrompt, maxTokens, onChunk, opts) {
   // Haiku 4.5 doesn't support adaptive thinking — only {type:"enabled",budget_tokens}
   // on older models — so it's excluded rather than risk a 400 on that model.
   const wantsThinking = !!(opts && opts.thinking) && mod.indexOf('haiku') === -1;
+  // Effort level, opt-in per call. Haiku 4.5 (and older models generally) reject
+  // an explicit effort value outright, so it's excluded the same way thinking is.
+  const wantsEffort = opts && opts.effort && mod.indexOf('haiku') === -1;
 
   // Try streaming first, fall back to regular if not supported
   if(typeof ReadableStream !== 'undefined' && typeof TextDecoder !== 'undefined') {
@@ -966,6 +969,7 @@ async function apiCallStream(messages, systemPrompt, maxTokens, onChunk, opts) {
       const body = { model: mod, max_tokens: maxTokens||1500, messages: messages, stream: true };
       if(systemPrompt) body.system = systemPrompt;
       if(wantsThinking) body.thinking = {type:'adaptive'};
+      if(wantsEffort) body.output_config = {effort: opts.effort};
 
       // Check if any message contains a PDF document block — need beta header
       var hasPDFStream = messages.some(function(m){
@@ -1064,6 +1068,7 @@ async function apiCallStream(messages, systemPrompt, maxTokens, onChunk, opts) {
   const body2 = { model: mod, max_tokens: maxTokens||1500, messages: messages };
   if(systemPrompt) body2.system = systemPrompt;
   if(wantsThinking) body2.thinking = {type:'adaptive'};
+  if(wantsEffort) body2.output_config = {effort: opts.effort};
   var hasPDF2 = messages.some(function(m){
     var c = Array.isArray(m.content) ? m.content : [];
     return c.some(function(b){ return b.type==='document' && b.source && b.source.media_type==='application/pdf'; });
@@ -2407,7 +2412,7 @@ async function runEval(caseId) {
       await apiCallStream(
         [{role:'user', content:msgContent}],
         sys,
-        _thinkOn ? 32000 : 16000, // thinking output shares this budget with the final answer — see retry-without-thinking safety net below
+        _thinkOn ? 48000 : 16000, // thinking output shares this budget with the final answer — raised for max effort's deeper reasoning; see retry-without-thinking safety net below
         (chunk, full) => {
           fullResult = full;
           clearInterval(iv);
@@ -2417,6 +2422,12 @@ async function runEval(caseId) {
         },
         {
           thinking:_thinkOn, usage:_evalUsage, // Settings → Evaluation Reasoning controls whether the model deliberates
+          // Push reasoning depth to the model's maximum when thinking is enabled —
+          // "high" (the API default we'd otherwise silently get) is good, but not
+          // the deepest available. "max" is supported by every model in this app
+          // except Haiku 4.5 (already excluded above), and directly answers the
+          // ask for the best available intellectual/reasoning result.
+          effort: _thinkOn ? 'max' : undefined,
           // Adaptive thinking can legitimately go silent for well over the default
           // 90s idle timeout while the model deliberates through a complex case —
           // zero bytes reach the client during that time, indistinguishable from a
@@ -6535,9 +6546,9 @@ function renderSet() {
   html+='<div class="g2" style="margin-bottom:14px">';
   html+='<div class="fg"><label>Evaluation Reasoning</label><select id="s_think">';
   var _thinkMode = localStorage.getItem('mp_eval_thinking')||'on';
-  html+='<option value="on"'+(_thinkMode==='on'?' selected':'')+'>Full Reasoning (Adaptive Thinking) — most accurate, highest cost</option>';
+  html+='<option value="on"'+(_thinkMode==='on'?' selected':'')+'>Full Reasoning — Adaptive Thinking + Max Effort — most accurate, highest cost</option>';
   html+='<option value="off"'+(_thinkMode==='off'?' selected':'')+'>Standard (No Thinking) — faster, lower cost</option>';
-  html+='</select><span style="font-size:11px;color:var(--tx3);margin-top:4px;display:block">Adaptive thinking lets Claude deliberate through complex claims before answering, but that reasoning is billed as output tokens — the most expensive rate. Switch to Standard for routine/simple cases to cut cost.</span></div>';
+  html+='</select><span style="font-size:11px;color:var(--tx3);margin-top:4px;display:block">Full Reasoning runs Claude at maximum effort with adaptive thinking — the deepest analysis available, deliberating through complex claims before answering. That reasoning is billed as output tokens, the most expensive rate. Switch to Standard for routine/simple cases to cut cost.</span></div>';
   html+='<div></div></div>';
   html+='<div class="fg" style="margin-bottom:14px"><label>Anthropic API Key</label>';
   html+='<input type="password" id="s_k" value="'+esc(s.key)+'" placeholder="sk-ant-api03-...">';
@@ -7645,7 +7656,7 @@ async function changePassword() {
 // ══════════════════════════════════════════════════════════════
 
 // ── App version — update on every significant deployment ──
-var APP_BUILD = 1779540000; // epoch-style build number (matches <meta name="version">)
+var APP_BUILD = 1779570000; // epoch-style build number (matches <meta name="version">)
 
 var FB_APP = null;
 var FB_DB = null;
