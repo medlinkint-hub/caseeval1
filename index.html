@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
-<meta name="version" content="1779720000">
+<meta name="version" content="1779750000">
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
@@ -541,6 +541,17 @@ const fdts = d => {
     return dt.toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'});
   } catch(e) { return String(d).substring(0,10); }
 };
+// When was this case last evaluated? lastEvalAt is the reliable source (stamped
+// by runEval on every save); older cases evaluated before that field existed
+// fall back to the "Date:" line runEval always writes into the eval text itself.
+function evalDoneLabel(c) {
+  if(c && c.lastEvalAt) return fdts(c.lastEvalAt);
+  if(c && c.eval && c.eval.length > 50) {
+    var m = c.eval.match(/Date:\s*(.+)/);
+    if(m) return m[1].trim();
+  }
+  return '—';
+}
 const genId = () => 'C'+Date.now().toString(36).toUpperCase()+Math.random().toString(36).substr(2,3).toUpperCase();
 const genCN = () => {
   var n = parseInt(localStorage.getItem('mp_cn')||'1000');
@@ -3870,7 +3881,7 @@ function renderCases(filter) {
   html += '</div>';
   html += '<div class="card" style="padding:0;overflow:hidden">';
   if(list.length) {
-    html += '<table><thead><tr><th>Case</th><th>Patient</th><th>Type</th><th>Priority</th><th>Status</th><th>Decision</th><th>SLA</th><th>Country</th><th>Claimed</th><th>Date</th></tr></thead><tbody>';
+    html += '<table><thead><tr><th>Case</th><th>Patient</th><th>Type</th><th>Priority</th><th>Status</th><th>Decision</th><th>Evaluated</th><th>SLA</th><th>Country</th><th>Claimed</th><th>Date</th></tr></thead><tbody>';
     list.forEach(c => {
       var ev = (c.lastDecision||'').toUpperCase().trim();
       if(!ev && c.eval) { var cu=c.eval.slice(-300).toUpperCase(); ev=/DECLIN|DENIED/.test(cu)?'DECLINED':/PARTIAL/.test(cu)?'PARTIAL':/APPROV|COVERED/.test(cu)?'APPROVED':''; }
@@ -3889,6 +3900,7 @@ function renderCases(filter) {
       html += '<td>'+pBadge(c.priority)+'</td>';
       html += '<td>'+sBadge(c.status)+'</td>';
       html += '<td>'+evCell+'</td>';
+      html += '<td class="tmo">'+esc(evalDoneLabel(c))+'</td>';
       html += '<td>'+slaBadge(c)+'</td>';
       html += '<td>'+esc(c.country||'—')+'</td>';
       html += '<td class="tmo">€'+(parseFloat(c.amountClaimed)||0).toLocaleString()+'</td>';
@@ -7769,7 +7781,7 @@ async function changePassword() {
 // ══════════════════════════════════════════════════════════════
 
 // ── App version — update on every significant deployment ──
-var APP_BUILD = 1779720000; // epoch-style build number (matches <meta name="version">)
+var APP_BUILD = 1779750000; // epoch-style build number (matches <meta name="version">)
 
 var FB_APP = null;
 var FB_DB = null;
@@ -8688,7 +8700,7 @@ function renderCasesWithSearch() {
   // Cases table
   html += '<div class="card" style="padding:0;overflow:hidden">';
   if(results.length) {
-    html += '<table><thead><tr><th>Case</th><th>Patient</th><th>Insurer</th><th>Priority</th><th>Status</th><th>Decision</th><th>Claimed</th><th>Date of Loss</th><th>Age</th><th style="width:40px"></th></tr></thead><tbody>';
+    html += '<table><thead><tr><th>Case</th><th>Patient</th><th>Insurer</th><th>Priority</th><th>Status</th><th>Decision</th><th>Evaluated</th><th>Claimed</th><th>Date of Loss</th><th>Age</th><th style="width:40px"></th></tr></thead><tbody>';
     results.forEach(function(c) {
       // Build decision badge
       var dec = (c.lastDecision||'').toUpperCase().trim();
@@ -8708,6 +8720,7 @@ function renderCasesWithSearch() {
       html += '<td>'+pBadge(c.priority)+'</td>';
       html += '<td>'+sBadge(c.status)+'</td>';
       html += '<td>'+decBadge+'</td>';
+      html += '<td class="tmo">'+esc(evalDoneLabel(c))+'</td>';
       html += '<td class="tmo">'+(parseFloat(c.amountClaimed)>0 ? fmtAmt(parseFloat(c.amountClaimed),c.currency||'EUR').split('(')[0].trim() : parseFloat(c.amountApproved)>0 ? '≈'+fmtAmt(parseFloat(c.amountApproved),c.currency||'EUR').split('(')[0].trim() : '—')+'</td>';
       html += '<td class="tmo">'+fdts(c.dol||c.created)+'</td>';
       html += '<td>'+slaBadge(c)+'</td>';
@@ -8718,7 +8731,7 @@ function renderCasesWithSearch() {
       
       // Expandable evaluation row — hidden by default
       if(hasEval) {
-        html += '<tr id="'+rowId+'" style="display:none"><td colspan="10" style="padding:0;border-bottom:2px solid var(--navy)">';
+        html += '<tr id="'+rowId+'" style="display:none"><td colspan="11" style="padding:0;border-bottom:2px solid var(--navy)">';
         html += '<div style="padding:16px 20px;background:linear-gradient(180deg,rgba(26,42,114,.03) 0%,#fff 100%)">';
         // Eval date + evaluator header
         var evalDate = '';
