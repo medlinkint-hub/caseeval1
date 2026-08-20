@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
-<meta name="version" content="1779870000">
+<meta name="version" content="1779900000">
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
@@ -1668,23 +1668,31 @@ SECTION VI — MANDATORY 13-SECTION OUTPUT
 - Apply DUAL-CONDITION rules from Section IV. State proximate cause.
 - Per condition: COVERED / EXCLUDED / REQUIRES FURTHER HISTORY.
 
-7. STANDARD EXCLUSIONS CHECK — evaluate each:
-[ ] Pre-existing conditions (apply Section IV apportionment)
-[ ] Chronic disease management vs acute episode
-[ ] Elective / cosmetic / non-medically necessary
-[ ] Dental (emergency pain only)
-[ ] Mental health (check limits)
-[ ] Maternity (10-month waiting; complications covered)
-[ ] HIV/AIDS
-[ ] Sexually transmitted diseases — STI: herpes/HSV-1/HSV-2 (genital herpes), chlamydia, gonorrhoea, syphilis, HPV/genital warts, Trichomonas vaginalis, Mycoplasma genitalium, HIV/AIDS, Hepatitis B (sexually acquired), Hepatitis C (sexually acquired), LGV (Lymphogranuloma venereum), chancroid, donovanosis, pubic lice, molluscum contagiosum (sexually acquired). If the policy clause excludes "sexually transmitted diseases" or "STIs", this applies to ALL of the above — NOT only HIV. CONFIRMED STI diagnosis + explicit policy STI exclusion = DECLINED immediately, no PENDING. ICD-10 codes that trigger this check: A50–A64 (infectious & STI), B17.1, B18.2 (Hep C), B16–B19 (viral hepatitis sexually acquired), B20–B24 (HIV), A60 (herpes), A56 (chlamydia), A54 (gonorrhoea), A51–A53 (syphilis), B97.7 (HPV).
-[ ] Substance abuse / self-inflicted / alcohol-related
-[ ] War / terrorism (NMA 464)
-[ ] Professional / hazardous sports
-[ ] Experimental / unregistered treatment
-[ ] Waiting period not satisfied
-[ ] Assisted reproduction / fertility
-[ ] Congenital conditions
-→ Per item: APPLIES / DOES NOT APPLY — with one sentence explanation.
+7. STANDARD EXCLUSIONS CHECK — evaluate EVERY item below. For EACH one, output
+ONE line in EXACTLY this format (nothing else on the line): a status tag of
+either [APPLIES] or [DOES NOT APPLY], then the exact label shown, a colon,
+then one factual sentence. Use the EXACT labels below, unchanged, one per
+line, in this order — this exact format is parsed automatically to build a
+compliance checklist, so any deviation (different wording, merged items,
+skipped items) breaks that.
+Example line: [DOES NOT APPLY] Pre-existing conditions: No pre-existing condition is documented or relevant to this admission.
+
+Labels (use verbatim):
+Pre-existing conditions (apply Section IV apportionment)
+Chronic vs acute episode
+Elective / cosmetic / non-medically necessary
+Dental (non-emergency)
+Mental health
+Maternity
+HIV/AIDS
+Sexually transmitted disease — STI: herpes/HSV-1/HSV-2 (genital herpes), chlamydia, gonorrhoea, syphilis, HPV/genital warts, Trichomonas vaginalis, Mycoplasma genitalium, HIV/AIDS, Hepatitis B (sexually acquired), Hepatitis C (sexually acquired), LGV (Lymphogranuloma venereum), chancroid, donovanosis, pubic lice, molluscum contagiosum (sexually acquired). If the policy clause excludes "sexually transmitted diseases" or "STIs", this applies to ALL of the above — NOT only HIV. CONFIRMED STI diagnosis + explicit policy STI exclusion = DECLINED immediately, no PENDING. ICD-10 codes that trigger this check: A50–A64 (infectious & STI), B17.1, B18.2 (Hep C), B16–B19 (viral hepatitis sexually acquired), B20–B24 (HIV), A60 (herpes), A56 (chlamydia), A54 (gonorrhoea), A51–A53 (syphilis), B97.7 (HPV).
+Substance abuse / self-inflicted / alcohol-related
+War / terrorism (NMA 464)
+Professional / hazardous sports
+Experimental / unregistered treatment
+Waiting period
+Assisted reproduction / fertility
+Congenital conditions
 ⚠ STI HARD RULE: When (1) medical documents confirm an STI diagnosis AND (2) the policy explicitly excludes "sexually transmitted diseases" or "STIs", the decision is DECLINED. Do NOT issue PENDING INFORMATION — the exclusion is established. There is no clinical ambiguity that justifies deferral.
 
 8. BENEFIT LIMITS AND SUBLIMITS
@@ -1725,6 +1733,12 @@ REASON: [one clear factual sentence]
 NEXT STEPS: [specific action HealthWatch TPA must take]
 PENDING ITEMS: [if PENDING — exactly what is needed, from whom, by when]
 CONFIDENCE: [HIGH / MEDIUM / LOW] — [one sentence]
+QA CHECKLIST — confirm each was actually done in this evaluation, not assumed:
+[YES/NO] Policy wording verified against the actual document provided (not assumed from memory or general IPMI standards)
+[YES/NO] Pre-authorization status checked (Section VI item 3)
+[YES/NO] Every Section VI item 7 standard exclusion individually reviewed, not skipped
+[YES/NO] Financial calculation (Section VI item 9) verified against the actual invoice figures, not estimated
+[YES/NO] POLICY CLAUSE above is quoted or closely paraphrased from the real policy wording, not invented
 
 ═══════════════════════════════════════════════
 CRITICAL RULES
@@ -2097,6 +2111,31 @@ async function runEval(caseId) {
   // SECTION 0 is ALWAYS the first block Claude reads — enforces policy-required rule
   // regardless of what follows (policy wording, IPMI framework, etc.)
   sys = SECTION_0 + '\n\n' + sys;
+  // ── Claim-type guidance ──────────────────────────────────────────
+  // SYS_EVAL's 13-section template is written to cover medical, non-medical
+  // and IPMI claims all at once — a non-medical claim (baggage, trip
+  // cancellation) was getting the full clinical/diagnosis instructions with
+  // nothing to apply them to, and a purely domestic medical claim was getting
+  // full cross-border/travel instructions (EHIC, fit-to-travel) it will never
+  // need. Rather than fork the entire template three ways (expensive to keep
+  // in sync, easy to drift), point the model at which sections actually apply
+  // for this case's type — it already has section-by-section instructions,
+  // it just needs to know which ones to skip vs. apply in full.
+  var _typeGuidance = '';
+  if(c.type === 'nonmedclaim') {
+    _typeGuidance = '\n═══════════════════════════════════════════════\nCLAIM TYPE: NON-MEDICAL\n═══════════════════════════════════════════════\nThis is a NON-MEDICAL claim (e.g. trip cancellation, baggage, travel disruption, personal liability) — there is no clinical presentation to assess.\n'
+      + 'Sections II (Clinical Evaluation Layers) and VI items 5 (Clinical Assessment), 6 as a CLINICAL matter, and 10 (Medication Coverage) do not apply — write "N/A — non-medical claim" for each and move on; do not invent clinical content.\n'
+      + 'Put your depth into: policy verification, coverage territory, notification timelines, the specific circumstances of the loss (cancellation reason, baggage loss/damage circumstances, liability facts), Section V travel-specific rules where relevant (72-hour notification, adventure/sports, alcohol/drugs, terrorism/political risk), applicable exclusions, and a full financial breakdown of the claimed items.\n';
+  } else if(c.type === 'ipmi_medical') {
+    _typeGuidance = '\n═══════════════════════════════════════════════\nCLAIM TYPE: IPMI (cross-border / expatriate medical)\n═══════════════════════════════════════════════\nThis is an International Private Medical Insurance claim — cross-border or expatriate cover.\n'
+      + 'Apply Section V (Travel Insurance Specific Rules) IN FULL where relevant to this claim: territorial restrictions and network status, EHIC/reciprocal healthcare if treatment was in the EU/EEA, fit-to-travel where applicable, policy activation dates.\n'
+      + 'Apply the FULL clinical assessment (Section II, Layers A-C) and use the COUNTRY-SPECIFIC R&C benchmark from Section III that matches the actual country of treatment — not a generic average.\n';
+  } else {
+    _typeGuidance = '\n═══════════════════════════════════════════════\nCLAIM TYPE: MEDICAL (domestic / in-network)\n═══════════════════════════════════════════════\nThis is a medical claim, most likely treatment within the insured\'s home country or usual network rather than cross-border care.\n'
+      + 'Apply the FULL clinical assessment (Section II, Layers A-C) and cost-containment (Section III / Layer C) — this is where your depth matters most here.\n'
+      + 'Section V (Travel Insurance Specific Rules — EHIC, fit-to-travel, 72-hour notification, adventure sports) most likely does NOT apply. Only invoke it if the case facts actually indicate cross-border or travel-related care, and say so explicitly if you do.\n';
+  }
+  sys = sys + '\n' + _typeGuidance;
   var policyWording='',policySource='';
   var _matchedLibraryPolicy=null; // library policy object behind policyWording, if any — used to attach its original PDF below
 
@@ -2511,8 +2550,8 @@ async function runEval(caseId) {
     + 'DECISION: APPROVED\n'
     + 'DECISION: PARTIALLY APPROVED\n'
     + 'DECISION: PENDING INFORMATION\n'
-    + 'Write ALL 12 sections in full — you have a large output budget, so skipping or abbreviating sections '
-    + '8-11 should not be necessary. Only skip directly to section 12 if you are genuinely about to run out of '
+    + 'Write ALL 13 sections in full — you have a large output budget, so skipping or abbreviating sections '
+    + '8-12 should not be necessary. Only skip directly to section 13 if you are genuinely about to run out of '
     + 'output space; this should be rare. '
     + 'DO NOT end your response without a DECISION: line.\n\n'
     + 'FIELD CORRECTIONS: If you detect that any case header field contains a data entry error '
@@ -2762,15 +2801,19 @@ async function runEval(caseId) {
       else if(/^PENDING/.test(sd)) finalStatus = 'reviewing';
     }
 
-    // ── Verification pass for DECLINE / PARTIALLY APPROVED decisions ──
-    // A wrong approval costs money; a wrong decline costs a legitimate claim
-    // (and possibly a complaint). Before finalizing a decline/partial, run a
-    // cheap, separate check: does the actual policy wording support the cited
-    // clause and reason? This does NOT re-run the evaluation or change the
-    // decision — it only flags a citation that can't be confirmed, so a human
-    // reviews it before it is communicated to the claimant.
+    // ── Verification pass for DECLINE / PARTIALLY APPROVED / APPROVED decisions ──
+    // A wrong approval costs money just as surely as a wrong decline costs a
+    // legitimate claim (and possibly a complaint) — this used to only check
+    // declines/partials, on the reasoning that those are the legally riskier
+    // direction, but an approval built on a misread or nonexistent policy
+    // clause is exactly as real an error and belongs under the same check.
+    // Before finalizing, run a cheap, separate audit: does the actual policy
+    // wording support the cited clause and reason? This does NOT re-run the
+    // evaluation or change the decision — it only flags a citation that can't
+    // be confirmed, so a human reviews it before it is communicated to the
+    // claimant (see the sign-off gate this feeds into, in renderCD()).
     var _verificationFlag = '';
-    if((finalStatus === 'declined' || finalStatus === 'partial') && policyWording && policyWording.trim().length > 200) {
+    if((finalStatus === 'declined' || finalStatus === 'partial' || finalStatus === 'approved') && policyWording && policyWording.trim().length > 200) {
       try {
         setEvSt('run', '🔍 Verifying cited policy clause...');
         var _citedClause = (finalResult.match(/POLICY CLAUSE\s*:\s*([^\n]+)/i)||[])[1] || '';
@@ -3887,6 +3930,31 @@ function renderEvalTxt(txt) {
     if(/^[│┌└├─]/.test(lt) || /GROSS AMOUNT|NET ELIGIBLE|LESS:|SUBTOTAL/.test(lup)) {
       var isTotal = /NET ELIGIBLE/.test(lup);
       h += '<div style="font-family:monospace;font-size:12px;padding:3px 10px;background:'+(isTotal?'rgba(26,42,114,.1)':'rgba(26,42,114,.03)')+';border-left:3px solid '+(isTotal?'var(--navy)':'var(--bor)')+';margin-bottom:2px;font-weight:'+(isTotal?'700':'400')+';color:var(--navy)">'+esc(lt)+'</div>';
+      continue;
+    }
+
+    // Exclusions checklist row: [APPLIES] Label: reason  or  [DOES NOT APPLY] Label: reason
+    // (see SYS_EVAL section 7 — the model is instructed to use this exact format)
+    var exclMatch = lt.match(/^\[(APPLIES|DOES NOT APPLY)\]\s*([^:]+):\s*(.+)$/i);
+    if(exclMatch) {
+      var exclApplies = /^APPLIES$/i.test(exclMatch[1]);
+      var exclColor = exclApplies ? '#991b1b' : '#065f46';
+      var exclBg = exclApplies ? '#fee2e2' : '#d1fae5';
+      var exclIcon = exclApplies ? '✕' : '✓';
+      h += '<div style="display:flex;gap:8px;align-items:flex-start;padding:4px 8px;margin:2px 0;border-radius:5px;background:'+exclBg+'33">'
+        + '<span style="flex-shrink:0;width:16px;height:16px;border-radius:50%;background:'+exclBg+';color:'+exclColor+';font-size:10px;font-weight:800;display:flex;align-items:center;justify-content:center;margin-top:1px">'+exclIcon+'</span>'
+        + '<span style="font-size:12px"><b style="color:var(--navy)">'+renderInline(exclMatch[2].trim())+':</b> <span style="color:var(--tx2)">'+renderInline(exclMatch[3].trim())+'</span></span>'
+        + '</div>';
+      continue;
+    }
+
+    // QA checklist row: [YES] item  or  [NO] item (see SYS_EVAL section 13)
+    var qaMatch = lt.match(/^\[(YES|NO)\]\s*(.+)$/i);
+    if(qaMatch) {
+      var qaOk = /^YES$/i.test(qaMatch[1]);
+      var qaColor = qaOk ? '#059669' : '#e8231a';
+      h += '<div style="display:flex;gap:8px;align-items:flex-start;padding:2px 8px;font-size:12px;color:'+qaColor+'">'
+        + '<span style="flex-shrink:0;font-size:13px">'+(qaOk?'☑':'☒')+'</span><span>'+renderInline(qaMatch[2].trim())+'</span></div>';
       continue;
     }
 
@@ -7976,7 +8044,7 @@ async function changePassword() {
 // ══════════════════════════════════════════════════════════════
 
 // ── App version — update on every significant deployment ──
-var APP_BUILD = 1779870000; // epoch-style build number (matches <meta name="version">)
+var APP_BUILD = 1779900000; // epoch-style build number (matches <meta name="version">)
 
 var FB_APP = null;
 var FB_DB = null;
