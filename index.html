@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
-<meta name="version" content="1779900000">
+<meta name="version" content="1779930000">
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
@@ -1677,7 +1677,23 @@ compliance checklist, so any deviation (different wording, merged items,
 skipped items) breaks that.
 Example line: [DOES NOT APPLY] Pre-existing conditions: No pre-existing condition is documented or relevant to this admission.
 
-Labels (use verbatim):
+STI GUIDANCE — use this to judge the "Sexually transmitted disease (STI)" label
+below, but do NOT echo this paragraph itself in your output line: covers
+herpes/HSV-1/HSV-2 (genital herpes), chlamydia, gonorrhoea, syphilis, HPV/genital
+warts, Trichomonas vaginalis, Mycoplasma genitalium, HIV/AIDS, Hepatitis B
+(sexually acquired), Hepatitis C (sexually acquired), LGV (Lymphogranuloma
+venereum), chancroid, donovanosis, pubic lice, molluscum contagiosum (sexually
+acquired). If the policy clause excludes "sexually transmitted diseases" or
+"STIs", this applies to ALL of the above — NOT only HIV. CONFIRMED STI diagnosis
++ explicit policy STI exclusion = DECLINED immediately, no PENDING. ICD-10 codes
+that trigger this check: A50–A64 (infectious & STI), B17.1, B18.2 (Hep C),
+B16–B19 (viral hepatitis sexually acquired), B20–B24 (HIV), A60 (herpes), A56
+(chlamydia), A54 (gonorrhoea), A51–A53 (syphilis), B97.7 (HPV).
+⚠ STI HARD RULE: When (1) medical documents confirm an STI diagnosis AND (2) the policy explicitly excludes "sexually transmitted diseases" or "STIs", the decision is DECLINED. Do NOT issue PENDING INFORMATION — the exclusion is established. There is no clinical ambiguity that justifies deferral.
+
+Labels (echo the label text verbatim, then YOUR OWN colon, then your one-sentence
+reason — the labels below never contain a colon themselves, so anything before
+the first colon in your output line must be exactly one of these):
 Pre-existing conditions (apply Section IV apportionment)
 Chronic vs acute episode
 Elective / cosmetic / non-medically necessary
@@ -1685,7 +1701,7 @@ Dental (non-emergency)
 Mental health
 Maternity
 HIV/AIDS
-Sexually transmitted disease — STI: herpes/HSV-1/HSV-2 (genital herpes), chlamydia, gonorrhoea, syphilis, HPV/genital warts, Trichomonas vaginalis, Mycoplasma genitalium, HIV/AIDS, Hepatitis B (sexually acquired), Hepatitis C (sexually acquired), LGV (Lymphogranuloma venereum), chancroid, donovanosis, pubic lice, molluscum contagiosum (sexually acquired). If the policy clause excludes "sexually transmitted diseases" or "STIs", this applies to ALL of the above — NOT only HIV. CONFIRMED STI diagnosis + explicit policy STI exclusion = DECLINED immediately, no PENDING. ICD-10 codes that trigger this check: A50–A64 (infectious & STI), B17.1, B18.2 (Hep C), B16–B19 (viral hepatitis sexually acquired), B20–B24 (HIV), A60 (herpes), A56 (chlamydia), A54 (gonorrhoea), A51–A53 (syphilis), B97.7 (HPV).
+Sexually transmitted disease (STI)
 Substance abuse / self-inflicted / alcohol-related
 War / terrorism (NMA 464)
 Professional / hazardous sports
@@ -1693,7 +1709,6 @@ Experimental / unregistered treatment
 Waiting period
 Assisted reproduction / fertility
 Congenital conditions
-⚠ STI HARD RULE: When (1) medical documents confirm an STI diagnosis AND (2) the policy explicitly excludes "sexually transmitted diseases" or "STIs", the decision is DECLINED. Do NOT issue PENDING INFORMATION — the exclusion is established. There is no clinical ambiguity that justifies deferral.
 
 8. BENEFIT LIMITS AND SUBLIMITS
 - Benefit category, sublimit, prior claims this year, copay/deductible.
@@ -1733,12 +1748,20 @@ REASON: [one clear factual sentence]
 NEXT STEPS: [specific action HealthWatch TPA must take]
 PENDING ITEMS: [if PENDING — exactly what is needed, from whom, by when]
 CONFIDENCE: [HIGH / MEDIUM / LOW] — [one sentence]
-QA CHECKLIST — confirm each was actually done in this evaluation, not assumed:
-[YES/NO] Policy wording verified against the actual document provided (not assumed from memory or general IPMI standards)
-[YES/NO] Pre-authorization status checked (Section VI item 3)
-[YES/NO] Every Section VI item 7 standard exclusion individually reviewed, not skipped
-[YES/NO] Financial calculation (Section VI item 9) verified against the actual invoice figures, not estimated
-[YES/NO] POLICY CLAUSE above is quoted or closely paraphrased from the real policy wording, not invented
+QA CHECKLIST — confirm each was actually done in this evaluation, not assumed.
+For EACH item below, output ONE line starting with the literal bracketed tag
+"[YES] " or "[NO] " (keep the square brackets in your output — this is NOT a
+placeholder to fill in and remove, unlike "DECISION: [APPROVED / ...]" above),
+followed immediately by the item text unchanged. Do NOT write "YES -" or
+"YES:" or omit the brackets — this is the exact same literal-tag convention as
+the [APPLIES]/[DOES NOT APPLY] tags in Section VI item 7 above.
+Example line: [YES] Policy wording verified against the actual document provided (not assumed from memory or general IPMI standards)
+Items (use this exact wording, one per line):
+Policy wording verified against the actual document provided (not assumed from memory or general IPMI standards)
+Pre-authorization status checked (Section VI item 3)
+Every Section VI item 7 standard exclusion individually reviewed, not skipped
+Financial calculation (Section VI item 9) verified against the actual invoice figures, not estimated
+POLICY CLAUSE above is quoted or closely paraphrased from the real policy wording, not invented
 
 ═══════════════════════════════════════════════
 CRITICAL RULES
@@ -4933,7 +4956,15 @@ function renderCD(c) {
     var dec = (c.lastDecision||'').toUpperCase().trim();
     var decColor = '#1a2a72', decBg = 'rgba(26,42,114,.08)', decBorder = 'rgba(26,42,114,.2)';
     var decIcon = '◎';
-    if(/^APPROV|^COVERED/.test(dec))  { decColor='#065f46'; decBg='#d1fae5'; decBorder='#10b981'; decIcon='✓'; }
+    // A case pending second-reviewer sign-off (see the gate banner above) must
+    // never show a confident green/red decision card right below an amber
+    // "sign-off required" banner — that let an operator draft/send an approval
+    // email off a decision that isn't actually final yet, ignoring the banner.
+    // Force this card to the neutral/pending style and label it provisional
+    // regardless of what the AI's own decision text says.
+    var _pendingSignoff = !!(c.verificationFlag && c.pendingStatus);
+    if(_pendingSignoff) { decColor='#92400e'; decBg='#fef3c7'; decBorder='#f59e0b'; decIcon='⏳'; }
+    else if(/^APPROV|^COVERED/.test(dec))  { decColor='#065f46'; decBg='#d1fae5'; decBorder='#10b981'; decIcon='✓'; }
     else if(/^PARTIAL/.test(dec))     { decColor='#92400e'; decBg='#fef3c7'; decBorder='#f59e0b'; decIcon='⚠'; }
     else if(/^DECLIN|^DENIED/.test(dec)){ decColor='#991b1b'; decBg='#fee2e2'; decBorder='#e8231a'; decIcon='✕'; }
     else if(/^PEND/.test(dec))        { decColor='#1a2a72'; decBg='rgba(26,42,114,.08)'; decBorder='rgba(26,42,114,.3)'; decIcon='⏳'; }
@@ -4952,7 +4983,7 @@ function renderCD(c) {
     html += '<div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">';
     html += '<div style="width:32px;height:32px;border-radius:50%;background:'+decColor+';color:#fff;display:flex;align-items:center;justify-content:center;font-size:16px;font-weight:700;flex-shrink:0">'+decIcon+'</div>';
     html += '<div style="flex:1">';
-    html += '<div style="font-size:16px;font-weight:800;color:'+decColor+'">'+(dec||'NO DECISION')+'</div>';
+    html += '<div style="font-size:16px;font-weight:800;color:'+decColor+'">'+(_pendingSignoff ? esc(dec||'NO DECISION')+' — PROVISIONAL, PENDING SIGN-OFF' : (dec||'NO DECISION'))+'</div>';
     if(evalDateStr) html += '<div style="font-size:11px;color:var(--tx3);margin-top:1px">Evaluated: '+esc(evalDateStr)+'</div>';
     html += '</div>';
     if(confMatch) {
@@ -8044,7 +8075,7 @@ async function changePassword() {
 // ══════════════════════════════════════════════════════════════
 
 // ── App version — update on every significant deployment ──
-var APP_BUILD = 1779900000; // epoch-style build number (matches <meta name="version">)
+var APP_BUILD = 1779930000; // epoch-style build number (matches <meta name="version">)
 
 var FB_APP = null;
 var FB_DB = null;
