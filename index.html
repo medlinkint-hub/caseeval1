@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
-<meta name="version" content="1779810000">
+<meta name="version" content="1779840000">
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
@@ -2874,8 +2874,15 @@ async function runEval(caseId) {
     console.error('[runEval] error:', err);
     var errMsg = err.message || 'Unknown error';
 
-    // Check if it's a file/image size error - retry without files
-    if(errMsg.includes('image') || errMsg.includes('base64') || errMsg.includes('content') || errMsg.includes('too large')) {
+    // Check if it's a file/image size error - retry without files.
+    // Only take this path when there's nothing substantial already streamed in
+    // to salvage — the substring match above (particularly 'content') is broad
+    // enough to false-positive on an error message unrelated to file size while
+    // a near-complete, document-grounded evaluation had already streamed in;
+    // discarding that in favor of a from-scratch, attachment-free regeneration
+    // would throw away better material than the cheap salvage path below needs.
+    if((!fullResult || fullResult.trim().length < 150) &&
+       (errMsg.includes('image') || errMsg.includes('base64') || errMsg.includes('content') || errMsg.includes('too large'))) {
       setEvSt('run', '⚠ File error detected — retrying without attachments...');
       toast('⚠ One or more files caused an error. Retrying evaluation without file attachments...');
       try {
@@ -7890,7 +7897,7 @@ async function changePassword() {
 // ══════════════════════════════════════════════════════════════
 
 // ── App version — update on every significant deployment ──
-var APP_BUILD = 1779810000; // epoch-style build number (matches <meta name="version">)
+var APP_BUILD = 1779840000; // epoch-style build number (matches <meta name="version">)
 
 var FB_APP = null;
 var FB_DB = null;
