@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
-<meta name="version" content="1779780000">
+<meta name="version" content="1779810000">
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
@@ -1858,6 +1858,29 @@ function buildInvoiceBreakdown(caseId) {
   return lines.join('\n');
 }
 
+// Given a partial evaluation that ended without the mandatory final DECISION
+// line — whether because the model stopped writing early or because a network
+// error cut the stream off mid-generation — make one fast, cheap call asking
+// only for the final verdict, and append it. Throws if that call itself fails,
+// so callers can fall back to their own "could not complete" handling.
+async function completeDecisionFromPartial(partialText) {
+  const verdictPrompt = 'Based on this partial IPMI evaluation, output ONLY the final decision.\n\n'
+    + 'EVALUATION SO FAR (last part):\n' + partialText.slice(-2000) + '\n\n'
+    + 'Output ONLY this — nothing else:\n'
+    + '12. FINAL DECISION\n'
+    + 'DECISION: [DECLINED or APPROVED or PARTIALLY APPROVED or PENDING INFORMATION]\n'
+    + 'APPROVED AMOUNT: EUR [amount or 0]\n'
+    + 'POLICY CLAUSE: [exact clause]\n'
+    + 'REASON: [one factual sentence]\n'
+    + 'NEXT STEPS: [immediate action required]';
+  const verdictResult = await apiCall(
+    [{role:'user', content: verdictPrompt}],
+    'You are a senior IPMI claims evaluator. Output ONLY the final decision section in the exact format requested. Be definitive.',
+    500
+  );
+  return partialText + '\n\n' + verdictResult;
+}
+
 async function runEval(caseId) {
   console.log('[runEval] called with caseId:', caseId);
   const key = getKey();
@@ -2472,21 +2495,29 @@ async function runEval(caseId) {
   let si = 0;
   const iv = setInterval(()=>{ si=Math.min(si+1,steps.length-1); setEvSt('run',steps[si]); }, 3000);
 
+  // Hoisted out of the try block below (not just declared inside it) so that if
+  // the primary streaming call throws mid-generation, the outer catch can still
+  // see whatever text had already streamed in and the DOM node it was written
+  // to — needed to salvage partial output instead of just discarding it, and to
+  // replace the stale on-screen preview with a clear failure message rather
+  // than leaving it looking like a genuine (if short) finished evaluation.
+  var erDiv = G('evR');
+  var streamEl = null;
+  var fullResult = '';
+  var finalResult = ''; // also hoisted — the catch block's file-too-large retry path assigns to this
   try {
     console.log('[runEval] streaming request, blocks:', msgContent.length);
-    
+
     // Use streaming so text appears immediately
-    const erDiv = G('evR');
     if(erDiv) erDiv.innerHTML = '<div class="er" id="evStream" style="white-space:pre-wrap;font-size:13px;line-height:1.7;color:var(--tx2)"></div>';
-    const streamEl = G('evStream');
-    
+    streamEl = G('evStream');
+
     // Per-evaluation selector (next to Run Evaluation) overrides the Settings
     // default for this run only — lets you pick Best Quality vs Economic per
     // case without changing your global default in Settings.
     var _evalModeEl = G('eval_mode_sel');
     var _thinkOn = _evalModeEl ? (_evalModeEl.value === 'max') : evalThinkingEnabled();
     var _evalUsage = {}; // populated by apiCallStream with input/output token counts
-    let fullResult = '';
     try {
       await apiCallStream(
         [{role:'user', content:msgContent}],
@@ -2533,7 +2564,7 @@ async function runEval(caseId) {
 
     clearInterval(iv);
 
-    let finalResult = fullResult;
+    finalResult = fullResult;
 
     // Safety net: adaptive thinking competes with the visible answer for the same
     // max_tokens budget. On a complex/long case, thinking can consume the entire
@@ -2592,21 +2623,7 @@ async function runEval(caseId) {
       // silently saving a genuinely truncated evaluation as if it were complete.
       if(window._currentCaseId === caseId) setEvSt('run', '⏳ Completing final decision...');
       try {
-        const verdictPrompt = 'Based on this partial IPMI evaluation, output ONLY the final decision.\n\n'
-          + 'EVALUATION SO FAR (last part):\n' + fullResult.slice(-2000) + '\n\n'
-          + 'Output ONLY this — nothing else:\n'
-          + '12. FINAL DECISION\n'
-          + 'DECISION: [DECLINED or APPROVED or PARTIALLY APPROVED or PENDING INFORMATION]\n'
-          + 'APPROVED AMOUNT: EUR [amount or 0]\n'
-          + 'POLICY CLAUSE: [exact clause]\n'
-          + 'REASON: [one factual sentence]\n'
-          + 'NEXT STEPS: [immediate action required]';
-        const verdictResult = await apiCall(
-          [{role:'user', content: verdictPrompt}],
-          'You are a senior IPMI claims evaluator. Output ONLY the final decision section in the exact format requested. Be definitive.',
-          500
-        );
-        finalResult = fullResult + '\n\n' + verdictResult;
+        finalResult = await completeDecisionFromPartial(fullResult);
         console.log('[runEval] Verdict appended via second call');
       } catch(ve) {
         console.warn('[runEval] Second call failed:', ve.message);
@@ -2862,8 +2879,13 @@ async function runEval(caseId) {
       setEvSt('run', '⚠ File error detected — retrying without attachments...');
       toast('⚠ One or more files caused an error. Retrying evaluation without file attachments...');
       try {
-        // Retry with text only - no files
-        var textOnlyContent = [{type:'text', text: txt + '\n\nNOTE: Document attachments were removed due to size/format issues. Please evaluate based on the case information above.'}];
+        // Retry with text only - no files. Pseudonymise this exactly like the
+        // primary attempt above — this retry sent raw, un-redacted case text
+        // (patient name and other identifiers included) straight to the API,
+        // bypassing GDPR pseudonymisation entirely, since it was built from
+        // `txt` directly instead of the already-pseudonymised `txtPseudo`.
+        var textOnlyPseudo = pseudonymise(txt) + '\n\nNOTE: Document attachments were removed due to size/format issues. Please evaluate based on the case information above.';
+        var textOnlyContent = [{type:'text', text: textOnlyPseudo}];
         var retryResult = '';
         await apiCallStream(
           [{role:'user', content:textOnlyContent}],
@@ -2871,13 +2893,22 @@ async function runEval(caseId) {
           function(chunk, full){ retryResult = full; if(streamEl) streamEl.textContent = full; }
         );
         if(retryResult) {
+          var retryPseudoMap = getPseudoMap();
+          if(retryPseudoMap && Object.keys(retryPseudoMap).length && typeof reidentify === 'function') {
+            retryResult = reidentify(retryResult, retryPseudoMap);
+          }
           var retryHeader = '=== EVALUATION (text-only retry) ===\n'
             + 'Date: '+new Date().toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'})+'\n'
             + 'Time: '+new Date().toLocaleTimeString('en',{hour:'2-digit',minute:'2-digit'})+'\n'
             + 'Evaluator: '+(typeof S==='function'?S().name||'Team Member':'Team Member')+'\n'
             + '=================\n\n';
           finalResult = retryResult;
-          updC(caseId, {eval: retryHeader + finalResult, status:'reviewing'});
+          // Extract the real decision instead of always leaving status as
+          // "reviewing" regardless of what the AI actually decided.
+          var retryDecMatches = [...finalResult.matchAll(/^\s*DECISION\s*:\s*(DECLINED|APPROVED|PARTIALLY APPROVED|PENDING INFORMATION)\b/gim)];
+          var retryDecision = retryDecMatches.length ? retryDecMatches[retryDecMatches.length-1][1].trim() : 'UNKNOWN';
+          var retryStatus = /^DECLIN/.test(retryDecision) ? 'declined' : /^APPROV/.test(retryDecision) ? 'approved' : /^PARTIAL/.test(retryDecision) ? 'partial' : 'reviewing';
+          updC(caseId, {eval: retryHeader + finalResult, status: retryStatus, lastDecision: retryDecision, lastEvalAt: new Date().toISOString()});
           if(window._currentCaseId === caseId) {
             if(erDiv) erDiv.innerHTML = renderEvalTxt(finalResult);
             setEvSt('done', 'Done (text-only) — '+new Date().toLocaleTimeString('en',{hour:'2-digit',minute:'2-digit'}));
@@ -2889,6 +2920,55 @@ async function runEval(caseId) {
       } catch(retryErr) {
         console.error('[runEval] Retry also failed:', retryErr.message);
       }
+    }
+
+    // If a genuine error interrupted the stream mid-generation (not a stall —
+    // those already retry themselves inside the try block above) but a
+    // substantial amount of evaluation text had already streamed in, try to
+    // salvage it instead of discarding everything generated so far. Without
+    // this, a connection hiccup near the end of a long evaluation would throw
+    // the whole thing away and leave the stale partial text sitting on screen
+    // looking exactly like a genuine (if short) finished result.
+    if(fullResult && fullResult.trim().length >= 150) {
+      if(window._currentCaseId === caseId) setEvSt('run', '⏳ Connection interrupted — recovering partial evaluation...');
+      try {
+        var STRICT_DEC_RE = /^\s*DECISION\s*:\s*(DECLINED|APPROVED|PARTIALLY APPROVED|PENDING INFORMATION)\b/im;
+        finalResult = STRICT_DEC_RE.test(fullResult) ? fullResult : await completeDecisionFromPartial(fullResult);
+        // Same re-identification step the normal completion path applies — this
+        // recovered text still has pseudonymised placeholder tokens in place of
+        // real patient identifiers (see getPseudoMap() above), and they must be
+        // swapped back before this ever gets saved or displayed locally.
+        if(pseudoMapSnapshot && Object.keys(pseudoMapSnapshot).length && typeof reidentify === 'function') {
+          finalResult = reidentify(finalResult, pseudoMapSnapshot);
+        }
+        var recoverHeader = '=== EVALUATION (recovered after connection error) ===\n'
+          + 'Date: '+new Date().toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'})+'\n'
+          + 'Time: '+new Date().toLocaleTimeString('en',{hour:'2-digit',minute:'2-digit'})+'\n'
+          + 'Evaluator: '+(typeof S==='function'?S().name||'Team Member':'Team Member')+'\n'
+          + '=================\n\n';
+        var decMatchesRecov = [...finalResult.matchAll(/^\s*DECISION\s*:\s*(DECLINED|APPROVED|PARTIALLY APPROVED|PENDING INFORMATION)\b/gim)];
+        var recoveredDecision = decMatchesRecov.length ? decMatchesRecov[decMatchesRecov.length-1][1].trim() : 'UNKNOWN';
+        var recoveredStatus = /^DECLIN/.test(recoveredDecision) ? 'declined' : /^APPROV/.test(recoveredDecision) ? 'approved' : /^PARTIAL/.test(recoveredDecision) ? 'partial' : 'reviewing';
+        updC(caseId, {eval: recoverHeader + finalResult, status: recoveredStatus, lastDecision: recoveredDecision, lastEvalAt: new Date().toISOString()});
+        if(window._currentCaseId === caseId) {
+          if(erDiv) erDiv.innerHTML = renderEvalTxt(recoverHeader + finalResult);
+          setEvSt('done', 'Recovered after connection error — '+new Date().toLocaleTimeString('en',{hour:'2-digit',minute:'2-digit'}));
+        }
+        toast('⚠ Connection was interrupted, but the evaluation was recovered — please double-check the result', 8000);
+        if(btn) btn.disabled = false;
+        return;
+      } catch(salvageErr) {
+        console.warn('[runEval] Could not salvage partial evaluation:', salvageErr.message);
+        // fall through to generic error handling below
+      }
+    }
+
+    // Whatever partial text was streaming in before the error is now stale —
+    // it must never be left on screen looking like a genuine (if short)
+    // result. Replace it with an explicit, unambiguous failure notice.
+    var _evalFailed = true;
+    if(window._currentCaseId === caseId && erDiv) {
+      erDiv.innerHTML = '<div style="padding:14px 16px;background:#fee2e2;border:1.5px solid #e8231a;border-radius:8px;color:#991b1b;font-size:13px"><b>⚠ Evaluation did not complete.</b> Nothing was saved — see the message below and press Retry.</div>';
     }
 
     // Give user-friendly error messages (only update status if still on this case)
@@ -2913,9 +2993,12 @@ async function runEval(caseId) {
   }
   if(btn) {
     btn.disabled = false;
-    // Show retry button if evaluation failed
-    var evR = G('evR');
-    if(evR && evR.innerHTML.indexOf('Error') !== -1) {
+    // Show retry styling if the evaluation genuinely failed. This used to check
+    // for the literal text "Error" inside the eval display's innerHTML, but
+    // none of the actual failure paths above ever wrote that word there (the
+    // error message only ever went to the separate #evSt status pill) — so
+    // this never fired. Use the explicit flag those paths set instead.
+    if(typeof _evalFailed !== 'undefined' && _evalFailed) {
       btn.textContent = '↺ Retry Evaluation';
       btn.style.background = '#d97706';
       setTimeout(function(){ btn.textContent = '▶ Run Evaluation'; btn.style.background = ''; }, 10000);
@@ -7807,7 +7890,7 @@ async function changePassword() {
 // ══════════════════════════════════════════════════════════════
 
 // ── App version — update on every significant deployment ──
-var APP_BUILD = 1779780000; // epoch-style build number (matches <meta name="version">)
+var APP_BUILD = 1779810000; // epoch-style build number (matches <meta name="version">)
 
 var FB_APP = null;
 var FB_DB = null;
