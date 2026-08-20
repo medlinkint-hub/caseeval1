@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
-<meta name="version" content="1779840000">
+<meta name="version" content="1779870000">
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
@@ -1192,14 +1192,72 @@ function pseudoReset() {
   _pseudoCounters = { PT:0, DOB:0, POL:0, PASS:0, PHONE:0, EMAIL:0 };
 }
 
-function pseudonymise(text) {
+function pseudonymise(text, knownNames) {
   if(!text) return text;
   var result = text;
+
+  // 0. Known exact name(s) from the case record itself (e.g. c.patient,
+  // c.policyHolder) — matched case-insensitively, in whatever capitalisation
+  // they appear. The pattern-based name matcher in step 1 below only
+  // recognises Title Case ("Jane Doe") and silently misses the very same name
+  // printed ALL CAPS or lowercase — common in OCR'd document text (stamps, ID
+  // fields, hospital admission forms) that flows into the case description and
+  // gets pseudonymised alongside everything else. Since we already KNOW the
+  // patient's real name from the case record, match it directly instead of
+  // relying on a style-dependent heuristic to rediscover it.
+  if(knownNames && knownNames.length) {
+    knownNames.forEach(function(nameVal) {
+      var v = (nameVal||'').trim();
+      if(v.length < 4) return;
+      var escaped = v.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      // Deliberately NOT using \b here — JS word-boundary matching is defined
+      // against \w (ASCII letters/digits/underscore only), so \b silently fails
+      // to bound a match on Greek, Arabic, or other non-Latin names entirely
+      // (verified: /\bΜαρία\b/ never matches). \p{L}/\p{N} lookaround covers
+      // any script's letters/digits instead. Fall back to \b on browsers too
+      // old to support lookbehind/Unicode property escapes (e.g. Safari <16.4)
+      // — better to under-match than to throw and block the evaluation outright.
+      var nameRe;
+      try {
+        nameRe = new RegExp('(?<![\\p{L}\\p{N}])' + escaped + '(?![\\p{L}\\p{N}])', 'giu');
+      } catch(_reErr) {
+        nameRe = new RegExp('\\b' + escaped + '\\b', 'gi');
+      }
+      result = result.replace(nameRe, function() {
+        if(!_pseudoMap[v]) {
+          _pseudoCounters.PT++;
+          _pseudoMap[v] = '[PT-' + String(_pseudoCounters.PT).padStart(3,'0') + ']';
+        }
+        return _pseudoMap[v];
+      });
+    });
+  }
 
   // 1. Full names — 2-3 capitalised words (skip known medical/insurance terms)
   var skipWords = /^(APPROVED|DECLINED|PENDING|PARTIAL|INFORMATION|DECISION|EUR|USD|GBP|ICD|CPT|DRG|HWA|TPA|IPMI|PA|No\.|No|Number|Status|Date|Period|Code|Country|Insurer|Amount|Coverage|Section|Clause|Article|Policy|Plan|Network|Emergency|Hospital|Clinic|Medical|Annual|Deductible|Co-payment|Copayment|Pre-existing|Diagnosis|Treatment|Discharge|Admission|Surgery|Procedure|Report|Invoice|Receipt|Lab|Scan|MRI|CT|ECG|PCR|COVID|ICU|ER|GP|Dr|Prof|Mr|Mrs|Ms)$/i;
 
-  result = result.replace(/\b([A-Z\u0391-\u03A9][a-z\u00C0-\u024F\u03B1-\u03C9\u0600-\u06FF]+(?:\s[A-Z\u0391-\u03A9][a-z\u00C0-\u024F\u03B1-\u03C9\u0600-\u06FF]+){1,2})\b/g, function(match) {
+  // Two things had to change from the original \u0391-\u03A9/\u03B1-\u03C9 (basic
+  // unaccented Greek) + \b...\b pattern here, both confirmed by testing against
+  // real Greek text:
+  // (a) Basic Greek ranges only cover UNACCENTED letters \u2014 modern Greek marks
+  //     stress with a tonos on virtually every polysyllabic word (e.g. the
+  //     "i" in "Maria" is really U+03AF, iota-with-tonos), so an accented name
+  //     never matched at all. Widened to \u0386-\u03AB / \u03AC-\u03CE, which
+  //     fully contain the old unaccented ranges plus the accented forms.
+  // (b) \b...\b anchors: JS word-boundary matching is defined against \w
+  //     (ASCII letters/digits/underscore only) \u2014 Greek letters aren't \w, so
+  //     \b fails to anchor at either edge of a Greek name regardless of (a)
+  //     (verified: widening the ranges alone still left a real Greek test name
+  //     unmatched). Replaced with \p{L}/\p{N} lookaround, same fix as the
+  //     known-name matcher above, with the same old-browser \b fallback.
+  var nameBody = '([A-Z\\u0386-\\u03AB][a-z\\u00C0-\\u024F\\u03AC-\\u03CE\\u0600-\\u06FF]+(?:\\s[A-Z\\u0386-\\u03AB][a-z\\u00C0-\\u024F\\u03AC-\\u03CE\\u0600-\\u06FF]+){1,2})';
+  var nameRe2;
+  try {
+    nameRe2 = new RegExp('(?<![\\p{L}\\p{N}])' + nameBody + '(?![\\p{L}\\p{N}])', 'gu');
+  } catch(_reErr2) {
+    nameRe2 = new RegExp('\\b' + nameBody + '\\b', 'g');
+  }
+  result = result.replace(nameRe2, function(match) {
     var parts = match.split(/\s/);
     if(parts.some(function(p){ return skipWords.test(p); })) return match;
     if(match.length < 4) return match;
@@ -1216,7 +1274,18 @@ function pseudonymise(text) {
   //    identify a person, and masking them blocks the evaluation entirely.
 
   // 3. Policy / membership numbers — e.g. AEG-2024-00123, HDI/123456, CANOP-789
-  result = result.replace(/\b([A-Z]{2,8}[\-\/]\d{3,12}(?:[\-\/]\d{3,10})?)\b/g, function(match) {
+  // The (?<!\[) / (?!\]) guards are load-bearing, not decorative: every
+  // placeholder this function produces (from step 1 above, and step 0 for
+  // known names) looks like "[PT-001]" — 2-8 letters, a hyphen, 3 digits —
+  // which is EXACTLY this pattern's own shape. Without the guards, this step
+  // matches "PT-001" *inside* an already-produced token and wraps it again
+  // into "[[POL-001]]", corrupting it so reidentify() can never find the
+  // original bracketed token to restore the real name — verified with a real
+  // patient name plus a policy number in the same text, which left a raw,
+  // never-restored "[PT-001]" placeholder in the final saved evaluation
+  // instead of the patient's name. Real policy numbers are never themselves
+  // bracket-wrapped in source text, so this only excludes the token case.
+  result = result.replace(/(?<!\[)\b([A-Z]{2,8}[\-\/]\d{3,12}(?:[\-\/]\d{3,10})?)\b(?!\])/g, function(match) {
     if(!_pseudoMap[match]) {
       _pseudoCounters.POL++;
       _pseudoMap[match] = '[POL-' + String(_pseudoCounters.POL).padStart(3,'0') + ']';
@@ -2396,6 +2465,12 @@ async function runEval(caseId) {
       'Please note them as submitted documents in your evaluation:\n' +
       skippedFiles.map(function(f){ return '  - ' + f; }).join('\n') + '\n';
     console.log('[runEval] Skipped files:', skippedFiles);
+    // This used to only be logged to the browser console — invisible to the
+    // operator actually running the evaluation. A skipped file was NOT read by
+    // the AI at all (only its filename gets mentioned to it), so silently
+    // leaving this to the console meant a document could be excluded from the
+    // evaluation with no visible sign of it. Surface it clearly instead.
+    toast('⚠ ' + skippedFiles.length + ' document(s) too large to include — the evaluation will NOT have read: ' + skippedFiles.map(function(f){ return f.split(' (')[0]; }).join(', '), 12000);
   }
 
   // ── DOCUMENTS SUBMITTED manifest ────────────────────────────────────────
@@ -2483,7 +2558,11 @@ async function runEval(caseId) {
 
   // ── PSEUDONYMISATION: strip patient identifiers before sending to Anthropic ──
   pseudoReset(); // fresh map per evaluation
-  var txtPseudo = pseudonymise(_dupContext + _supplementaryContext + docManifest + txt); // all prepended context gets pseudonymised together
+  // Pass the case's own known name fields so they're matched in ANY capitalisation
+  // (see pseudonymise()'s step 0) — not just the Title Case the generic pattern
+  // matcher below requires, which OCR'd document text routinely doesn't follow.
+  var _knownNames = [c.patient, c.policyHolder].filter(Boolean);
+  var txtPseudo = pseudonymise(_dupContext + _supplementaryContext + docManifest + txt, _knownNames); // all prepended context gets pseudonymised together
   var pseudoMapSnapshot = getPseudoMap();
   var pseudoCount = Object.keys(pseudoMapSnapshot).length;
   if(pseudoCount > 0) {
@@ -2891,7 +2970,7 @@ async function runEval(caseId) {
         // (patient name and other identifiers included) straight to the API,
         // bypassing GDPR pseudonymisation entirely, since it was built from
         // `txt` directly instead of the already-pseudonymised `txtPseudo`.
-        var textOnlyPseudo = pseudonymise(txt) + '\n\nNOTE: Document attachments were removed due to size/format issues. Please evaluate based on the case information above.';
+        var textOnlyPseudo = pseudonymise(txt, [c.patient, c.policyHolder].filter(Boolean)) + '\n\nNOTE: Document attachments were removed due to size/format issues. Please evaluate based on the case information above.';
         var textOnlyContent = [{type:'text', text: textOnlyPseudo}];
         var retryResult = '';
         await apiCallStream(
@@ -7897,7 +7976,7 @@ async function changePassword() {
 // ══════════════════════════════════════════════════════════════
 
 // ── App version — update on every significant deployment ──
-var APP_BUILD = 1779840000; // epoch-style build number (matches <meta name="version">)
+var APP_BUILD = 1779870000; // epoch-style build number (matches <meta name="version">)
 
 var FB_APP = null;
 var FB_DB = null;
