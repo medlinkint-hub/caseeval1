@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
-<meta name="version" content="1779930000">
+<meta name="version" content="1779960000">
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
@@ -2008,48 +2008,53 @@ async function runEval(caseId) {
 
   if(needsIDBLoad) {
     setEvSt('run', '⏳ Loading documents from storage...');
-    // Try multiple possible IDB keys
-    var _idbKeys = [
-      c0._idbKey,
-      'casefiles_' + caseId,
-      'hw_idb_' + caseId
-    ].filter(Boolean);
-
-    var loaded = false;
-    for(var _ki = 0; _ki < _idbKeys.length && !loaded; _ki++) {
+    // Gather whatever combined-array data exists across the legacy candidate
+    // keys, indexed by filename — used only as a fast path. addFiles() (the
+    // normal "Add Documents" upload flow) stores each file under its OWN
+    // individual IndexedDB key (meta._key) instead of any of these combined
+    // arrays — a different, less-common bulk-save path writes those. So they
+    // can be completely empty for a case whose files were all added normally,
+    // or non-empty but missing files added after they were last written.
+    // Never trust a combined array as complete on its own — reconstruct every
+    // file from c0.filesData (the authoritative list) per-file instead, using
+    // whichever source actually has its data. The previous version stopped at
+    // the first non-empty combined array (even if partial) and, failing that,
+    // only checked localStorage/sessionStorage — the wrong storage layer
+    // entirely for per-file IndexedDB entries — so a document added via the
+    // normal upload flow could silently be missing from what gets sent to the
+    // AI, with no visible sign anything was wrong.
+    var _idbKeys = [c0._idbKey, 'casefiles_' + caseId, 'hw_idb_' + caseId].filter(Boolean);
+    var combinedByName0 = {};
+    for(var _ki = 0; _ki < _idbKeys.length; _ki++) {
       try {
         var idbFiles0 = await idbGet(_idbKeys[_ki]);
         // Guard: abort if user switched cases during async IDB load
         if(window._currentCaseId !== caseId) { console.warn('[runEval] Case switched during IDB load — aborting'); return; }
-        if(idbFiles0 && Array.isArray(idbFiles0) && idbFiles0.length > 0) {
-          FILES = idbFiles0.map(function(f){
-            return Object.assign({}, f, {ext: (f.ext && f.ext.length <= 4 && ['pdf','doc','img','xls','rtf','eml','txt','html','heic','other'].indexOf(f.ext)!==-1) ? f.ext : fxt(f.name||'')});
-          });
-          _filesForCaseId = caseId; // mark these files as belonging to caseId
-          loaded = true;
-          console.log('[runEval] Loaded', FILES.length, 'files from IDB key:', _idbKeys[_ki]);
+        if(idbFiles0 && Array.isArray(idbFiles0)) {
+          idbFiles0.forEach(function(f){ if(f && f.name && f.data && !combinedByName0[f.name]) combinedByName0[f.name] = f.data; });
         }
       } catch(e0) { console.warn('[runEval] IDB key failed:', _idbKeys[_ki], e0.message); }
     }
 
-    // Fallback: try loading each file from localStorage by _key
-    if(!loaded && c0.filesData && c0.filesData.length > 0) {
-      var recovered = c0.filesData.map(function(meta) {
-        var fd = Object.assign({}, meta);
-        if(meta._key) {
-          var stored = null;
-          try { stored = localStorage.getItem(meta._key); } catch(e){}
-          try { if(!stored) stored = sessionStorage.getItem(meta._key); } catch(e){}
-          if(stored) { fd.data = stored; loaded = true; }
-        }
+    var _rebuilt0 = await Promise.all(c0.filesData.map(function(meta) {
+      var fd = Object.assign({}, meta, {ext: (meta.ext && meta.ext.length <= 4 && ['pdf','doc','img','xls','rtf','eml','txt','html','heic','other'].indexOf(meta.ext)!==-1) ? meta.ext : fxt(meta.name||'')});
+      if(combinedByName0[meta.name]) { fd.data = combinedByName0[meta.name]; return fd; }
+      if(!meta._key) return fd;
+      return idbGet(meta._key).then(function(data){
+        if(data) { fd.data = data; return fd; }
+        var stored = null;
+        try { stored = localStorage.getItem(meta._key); } catch(e){}
+        try { if(!stored) stored = sessionStorage.getItem(meta._key); } catch(e){}
+        if(stored) fd.data = stored;
         return fd;
-      });
-      if(loaded) {
-        FILES = recovered;
-        _filesForCaseId = caseId; // mark these files as belonging to caseId
-        console.log('[runEval] Recovered', FILES.filter(function(f){return f.data;}).length, 'files from localStorage fallback');
-      }
-    }
+      }).catch(function(){ return fd; });
+    }));
+    // Guard: abort if user switched cases during the per-file IDB load
+    if(window._currentCaseId !== caseId) { console.warn('[runEval] Case switched during per-file IDB load — aborting'); return; }
+    FILES = _rebuilt0;
+    _filesForCaseId = caseId; // mark these files as belonging to caseId
+    var loaded = FILES.some(function(f){ return f.data && f.data.length > 100; });
+    console.log('[runEval] Loaded', FILES.filter(function(f){return f.data && f.data.length>100;}).length, '/', FILES.length, 'file(s) with data for case', caseId);
 
     if(!loaded) {
       console.warn('[runEval] Could not load files from any storage — will evaluate without documents');
@@ -4221,26 +4226,48 @@ function openCase(id) { window._currentCaseId = id;
       idbGet(_idbKey).then(function(idbFiles) {
         // Guard: user may have navigated to a different case while we were loading
         if(_filesForCaseId !== id) { console.warn('[openCase] Case switched during IDB load — discarding', id); return; }
-        if(idbFiles && Array.isArray(idbFiles) && idbFiles.length > 0) {
-          FILES = idbFiles.map(function(f){ return Object.assign({}, f); });
+        // Index the combined-array result (if any) by filename — used as a fast
+        // path only, never trusted wholesale. addFiles() (the normal "Add
+        // Documents" upload flow) stores each file under its OWN individual
+        // IndexedDB key (meta._key), not in this combined array — a different,
+        // less-common bulk-save path writes the combined array. So this array
+        // can be completely absent for a case whose files were all added
+        // normally, or present but stale/incomplete if more files were added
+        // via addFiles() after it was last written. Reconstruct every file from
+        // c.filesData (the authoritative list) per-file, using whichever source
+        // actually has its data — previously the fallback for a missing/partial
+        // combined array only checked localStorage/sessionStorage, the wrong
+        // storage layer entirely for per-file IndexedDB entries, which silently
+        // lost such a file's actual content on every reload (case switch, tab
+        // close, browser restart) while its filename kept showing in the file
+        // list as if it were still there.
+        var combinedByName = {};
+        if(idbFiles && Array.isArray(idbFiles)) {
+          idbFiles.forEach(function(f){ if(f && f.name && f.data) combinedByName[f.name] = f.data; });
+        }
+        Promise.all(c.filesData.map(function(meta) {
+          var fd = Object.assign({}, meta);
+          if(combinedByName[meta.name]) { fd.data = combinedByName[meta.name]; return fd; }
+          if(!meta._key) return fd;
+          return idbGet(meta._key).then(function(data){
+            if(data) { fd.data = data; return fd; }
+            var stored = null;
+            try { stored = localStorage.getItem(meta._key); } catch(e){}
+            try { if(!stored) stored = sessionStorage.getItem(meta._key); } catch(e){}
+            if(stored) fd.data = stored;
+            return fd;
+          }).catch(function(){ return fd; });
+        })).then(function(rebuilt) {
+          if(_filesForCaseId !== id) { console.warn('[openCase] Case switched during per-file IDB load — discarding', id); return; }
+          FILES = rebuilt;
           // Populate _FILE_CACHE so subsequent reads (runEval, docManifest) are instant
           FILES.forEach(function(f) {
             if(f.data) _FILE_CACHE[id + '_' + f.name] = f;
           });
-          console.log('[openCase] Loaded', FILES.length, 'files from IndexedDB for case', id);
-        } else {
-          // Try localStorage fallback
-          FILES = c.filesData.map(function(meta) {
-            var fd = Object.assign({}, meta);
-            if(meta._key) {
-              var stored = localStorage.getItem(meta._key) || sessionStorage.getItem(meta._key);
-              if(stored) fd.data = stored;
-            }
-            return fd;
-          });
-        }
-        var flc = document.getElementById('fl_c');
-        if(flc) renderFL_C(id);
+          console.log('[openCase] Loaded', FILES.filter(function(f){return f.data && f.data.length>100;}).length, '/', FILES.length, 'file(s) with data for case', id);
+          var flc = document.getElementById('fl_c');
+          if(flc) renderFL_C(id);
+        });
       }).catch(function(e){
         console.warn('[openCase] IndexedDB load failed:', e.message);
         var flc = document.getElementById('fl_c');
@@ -8075,7 +8102,7 @@ async function changePassword() {
 // ══════════════════════════════════════════════════════════════
 
 // ── App version — update on every significant deployment ──
-var APP_BUILD = 1779930000; // epoch-style build number (matches <meta name="version">)
+var APP_BUILD = 1779960000; // epoch-style build number (matches <meta name="version">)
 
 var FB_APP = null;
 var FB_DB = null;
