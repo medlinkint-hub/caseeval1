@@ -1,203 +1,178 @@
-# Moving CaseEval to Firebase Hosting
+# Access control — how CaseEval is secured
 
-This replaces the in-browser password with a real sign-in, and locks the
-database so it can only be read by approved people.
+This records what was actually done on **27 August 2026**, and the two routine
+jobs you will need again: adding a colleague, and removing one.
 
-Read the whole page before starting. **Step order matters** — doing step 5
-before step 4 will cut your team off from their data until you finish.
-
----
-
-## What changes, in plain terms
-
-**Before.** The password was checked inside the visitor's own browser, using a
-fingerprint of the password stored in `index.html`. Because the file is public,
-anyone could take that fingerprint and attack it offline. And because the check
-ran on their machine, they could skip it — the app was already downloaded and
-merely hidden. Separately, the database itself had no lock at all: anyone with
-the project id (also in the file) could read every case without ever opening
-the page.
-
-**After.** Sign-in happens on Google's servers. The database checks, on every
-single read and write, that you are signed in *and* on the approved team list.
-That second check is the one that matters — it protects the data even from
-someone who never loads the page.
+The Firebase project is **`healthwatch-tpi1`** (shown in the console as
+*Healthwatch-TPI1*). That is where the live `cases` and `policies` collections
+are. Everything below refers to it.
 
 ---
 
-## Which project this is
+## How it works now
 
-Everything below applies to the Firebase project **`healthwatch-tpi1`** (shown in
-the console as *Healthwatch-TPI1*). That is where the live `cases` and
-`policies` collections are.
+Three pieces, in order of how much they matter:
 
-You also have projects named `healthwatch-tpa`, `healthwatch-tpa2` and
-`firestore-database-9e008`. The app used to name `healthwatch-tpa` in its
-configuration by mistake — it holds no live case data. Do not enable sign-in or
-deploy rules to any of those; check they are empty and delete them once this is
-finished, so the confusion cannot recur.
+**1. Firestore security rules.** These are the actual protection. On every read
+and write, the database checks that the caller is signed in *and* has a record
+at `team/{their user id}` with `approved: true`. Nothing else gets through.
+This holds even against someone who never loads the app and addresses the
+database directly.
 
-## What you need
+**2. Firebase Authentication.** Sign-in with a Google account, verified on
+Google's servers.
 
-- The Google account that owns the `healthwatch-tpi1` Firebase project
-- Node.js on your computer
-- About 30 minutes
+**3. The app's sign-in screen.** Convenience only. It hides the interface from
+someone who is not signed in — it is not what protects the data.
 
-Install the Firebase command-line tool:
+The app is served from GitHub Pages at
+`https://medlinkint-hub.github.io/caseeval1/`.
+
+### Why it is keyed on user id, not email
+
+A `team` document is named after the Firebase user id, which cannot be forged,
+transferred, or re-registered. Anyone can create a Google account with a display
+name resembling a colleague's; nobody can obtain someone else's user id.
+
+---
+
+## Adding a colleague
+
+**They do this once:**
+
+1. Open https://medlinkint-hub.github.io/caseeval1/
+2. Press **Ctrl + Shift + R**
+3. Click **Sign in with Google**, using their work Google account
+4. They will see *"This account is not authorised"* — expected; their account
+   is now registered but not approved
+5. They tell you it's done
+
+**Then you:**
+
+6. Firebase console → **Authentication** → **Users**. Their email is now listed.
+   Check it is the right account — a personal Gmail will appear here just as
+   readily as a work one.
+7. Copy their **User UID** with the copy icon.
+8. **Firestore Database** → **Data** → click the **`team`** collection
+9. **+ Add document**
+10. Document ID: **paste their UID**. Do not use Auto-ID.
+11. Add one field:
+
+| Field | Type | Value |
+|---|---|---|
+| `approved` | **boolean** | `true` |
+
+Optionally add `name`, `role` and `email` as strings — these only control how
+the person is displayed in the app's Settings page.
+
+12. **Save.** Tell them to hard refresh. They are in immediately.
+
+> **The `approved` field must be type `boolean`.** The console defaults new
+> fields to `string`, and the *text* `"true"` does not grant access. This is the
+> single most common mistake.
+
+---
+
+## Removing someone
+
+Open their document under `team` and either set `approved` to `false` or delete
+the document. It takes effect within seconds — no deployment, no code change.
+
+Do this the same day someone leaves. It is now the whole of your access control.
+
+---
+
+## If someone cannot get in
+
+**"This account is not authorised"** — no `team` document, the document id does
+not match their UID exactly, or `approved` is a string rather than a boolean.
+Compare the id in `team` against the UID in Authentication → Users.
+
+**"This web address is not authorised"** — the domain they are using is not in
+Firebase → Authentication → Settings → **Authorised domains**. It should contain
+`medlinkint-hub.github.io`.
+
+**"Could not load the secure sign-in service"** — an ad-blocker, extension or
+network is blocking `gstatic.com`. Try another browser or network.
+
+**Signed in, but no cases appear** — sign-in succeeded and the rules refused the
+data. Almost always the `approved` boolean again.
+
+**They see the old password box** — a cached copy. Ctrl + Shift + R.
+
+**You lock yourself out entirely** — the Firebase console edits `team` directly
+and is not subject to these rules. You can always let yourself back in.
+
+---
+
+## Verifying the lock still holds
+
+Firestore → **Rules** → **Rules Playground**:
+
+- Simulation type: **get**
+- Location: `/cases/anything`
+- **Authenticated: off**
+- **Run** → must report **Denied**
+
+Worth repeating after any change to the rules.
+
+---
+
+## History
+
+| Date | Event |
+|---|---|
+| 31 Mar 2026 | Rules set to `allow read, write: if true` — database open to anyone with the project id, which was published in a public repository |
+| 27 Aug 2026 ~14:00 | Rules replaced with signed-in-and-approved; in-browser password gate replaced by Firebase Authentication |
+
+The exposure window is those two dates. Recorded here because it is the kind of
+thing that needs a contemporaneous note if it is ever assessed.
+
+---
+
+## Still outstanding
+
+**The Anthropic API key is held in each user's browser.** Anyone with developer
+tools can copy it and spend against the account. Lower severity than what was
+fixed — it costs money, it does not expose patient records — but it is real. The
+fix is a small server-side proxy so the browser never holds the key.
+
+**The repository is public.** The code is readable by anyone; the data is not.
+See below.
+
+**Three unused Firebase projects** — `healthwatch-tpa`, `healthwatch-tpa2`,
+`firestore-database-9e008`. Near-identical names to the live one are what caused
+the app to be pointed at the wrong project for months. Confirm each is empty,
+then delete them.
+
+---
+
+## Appendix — moving to Firebase Hosting (optional)
+
+Not required. It was the original plan for getting a real login, but the login
+was delivered on GitHub Pages instead. What it would still add:
+
+- The repository can be made private at no cost, because GitHub Pages is no
+  longer serving the app
+- A better address — `healthwatch-tpi1.web.app`, or a custom domain
+- Cache headers that make updates land immediately, removing the need for
+  Ctrl + Shift + R after every deployment
+
+`firebase.json` and `.firebaserc` are already in this repository, configured for
+`healthwatch-tpi1`.
 
 ```bash
 npm install -g firebase-tools
 firebase login
-```
-
----
-
-## Step 1 — Turn on sign-in methods
-
-In the [Firebase console](https://console.firebase.google.com/) → your project
-→ **Authentication** → **Get started**.
-
-Enable:
-- **Google** — one click, uses the team's existing Google accounts
-- **Email/Password** — for anyone without a Google account
-
-Both are free and unlimited.
-
----
-
-## Step 2 — Deploy the app
-
-From the project folder:
-
-```bash
 firebase deploy --only hosting
 ```
 
-This gives you a new address, something like `https://healthwatch-tpi1.web.app`.
+Afterwards: add the new domain under Authentication → **Authorised domains**,
+tell the team the new address, and turn off GitHub Pages under repository
+**Settings → Pages**.
 
-Open it. You should see the sign-in screen. **Sign in with Google.**
-
-You will be refused — that is correct and expected. Nobody is on the team list
-yet. The screen shows your user id, which looks like `k3Jd8sPq...`.
-
-**Copy that user id.** You need it for the next step.
-
----
-
-## Step 3 — Put yourself on the team list
-
-Firebase console → **Firestore Database** → **Start collection**.
-
-- Collection id: `team`
-- Document id: **paste the user id from step 2**
-
-Add these fields:
-
-| Field | Type | Value |
-|---|---|---|
-| `approved` | boolean | `true` |
-| `name` | string | Your name |
-| `role` | string | e.g. `Claims Lead` |
-| `email` | string | Your email |
-
-Go back to the app and sign in again. You should now be let in.
-
-> **Why by user id and not by email?** Because a user id cannot be changed or
-> claimed by someone else. Anyone can create a Google account with a
-> display name that looks like a colleague's; nobody can forge a user id.
-
----
-
-## Step 4 — Add the rest of the team
-
-Each person opens the new address, tries to sign in, and is refused. The refusal
-message shows *their* user id. They send it to you; you add a `team` document
-for them exactly as in step 3.
-
-To remove someone later, set their `approved` field to `false`, or delete the
-document. It takes effect immediately — no redeploy.
-
-**Do this for everyone before step 5.**
-
----
-
-## Step 5 — Lock the database
-
-Only once your whole team is on the list:
+The rules can also be deployed from here rather than pasted into the console:
 
 ```bash
 firebase deploy --only firestore:rules
 ```
-
-From this moment the database refuses anyone not on the team list.
-
-⚠️ **This also cuts off the old GitHub Pages version of the app.** It has no
-sign-in, so it can no longer read anything. That is the point — but make sure
-everyone has moved to the new address first.
-
-Check it worked: Firebase console → Firestore → **Rules** tab should show the
-contents of `firestore.rules`, and the **Rules Playground** should refuse an
-unauthenticated read of `cases`.
-
----
-
-## Step 6 — Retire the old site and make the repository private
-
-1. GitHub → your repository → **Settings** → **Pages** → set Source to **None**.
-   The old, unprotected address stops working.
-2. GitHub → **Settings** → **General** → scroll to the bottom → **Change
-   repository visibility** → **Private**.
-
-Now that hosting is on Firebase, making the repository private costs nothing and
-breaks nothing.
-
----
-
-## If something goes wrong
-
-**"This web address is not authorised"** — Firebase console → Authentication →
-Settings → **Authorised domains** → add the domain you are opening the app from.
-
-**"Could not load the secure sign-in service"** — an ad-blocker or firewall is
-blocking `gstatic.com`. Allow it, or try another network.
-
-**Signed in but refused** — your `team` document is missing, its id does not
-exactly match your user id, or `approved` is not the boolean `true` (a *string*
-`"true"` will not work — check the field type is boolean).
-
-**You lock yourself out completely** — you can always edit `team` documents
-directly in the Firebase console, which is not subject to these rules.
-
----
-
-## Things worth knowing
-
-**Sessions stay signed in** across browser restarts. On a shared computer you
-may prefer sign-in to end when the browser closes. In `index.html`, find
-`Persistence.LOCAL` and change it to `Persistence.SESSION`.
-
-**This does not fix the Anthropic API key.** It is still held in each user's
-browser and can still be copied by anyone with developer tools. That is a
-separate change (moving the key behind a small server) and is not addressed
-here.
-
-**Cost.** Firebase Hosting and Authentication are free at your volume. Firestore
-stays on the free Spark plan — 50,000 reads and 20,000 writes per day.
-
----
-
-## Verifying the gate yourself
-
-The sign-in gate is covered by browser tests:
-
-```bash
-npm install --no-save playwright
-npx playwright install chromium
-npm run test:auth
-```
-
-Twenty checks: ten that the app stays hidden when things fail (sign-in service
-blocked, forged session, removed bypass functions), and ten that it opens for an
-approved member and for nobody else — including when someone's approval is
-revoked, and when the membership check itself errors. These also run
-automatically on GitHub for every change.
