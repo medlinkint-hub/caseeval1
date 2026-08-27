@@ -30,3 +30,23 @@ jobs:
       # broken parser mirror.
       - name: Golden set — dry run
         run: npm run eval:dry
+
+  # The authentication gate is a security control, so it is verified in a real
+  # browser rather than by reading the code. Separate job: it needs Chromium,
+  # which takes about a minute to install, and the checks above must stay fast.
+  auth-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Playwright + Chromium
+        run: |
+          npm install --no-save playwright@^1.49.0
+          npx playwright install --with-deps chromium
+
+      - name: Auth gate must fail closed and open only for approved members
+        run: npm run test:auth

@@ -294,6 +294,35 @@ label.dz,div.dz{border:2px dashed var(--bor2);border-radius:var(--r);padding:24p
   cursor:pointer; text-decoration:underline;
 }
 
+/* ── Firebase Auth sign-in screen ── */
+#auth-status {
+  font-size:12px; color:#8090b0; margin-bottom:18px; min-height:18px;
+}
+#auth-google {
+  width:100%; padding:12px; background:#fff; color:#3c4043;
+  border:2px solid #dce3ec; border-radius:8px; font-size:14px;
+  font-weight:600; cursor:pointer; font-family:'DM Sans',sans-serif;
+  display:flex; align-items:center; justify-content:center;
+  transition:border-color .2s, background .2s;
+}
+#auth-google:hover { border-color:#1a2a72; background:#f7f9fc; }
+#auth-email-form { margin-top:14px; }
+#auth-email-form input {
+  width:100%; padding:12px 14px; border:2px solid #dce3ec;
+  border-radius:8px; font-size:14px; outline:none;
+  box-sizing:border-box; color:#1a2a72; margin-bottom:8px;
+  transition:border-color .2s; font-family:'DM Sans',sans-serif;
+}
+#auth-email-form input:focus { border-color:#1a2a72; }
+#auth-divider {
+  display:flex; align-items:center; gap:10px;
+  font-size:10px; color:#b0bec5; margin:16px 0 4px;
+  text-transform:uppercase; letter-spacing:.08em;
+}
+#auth-divider::before, #auth-divider::after {
+  content:''; flex:1; height:1px; background:#e6ebf2;
+}
+
 /* Medical Coding & Pricing */
 .mcd-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:9999;align-items:center;justify-content:center;padding:16px;box-sizing:border-box}
 .mcd-box{background:#fff;border-radius:16px;width:100%;max-width:880px;max-height:92vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,.35);overflow:hidden}
@@ -381,12 +410,36 @@ label.dz,div.dz{border:2px dashed var(--bor2);border-radius:var(--r);padding:24p
       <div style="font-size:11px;color:#64748b;font-weight:600;letter-spacing:.1em;text-transform:uppercase;margin-top:2px">TPA</div>
     </div>
     <div id="pw-sub">Secure Claims Management Platform</div>
-    <label id="pw-label" for="pw-input">Password</label>
-    <input id="pw-input" type="password" placeholder="Enter password" autocomplete="current-password">
-    <button id="pw-btn" onclick="checkPassword()">Sign In →</button>
+
+    <!-- Sign-in is handled by Firebase Authentication. There is no password in
+         this file: the old gate compared a SHA-256 hash in the browser, which
+         meant the hash shipped to every visitor and the check ran on their own
+         machine where it could simply be skipped. The check now happens on
+         Google's servers, and access to the data is enforced by Firestore
+         security rules (see firestore.rules) rather than by hiding a <div>. -->
+
+    <div id="auth-status">Starting secure sign-in…</div>
+
+    <button id="auth-google" onclick="authSignInGoogle()" style="display:none">
+      <svg viewBox="0 0 18 18" width="16" height="16" style="vertical-align:-3px;margin-right:8px">
+        <path fill="#4285F4" d="M17.64 9.2c0-.64-.06-1.25-.16-1.84H9v3.48h4.84a4.14 4.14 0 01-1.8 2.72v2.26h2.92c1.7-1.57 2.68-3.88 2.68-6.62z"/>
+        <path fill="#34A853" d="M9 18c2.43 0 4.47-.8 5.96-2.18l-2.92-2.26c-.8.54-1.84.86-3.04.86-2.34 0-4.32-1.58-5.03-3.7H.96v2.33A9 9 0 009 18z"/>
+        <path fill="#FBBC05" d="M3.97 10.72a5.4 5.4 0 010-3.44V4.95H.96a9 9 0 000 8.1l3.01-2.33z"/>
+        <path fill="#EA4335" d="M9 3.58c1.32 0 2.5.45 3.44 1.35l2.58-2.58C13.46.9 11.43 0 9 0A9 9 0 00.96 4.95l3.01 2.33C4.68 5.16 6.66 3.58 9 3.58z"/>
+      </svg>Sign in with Google
+    </button>
+
+    <div id="auth-divider" style="display:none">or</div>
+
+    <div id="auth-email-form" style="display:none">
+      <input id="auth-email" type="email" placeholder="Email" autocomplete="username">
+      <input id="auth-password" type="password" placeholder="Password" autocomplete="current-password">
+      <button id="pw-btn" onclick="authSignInEmail()">Sign In &rarr;</button>
+    </div>
+
     <div id="pw-err"></div>
-    <div id="pw-forgot" onclick="showForgot()">Forgot password?</div>
-    <div id="pw-reset" onclick="resetStoredPassword()" style="font-size:10px;color:#b0bec5;margin-top:8px;cursor:pointer;text-decoration:underline;display:none;">Clear saved password &amp; retry</div>
+    <div id="auth-signed-in-as" style="display:none;font-size:11px;color:#8090b0;margin-top:10px"></div>
+    <div id="auth-retry" onclick="authRetry()" style="display:none;font-size:11px;color:#1a2a72;margin-top:10px;cursor:pointer;text-decoration:underline">Try again</div>
   </div>
 </div>
 
@@ -7072,13 +7125,12 @@ function renderSet() {
   html += '<div style="padding:8px 12px;background:#fff7ed;border-radius:6px;font-size:11px;color:#92400e;border:1px solid #fed7aa"><b>Cost:</b> Free forever (Spark plan) — 50,000 reads/day and 20,000 writes/day is more than enough for 6 users.</div>';
   html += '</details>';
   html += '</div></div>';
-  html += '<div class="card"><div class="ct">Security</div>';
-  html += '<div class="ib"><p>Change the access password for this application.</p></div>';
-  html += '<div class="g2" style="margin-bottom:10px">';
-  html += '<div class="fg"><label>Current Password</label><input type="password" id="pw_current" placeholder="Current password"></div>';
-  html += '<div class="fg"><label>New Password</label><input type="password" id="pw_new" placeholder="New password (min 6 chars)"></div>';
-  html += '</div>';
-  html += '<button class="btn bp" onclick="changePassword()">Change Password</button>';
+  html += '<div class="card"><div class="ct">Account &amp; Security</div>';
+  var _acctEmail = (CURRENT_USER && (CURRENT_USER.email || CURRENT_USER.displayName)) || 'Not signed in';
+  var _acctRole  = (CURRENT_MEMBER && CURRENT_MEMBER.role) || 'Team member';
+  html += '<div class="ib"><p>Signed in as <b>'+esc(_acctEmail)+'</b><br><span style="font-size:11px;color:var(--tx3)">'+esc(_acctRole)+'</span></p></div>';
+  html += '<div class="ib" style="font-size:11px;color:var(--tx3)"><p>Sign-in is handled by Firebase Authentication. To change your password use your provider\'s reset flow; to add or remove a colleague, an administrator updates the <b>team</b> collection in the Firebase console.</p></div>';
+  html += '<button class="btn" onclick="authSignOut()">Sign Out</button>';
   html += '</div>';
   
   // ── Language Setting Card ──
@@ -7495,7 +7547,15 @@ function wireDetectIntent(text) {
 function copyEmail(){
   var b=G('f_eb');if(b)navigator.clipboard.writeText(b.value).then(function(){toast('Copied!');}).catch(function(){toast('Copy failed — please select and copy manually');});
 }
-var copyEmail = copyEmail1; // alias used by email tab Copy button
+// (removed) `var copyEmail = copyEmail1;` stood here. copyEmail1 was never
+// defined anywhere in this file, so the line threw a ReferenceError at load
+// time and aborted the rest of this <script> block. Function declarations are
+// hoisted and so still existed, but every `var` assignment below this point —
+// FIREBASE_CDNS, FIRESTORE_CDNS, FB_COLLECTION, FB_DEFAULT_CONFIG, APP_BUILD —
+// silently stayed undefined, and the bare autoInitFirebase() call at the end of
+// the block never ran. That is why Firebase had to be connected by hand with
+// the orange "Team Sync" card: automatic start-up had been broken the whole
+// time. The copyEmail() function declared immediately above is the real one.
 
 function sendEmail(id) {
   var c=getC(id);if(!c)return;
@@ -7613,114 +7673,17 @@ document.addEventListener('click', e => {
 });
 
 // ── FIREBASE AUTH ──
+// The sign-in flow itself lives with the authentication gate further down
+// (search for "Authentication gate"). Only the shared state is declared here,
+// because code above this point references it.
+//
+// The previous helpers that sat here — showLoginScreen(), hideLoginScreen(),
+// signInWithGoogle(), signOut() — have been removed. They pre-dated the gate
+// and nothing called them, but hideLoginScreen() in particular set the
+// application container to display:flex, i.e. it was a one-call bypass of the
+// login screen sitting in the global scope of a page anyone could open. Sign-in
+// and sign-out are now authSignInGoogle(), authSignInEmail() and authSignOut().
 let CURRENT_USER = null;
-
-function showLoginScreen(){
-  // App uses direct-init password auth — login screen not required.
-  // This stub exists for future per-user role auth (GDPR Tier 1 T1.3).
-}
-
-function hideLoginScreen(){var a=document.querySelector(".app");if(a)a.style.display="flex";}
-
-// ── Google Sign-In via Firebase Auth ──────────────────────────────────────────
-// Loads firebase-auth-compat.js dynamically (not in initial bundle to keep startup fast),
-// then triggers signInWithPopup. Updates CURRENT_USER on success.
-function signInWithGoogle() {
-  var AUTH_CDNS = [
-    'https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js',
-    'https://cdn.jsdelivr.net/npm/firebase@9.23.0/firebase-auth-compat.js'
-  ];
-
-  function doSignIn() {
-    // Guard: Firebase must be initialised first (done via loadFirebaseSDK / saveFBConfig)
-    if (typeof firebase === 'undefined') {
-      toast('⚠️ Firebase not initialised — configure it in Settings first');
-      return;
-    }
-    if (!firebase.auth) {
-      toast('⚠️ Firebase Auth SDK not available — check network connection');
-      return;
-    }
-    try {
-      var provider = new firebase.auth.GoogleAuthProvider();
-      provider.addScope('email');
-      provider.addScope('profile');
-
-      firebase.auth().signInWithPopup(provider)
-        .then(function(result) {
-          CURRENT_USER = result.user;
-          var display = (CURRENT_USER.email || CURRENT_USER.displayName || 'Unknown user');
-          toast('✅ Signed in as ' + display);
-          hideLoginScreen();
-          // Persist user info for UI display
-          try { localStorage.setItem('hw_user_display', display); } catch(e) {}
-        })
-        .catch(function(err) {
-          if (err.code === 'auth/popup-closed-by-user') return; // user cancelled — silent
-          if (err.code === 'auth/popup-blocked') {
-            toast('⚠️ Popup blocked — allow popups for this site in your browser settings');
-          } else if (err.code === 'auth/network-request-failed') {
-            toast('❌ Network error — check your internet connection');
-          } else if (err.code === 'auth/unauthorized-domain') {
-            toast('❌ This domain is not authorised in Firebase Console — add it under Authentication → Settings → Authorised domains');
-          } else {
-            toast('Google Sign-In failed: ' + (err.message || err.code));
-          }
-        });
-    } catch(e) {
-      toast('Google Sign-In error: ' + e.message);
-    }
-  }
-
-  // If Auth SDK already loaded, go straight to sign-in
-  if (typeof firebase !== 'undefined' && typeof firebase.auth === 'function') {
-    doSignIn();
-    return;
-  }
-
-  // Load Auth SDK dynamically with CDN fallback
-  toast('⏳ Loading Google Sign-In...');
-  var tried = 0;
-  function tryLoadAuth() {
-    if (tried >= AUTH_CDNS.length) {
-      toast('❌ Could not load Google Sign-In — check network or ad-blocker');
-      return;
-    }
-    var s = document.createElement('script');
-    s.src = AUTH_CDNS[tried];
-    s.crossOrigin = 'anonymous';
-    s.onload = function() { doSignIn(); };
-    s.onerror = function() { tried++; tryLoadAuth(); };
-    document.head.appendChild(s);
-    tried++;
-  }
-  tryLoadAuth();
-}
-
-// ── Sign Out ───────────────────────────────────────────────────────────────────
-function signOut() {
-  try {
-    localStorage.removeItem('hw_user_display');
-  } catch(e) {}
-
-  if (typeof firebase !== 'undefined' && firebase.auth && typeof firebase.auth === 'function') {
-    firebase.auth().signOut()
-      .then(function() {
-        CURRENT_USER = null;
-        toast('Signed out successfully');
-      })
-      .catch(function(err) {
-        // Sign-out rarely fails, but handle gracefully
-        CURRENT_USER = null;
-        toast('Signed out (local session cleared)');
-        console.warn('[signOut] Firebase error (ignored):', err.message);
-      });
-  } else {
-    // Firebase Auth not loaded — just clear local state
-    CURRENT_USER = null;
-    toast('Signed out');
-  }
-}
 
 // Direct init — no login required
 initLogo();
@@ -8077,22 +8040,9 @@ function buildAmountString(caseObj) {
 }
 
 
-async function changePassword() {
-  var cur = (document.getElementById('pw_current')||{}).value||'';
-  var newPw = (document.getElementById('pw_new')||{}).value||'';
-  if(!cur || !newPw) { toast('Enter current and new password'); return; }
-  if(newPw.length < 6) { toast('New password must be at least 6 characters'); return; }
-  var storedHash = PW_HASH;
-  var curHash = await hashString(cur);
-  if(curHash !== storedHash) { toast('Current password is incorrect'); return; }
-  var newHash = await hashString(newPw);
-  // Update in-memory hash and localStorage
-  PW_HASH = newHash;
-  try { localStorage.setItem('hw_custom_pw', newHash); } catch(e) { toast('⚠ Password changed (memory only) — storage full'); }
-  toast('✓ Password changed successfully');
-  var _pwc=document.getElementById('pw_current'); if(_pwc) _pwc.value='';
-  var _pwn=document.getElementById('pw_new'); if(_pwn) _pwn.value='';
-}
+// changePassword() was removed with the in-browser password gate. Passwords are
+// now managed by Firebase Authentication: a user resets their own via the email
+// reset flow, and an administrator manages accounts in the Firebase console.
 
 
 // ══════════════════════════════════════════════════════════════
@@ -8117,12 +8067,36 @@ function ensureFBKeys() {
   if(!FB_POLICIES_KEY) FB_POLICIES_KEY = 'policies';
 }
 
+// The built-in project configuration. These values are not secrets — a Firebase
+// web config is designed to be public and is already visible in this file. What
+// protects the data is firestore.rules, not the obscurity of these strings.
+//
+// This is a fallback so a freshly opened browser can reach the sign-in service
+// without anyone first typing the configuration into Settings. Before the
+// authentication gate existed that only delayed data sync; now it would prevent
+// signing in at all.
+var FB_DEFAULT_CONFIG = {
+  apiKey:        'AIzaSyAddLDolMMI5bF3rn6fSr2iCsyPHJPBUwE',
+  authDomain:    'healthwatch-tpa.firebaseapp.com',
+  projectId:     'healthwatch-tpa',
+  storageBucket: 'healthwatch-tpa.appspot.com',
+  appId:         '1:532713351910:web:04bf75af94942c91e96927'
+};
+
 function getFBConfig() {
   try {
     var raw = localStorage.getItem('hw_fb_config');
-    if(raw) return JSON.parse(raw);
+    if(raw) {
+      var cfg = JSON.parse(raw);
+      if(cfg && cfg.projectId) {
+        // A config saved before this change has no authDomain, without which
+        // Firebase Auth cannot complete a sign-in. Fill it in from the project id.
+        if(!cfg.authDomain) cfg.authDomain = cfg.projectId + '.firebaseapp.com';
+        return cfg;
+      }
+    }
   } catch(e){}
-  return null;
+  return FB_DEFAULT_CONFIG;
 }
 
 function saveFBConfig(cfg) {
@@ -8699,6 +8673,13 @@ var FIRESTORE_CDNS = [
   'https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js',
   'https://cdn.jsdelivr.net/npm/firebase@9.23.0/firebase-firestore-compat.js'
 ];
+// Auth is now part of the initial load, not an on-demand extra. It gates the
+// whole application, so the app cannot usefully start before it is present —
+// deferring it would only mean showing a locked screen for longer.
+var AUTH_CDNS = [
+  'https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js',
+  'https://cdn.jsdelivr.net/npm/firebase@9.23.0/firebase-auth-compat.js'
+];
 
 function loadScript(src) {
   return new Promise(function(resolve, reject) {
@@ -8711,7 +8692,11 @@ function loadScript(src) {
 }
 
 async function loadFirebaseSDK() {
-  if(FIREBASE_LOADED || typeof firebase !== 'undefined') {
+  // Treat the SDK as loaded only when BOTH Firestore and Auth are present.
+  // The old check accepted any defined `firebase` global, which meant a page
+  // that had loaded app+firestore earlier would short-circuit here and never
+  // fetch Auth — leaving the gate unable to run and the app locked out.
+  if(typeof firebase !== 'undefined' && firebase.firestore && firebase.auth) {
     FIREBASE_LOADED = true;
     return true;
   }
@@ -8720,6 +8705,7 @@ async function loadFirebaseSDK() {
     try {
       await loadScript(FIREBASE_CDNS[i]);
       await loadScript(FIRESTORE_CDNS[i]);
+      await loadScript(AUTH_CDNS[i]);
       FIREBASE_LOADED = true;
       console.log('[Firebase] SDK loaded from CDN', i+1);
       return true;
@@ -9896,7 +9882,10 @@ initStorage();
     })); } catch(e) { console.warn('[init] Could not save default FB config:', e.message); }
   }
 })();
-autoInitFirebase();
+// Firestore sync deliberately does NOT start here any more. Until the user is
+// signed in and approved, every read is refused by the security rules, so this
+// only produced a burst of permission errors on load. authRevealApp() calls
+// autoInitFirebase() once access has actually been granted.
 updBadges();
 renderDash();
 // Auto-start Gist sync if the user already has credentials stored on this device
@@ -13766,137 +13755,269 @@ function reExtract(fileIdx, caseId) {
 console.log('[DocEngine] Loaded — supports: PDF, Word, Excel, Images (HEIC/TIFF/JPG/PNG), Text, CSV, RTF, Email, HTML');
 
 
-// ── Password Protection ──────────────────────────────────────
-// Always reload PW_HASH fresh — guards against stale cached values in any browser
-var PW_HASH = localStorage.getItem('hw_custom_pw') || 'ee4d4aa76b2e56c0b48d78c616384114ac946b97ff0b3411c63a6c3642cb3977';
-var PW_DEFAULT_HASH = 'ee4d4aa76b2e56c0b48d78c616384114ac946b97ff0b3411c63a6c3642cb3977';
-var PW_SESSION_KEY = 'hw_session_ok_v2';
-var PW_ATTEMPTS = 0;
-var PW_LOCKED_UNTIL = 0;
+// ── Authentication gate (Firebase Authentication) ─────────────
+//
+// Replaces the previous in-browser password check. That check compared a
+// SHA-256 hash held in this file, which meant (a) the hash was published to
+// every visitor and could be attacked offline at leisure, and (b) the
+// comparison ran on the visitor's own machine, where the whole gate could be
+// skipped from the developer console — the application had already been
+// downloaded and was merely hidden behind visibility:hidden.
+//
+// Sign-in is now performed by Firebase on Google's servers. Just as important,
+// access to the data itself is enforced by Firestore security rules
+// (firestore.rules), so a stranger addressing the database directly over the
+// REST API — never loading this page at all — is refused too.
+//
+// FAIL CLOSED: every error path below leaves the application hidden. There is
+// deliberately no branch that reveals the app when something goes wrong.
 
-// Harden hashString — catches crypto.subtle unavailability (non-secure context, old Edge, etc.)
-async function hashString(str) {
-  try {
-    if (!window.crypto || !window.crypto.subtle) {
-      throw new Error('crypto.subtle not available — page must be served over HTTPS');
-    }
-    var buf = await window.crypto.subtle.digest('SHA-256', new TextEncoder().encode(str));
-    return Array.from(new Uint8Array(buf)).map(function(b){ return b.toString(16).padStart(2,'0'); }).join('');
-  } catch(e) {
-    // Surface the real error in the UI rather than silently failing
-    var errEl = document.getElementById('pw-err');
-    if(errEl) errEl.textContent = 'Browser security error: ' + e.message + '. Try HTTPS or a different browser.';
-    throw e;
-  }
-}
+var CURRENT_MEMBER = null;   // the team/{uid} record, once approved
+var _authBooted = false;
 
-async function checkPassword() {
-  // Re-read PW_HASH each call — corrects stale localStorage in browsers like Edge
-  PW_HASH = localStorage.getItem('hw_custom_pw') || PW_DEFAULT_HASH;
-  var pwInput = document.getElementById('pw-input');
-  var pwErr   = document.getElementById('pw-err');
-  var now = Date.now();
-  if(PW_LOCKED_UNTIL > now) {
-    var secs = Math.ceil((PW_LOCKED_UNTIL - now)/1000);
-    if(pwErr) pwErr.textContent = 'Too many attempts. Wait '+secs+' seconds.';
-    return;
-  }
-  var input = pwInput ? pwInput.value.trim() : '';
-  if(!input) { if(pwErr) pwErr.textContent = 'Please enter the password.'; return; }
-  var hash;
-  try {
-    hash = await hashString(input);
-  } catch(e) {
-    // hashString already set pw-err — just abort
-    return;
-  }
-  if(hash === PW_HASH) {
-    // Correct — store session and reveal the app
-    PW_ATTEMPTS = 0;
-    try { sessionStorage.setItem(PW_SESSION_KEY, '1'); } catch(e) { console.warn('[login] sessionStorage write failed:', e.message); }
-    var screen = document.getElementById('pw-screen');
-    if(screen) {
-      screen.style.transition = 'opacity .4s';
-      screen.style.opacity = '0';
-      setTimeout(function(){ screen.style.display = 'none'; }, 400);
-    }
-    var appEl = document.querySelector('.app');
-    if(appEl) appEl.style.visibility = 'visible';
-    var overlay = document.getElementById('sb-overlay');
-    if(overlay) overlay.style.display = '';
-    // Re-render dashboard after login — ensures content is visible in all browsers
-    setTimeout(function(){
-      if(typeof renderDash === 'function') renderDash();
-      if(typeof updBadges === 'function') updBadges();
-    }, 80);
+function _aEl(id) { return document.getElementById(id); }
+
+function authSetStatus(msg, isError) {
+  var st = _aEl('auth-status'), er = _aEl('pw-err');
+  if(isError) {
+    if(st) st.textContent = '';
+    if(er) er.textContent = msg;
   } else {
-    PW_ATTEMPTS++;
-    var resetEl = document.getElementById('pw-reset');
-    if(PW_ATTEMPTS >= 5) {
-      PW_LOCKED_UNTIL = Date.now() + 30000;
-      if(pwErr) pwErr.textContent = 'Too many attempts. Locked for 30 seconds.';
-      if(resetEl) resetEl.style.display = 'block';
-    } else {
-      if(pwErr) pwErr.textContent = 'Incorrect password. (' + (5 - PW_ATTEMPTS) + ' attempts remaining)';
-      if(PW_ATTEMPTS >= 2 && resetEl) resetEl.style.display = 'block';
-    }
-    if(pwInput) { pwInput.value = ''; pwInput.focus(); }
+    if(st) st.textContent = msg;
+    if(er) er.textContent = '';
   }
 }
 
-// Clears any browser-cached custom password hash and reloads — fixes Edge localStorage mismatch
-function resetStoredPassword() {
-  try { localStorage.removeItem('hw_custom_pw'); } catch(e) {}
-  PW_HASH = PW_DEFAULT_HASH;
-  PW_ATTEMPTS = 0;
-  PW_LOCKED_UNTIL = 0;
-  var pwErr = document.getElementById('pw-err');
-  if(pwErr) pwErr.textContent = 'Saved password cleared. Enter the default password.';
-  var resetEl = document.getElementById('pw-reset');
-  if(resetEl) resetEl.style.display = 'none';
-  var pwInput = document.getElementById('pw-input');
-  if(pwInput) { pwInput.value = ''; pwInput.focus(); }
+function authShowMethods(show) {
+  ['auth-google','auth-divider','auth-email-form'].forEach(function(id){
+    var el = _aEl(id);
+    if(el) el.style.display = show ? (id === 'auth-google' ? 'flex' : 'block') : 'none';
+  });
 }
 
-function showForgot() {
-  localStorage.removeItem('hw_custom_pw');
-  PW_HASH = PW_DEFAULT_HASH;
-  PW_ATTEMPTS = 0;
-  document.getElementById('pw-err').style.color = '#059669';
-  document.getElementById('pw-err').textContent = 'Password reset. Use the default password: HealthWatch2025!';
-  var inp = document.getElementById('pw-input');
-  if(inp) { inp.value = ''; inp.focus(); }
+function authShowRetry(show) {
+  var el = _aEl('auth-retry');
+  if(el) el.style.display = show ? 'block' : 'none';
+}
+
+// The only function that ever makes the application visible.
+function authRevealApp(user, member) {
+  CURRENT_USER = user;
+  CURRENT_MEMBER = member;
+  try {
+    localStorage.setItem('hw_user_display', user.email || user.displayName || 'Signed in');
+    if(member && member.name) localStorage.setItem('mp_name', member.name);
+  } catch(e) {}
+
+  var screen = _aEl('pw-screen');
+  if(screen) {
+    screen.style.transition = 'opacity .4s';
+    screen.style.opacity = '0';
+    setTimeout(function(){ screen.style.display = 'none'; }, 400);
+  }
+  var appEl = document.querySelector('.app');
+  if(appEl) appEl.style.visibility = 'visible';
+  var overlay = _aEl('sb-overlay');
+  if(overlay) overlay.style.display = '';
+
+  // Start Firestore sync only now. Before approval every read would be denied
+  // by the security rules, producing a stream of permission errors.
+  if(typeof autoInitFirebase === 'function') autoInitFirebase();
+
+  setTimeout(function(){
+    if(typeof renderDash === 'function') renderDash();
+    if(typeof updBadges === 'function') updBadges();
+  }, 80);
+}
+
+// Hides the application and returns to the gate. Used on sign-out, on refusal,
+// and on every error.
+function authLockApp(msg, opts) {
+  opts = opts || {};
+  CURRENT_USER = null;
+  CURRENT_MEMBER = null;
+
+  var appEl = document.querySelector('.app');
+  if(appEl) appEl.style.visibility = 'hidden';
+  var overlay = _aEl('sb-overlay');
+  if(overlay) overlay.style.display = 'none';
+  var screen = _aEl('pw-screen');
+  if(screen) { screen.style.display = 'flex'; screen.style.opacity = '1'; }
+
+  authSetStatus(msg || 'Sign in to continue', !!opts.isError);
+  authShowMethods(!!opts.allowSignIn);
+  authShowRetry(!!opts.allowRetry);
+
+  var info = _aEl('auth-signed-in-as');
+  if(info) {
+    if(opts.detail) { info.style.display = 'block'; info.textContent = opts.detail; }
+    else { info.style.display = 'none'; info.textContent = ''; }
+  }
+}
+
+// Reads the caller's own team/{uid} record. The security rules permit a signed-in
+// user to read exactly this one document and nothing else until approved.
+async function authCheckMembership(user) {
+  if(!FB_DB) throw new Error('Firestore unavailable');
+  var snap = await FB_DB.collection('team').doc(user.uid).get();
+  if(!snap.exists) return null;
+  var data = snap.data() || {};
+  return data.approved === true ? data : null;
+}
+
+async function authOnUser(user) {
+  if(!user) {
+    authLockApp('Sign in to continue', {allowSignIn: true});
+    return;
+  }
+  authSetStatus('Checking your access…');
+  authShowMethods(false);
+
+  var member;
+  try {
+    member = await authCheckMembership(user);
+  } catch(e) {
+    // Could not verify. Do NOT assume approval — sign the user back out.
+    console.error('[auth] membership check failed:', e.message);
+    try { await firebase.auth().signOut(); } catch(_e) {}
+    authLockApp('Could not verify your access. Check your connection and try again.',
+      {isError: true, allowSignIn: true, allowRetry: true});
+    return;
+  }
+
+  if(!member) {
+    var uid = user.uid;
+    try { await firebase.auth().signOut(); } catch(_e) {}
+    authLockApp('This account is not authorised for HealthWatch TPA.', {
+      isError: true,
+      allowSignIn: true,
+      detail: 'Ask an administrator to approve: ' + (user.email || uid) + '\n(user id ' + uid + ')'
+    });
+    return;
+  }
+
+  authRevealApp(user, member);
+}
+
+function authSignInGoogle() {
+  if(typeof firebase === 'undefined' || !firebase.auth) {
+    authSetStatus('Sign-in is not available — reload the page.', true);
+    return;
+  }
+  authSetStatus('Opening Google sign-in…');
+  var provider = new firebase.auth.GoogleAuthProvider();
+  provider.addScope('email');
+  firebase.auth().signInWithPopup(provider).catch(function(err){
+    if(err.code === 'auth/popup-closed-by-user' || err.code === 'auth/cancelled-popup-request') {
+      authLockApp('Sign in to continue', {allowSignIn: true});
+      return;
+    }
+    var msg = 'Google sign-in failed: ' + (err.message || err.code);
+    if(err.code === 'auth/popup-blocked') msg = 'Your browser blocked the sign-in popup. Allow popups for this site, then try again.';
+    if(err.code === 'auth/unauthorized-domain') msg = 'This web address is not authorised in the Firebase console (Authentication → Settings → Authorised domains).';
+    authLockApp(msg, {isError: true, allowSignIn: true, allowRetry: true});
+  });
+}
+
+function authSignInEmail() {
+  if(typeof firebase === 'undefined' || !firebase.auth) {
+    authSetStatus('Sign-in is not available — reload the page.', true);
+    return;
+  }
+  var email = (_aEl('auth-email') || {}).value || '';
+  var pw    = (_aEl('auth-password') || {}).value || '';
+  if(!email || !pw) { authSetStatus('Enter your email and password.', true); return; }
+  authSetStatus('Signing in…');
+  firebase.auth().signInWithEmailAndPassword(email.trim(), pw).catch(function(err){
+    var msg = 'Sign-in failed.';
+    if(err.code === 'auth/invalid-credential' || err.code === 'auth/wrong-password' || err.code === 'auth/user-not-found') {
+      msg = 'Incorrect email or password.';
+    } else if(err.code === 'auth/too-many-requests') {
+      msg = 'Too many attempts. Wait a few minutes and try again.';
+    } else if(err.code === 'auth/network-request-failed') {
+      msg = 'Network error — check your connection.';
+    }
+    authLockApp(msg, {isError: true, allowSignIn: true});
+    var pwEl = _aEl('auth-password'); if(pwEl) pwEl.value = '';
+  });
+}
+
+function authRetry() { location.reload(); }
+
+// Replaces the old signOut(). Returns to the gate rather than leaving a
+// signed-out user looking at case data.
+function authSignOut() {
+  try { localStorage.removeItem('hw_user_display'); } catch(e) {}
+  var done = function(){ authLockApp('Signed out.', {allowSignIn: true}); };
+  if(typeof firebase !== 'undefined' && firebase.auth) {
+    firebase.auth().signOut().then(done).catch(done);
+  } else {
+    done();
+  }
+}
+
+async function authBoot() {
+  if(_authBooted) return;
+  _authBooted = true;
+
+  authSetStatus('Starting secure sign-in…');
+  authShowMethods(false);
+
+  var ok = await loadFirebaseSDK();
+  if(!ok) {
+    authLockApp('Could not load the secure sign-in service. Check your connection, ad-blocker or firewall, then reload.',
+      {isError: true, allowRetry: true});
+    return;
+  }
+
+  var cfg = getFBConfig();
+  if(!cfg || !cfg.projectId || !cfg.apiKey) {
+    authLockApp('This installation is not configured for sign-in. Contact your administrator.',
+      {isError: true});
+    return;
+  }
+
+  if(!initFirebase(cfg)) {
+    authLockApp('Could not connect to the secure sign-in service. Reload and try again.',
+      {isError: true, allowRetry: true});
+    return;
+  }
+
+  try {
+    // LOCAL keeps the session across reloads and browser restarts. On a shared
+    // machine change this to firebase.auth.Auth.Persistence.SESSION, which ends
+    // the session when the browser closes.
+    await firebase.auth().setPersistence(firebase.auth.Auth.Persistence.LOCAL);
+  } catch(e) {
+    console.warn('[auth] setPersistence failed, using default:', e.message);
+  }
+
+  firebase.auth().onAuthStateChanged(function(user){
+    authOnUser(user).catch(function(e){
+      console.error('[auth] state handler failed:', e);
+      authLockApp('Sign-in error. Reload and try again.', {isError: true, allowRetry: true});
+    });
+  });
 }
 
 // Fetch live FX rates once at app start — non-blocking, falls back to the
 // built-in static table silently if it fails (see fetchLiveFXRates above).
 if(typeof fetchLiveFXRates === 'function') fetchLiveFXRates();
 
-// Allow Enter key + restore session on reload
 document.addEventListener('DOMContentLoaded', function() {
-  var inp = document.getElementById('pw-input');
-  if(inp) inp.addEventListener('keydown', function(e){
-    if(e.key === 'Enter') checkPassword();
+  // Hide the application before anything else. If any code below throws, the
+  // app stays hidden rather than being left exposed.
+  var appEl = document.querySelector('.app');
+  if(appEl) appEl.style.visibility = 'hidden';
+  var overlay = _aEl('sb-overlay');
+  if(overlay) overlay.style.display = 'none';
+
+  var pwEl = _aEl('auth-password');
+  if(pwEl) pwEl.addEventListener('keydown', function(e){
+    if(e.key === 'Enter') authSignInEmail();
   });
-  if(sessionStorage.getItem(PW_SESSION_KEY) === '1') {
-    // Already authenticated this session — skip login screen
-    var screen = document.getElementById('pw-screen');
-    if(screen) screen.style.display = 'none';
-    var appEl = document.querySelector('.app');
-    if(appEl) appEl.style.visibility = 'visible';
-    var overlay = document.getElementById('sb-overlay');
-    if(overlay) overlay.style.display = '';
-    // Re-render dashboard on session restore
-    setTimeout(function(){
-      if(typeof renderDash === 'function') renderDash();
-      if(typeof updBadges === 'function') updBadges();
-    }, 80);
-  } else {
-    var appEl = document.querySelector('.app');
-    if(appEl) appEl.style.visibility = 'hidden';
-    var overlay = document.getElementById('sb-overlay');
-    if(overlay) overlay.style.display = 'none';
-  }
+
+  authBoot();
 });
 
 </script>
