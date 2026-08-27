@@ -25,9 +25,21 @@ someone who never loads the page.
 
 ---
 
+## Which project this is
+
+Everything below applies to the Firebase project **`healthwatch-tpi1`** (shown in
+the console as *Healthwatch-TPI1*). That is where the live `cases` and
+`policies` collections are.
+
+You also have projects named `healthwatch-tpa`, `healthwatch-tpa2` and
+`firestore-database-9e008`. The app used to name `healthwatch-tpa` in its
+configuration by mistake — it holds no live case data. Do not enable sign-in or
+deploy rules to any of those; check they are empty and delete them once this is
+finished, so the confusion cannot recur.
+
 ## What you need
 
-- The Google account that owns the `healthwatch-tpa` Firebase project
+- The Google account that owns the `healthwatch-tpi1` Firebase project
 - Node.js on your computer
 - About 30 minutes
 
@@ -61,7 +73,7 @@ From the project folder:
 firebase deploy --only hosting
 ```
 
-This gives you a new address, something like `https://healthwatch-tpa.web.app`.
+This gives you a new address, something like `https://healthwatch-tpi1.web.app`.
 
 Open it. You should see the sign-in screen. **Sign in with Google.**
 

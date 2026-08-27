@@ -379,7 +379,7 @@ label.dz,div.dz{border:2px dashed var(--bor2);border-radius:var(--r);padding:24p
   <div style="padding:12px 14px">
     <div style="margin-bottom:8px">
       <label style="font-size:10px;font-weight:700;color:#1a2a72;text-transform:uppercase">Project ID</label>
-      <input id="fb_pid" style="width:100%;padding:6px 8px;border:1px solid #dce3ec;border-radius:6px;font-size:12px;box-sizing:border-box;margin-top:2px" value="healthwatch-tpa" placeholder="healthwatch-tpa">
+      <input id="fb_pid" style="width:100%;padding:6px 8px;border:1px solid #dce3ec;border-radius:6px;font-size:12px;box-sizing:border-box;margin-top:2px" value="healthwatch-tpi1" placeholder="healthwatch-tpi1">
     </div>
     <div style="margin-bottom:8px">
       <label style="font-size:10px;font-weight:700;color:#1a2a72;text-transform:uppercase">API Key</label>
@@ -7115,7 +7115,7 @@ function renderSet() {
   html += '<details style="margin-top:4px"><summary style="font-size:11px;font-weight:700;color:var(--navy);cursor:pointer">📋 Setup instructions (click to expand)</summary>';
   html += '<ol style="margin:10px 0;padding-left:18px;font-size:12px;line-height:2;color:var(--tx2)">';
   html += '<li>Go to <a href="https://console.firebase.google.com" target="_blank" style="color:#FF6B35;font-weight:600">console.firebase.google.com</a></li>';
-  html += '<li>Add project → name it <b>healthwatch-tpa</b> → disable Analytics → Create</li>';
+  html += '<li>Add project → name it <b>healthwatch-tpi1</b> → disable Analytics → Create</li>';
   html += '<li>Click the Web icon &lt;/&gt; → Register app → name it "CaseEval" → copy the config</li>';
   html += '<li>Paste the 4 values into the fields above → click <b>Connect</b></li>';
   html += '<li>In Firebase Console → Firestore Database → Create database → <b>Test mode</b> → Europe west (eur3)</li>';
@@ -8075,13 +8075,29 @@ function ensureFBKeys() {
 // without anyone first typing the configuration into Settings. Before the
 // authentication gate existed that only delayed data sync; now it would prevent
 // signing in at all.
+// Copied verbatim from Firebase console → Project settings → Your apps for the
+// project that actually holds the data.
+//
+// The project id here used to read 'healthwatch-tpa', which does not match this
+// apiKey or appId — both belong to healthwatch-tpi1. Firestore routes by
+// projectId, so the app was presenting one project's credentials while asking
+// for another project's database. The live cases and policies collections are
+// in healthwatch-tpi1; healthwatch-tpa is a separate, unrelated project.
 var FB_DEFAULT_CONFIG = {
-  apiKey:        'AIzaSyAddLDolMMI5bF3rn6fSr2iCsyPHJPBUwE',
-  authDomain:    'healthwatch-tpa.firebaseapp.com',
-  projectId:     'healthwatch-tpa',
-  storageBucket: 'healthwatch-tpa.appspot.com',
-  appId:         '1:532713351910:web:04bf75af94942c91e96927'
+  apiKey:            'AIzaSyAddLDolMMI5bF3rn6fSr2iCsyPHJPBUwE',
+  authDomain:        'healthwatch-tpi1.firebaseapp.com',
+  projectId:         'healthwatch-tpi1',
+  storageBucket:     'healthwatch-tpi1.firebasestorage.app',
+  messagingSenderId: '532713351910',
+  appId:             '1:532713351910:web:04bf75af94942c91e96927',
+  measurementId:     'G-PCC2Z024K0'
 };
+
+// Project ids that were shipped in error and must never be used. A browser that
+// connected before this fix has the broken value saved in localStorage, and
+// would otherwise keep it forever — now fatal rather than merely broken, since
+// signing in against the wrong project locks the user out entirely.
+var FB_BAD_PROJECT_IDS = ['healthwatch-tpa'];
 
 function getFBConfig() {
   try {
@@ -8089,6 +8105,14 @@ function getFBConfig() {
     if(raw) {
       var cfg = JSON.parse(raw);
       if(cfg && cfg.projectId) {
+        if(FB_BAD_PROJECT_IDS.indexOf(cfg.projectId) !== -1) {
+          // Saved from a build that shipped the wrong project id. Repair it in
+          // place rather than returning it, so the correction survives and the
+          // user is not left signing in against a project with no data in it.
+          console.warn('[Firebase] Replacing stored config for retired project "' + cfg.projectId + '" with ' + FB_DEFAULT_CONFIG.projectId);
+          try { localStorage.setItem('hw_fb_config', JSON.stringify(FB_DEFAULT_CONFIG)); } catch(e){}
+          return FB_DEFAULT_CONFIG;
+        }
         // A config saved before this change has no authDomain, without which
         // Firebase Auth cannot complete a sign-in. Fill it in from the project id.
         if(!cfg.authDomain) cfg.authDomain = cfg.projectId + '.firebaseapp.com';
@@ -9871,17 +9895,13 @@ function clearSelectedPolicy(caseId) {
 var _origRunEval = null; // patched below after runEval defined
 
 initStorage();
-// Pre-configured Firebase — healthwatch-tpa | europe-west3 (Frankfurt)
-(function(){
-  if(!localStorage.getItem('hw_fb_config')) {
-    try { localStorage.setItem('hw_fb_config', JSON.stringify({
-      apiKey:     "AIzaSyAddLDolMMI5bF3rn6fSr2iCsyPHJPBUwE",
-      authDomain: "healthwatch-tpa.firebaseapp.com",
-      projectId:  "healthwatch-tpa",
-      appId:      "1:532713351910:web:04bf75af94942c91e96927"
-    })); } catch(e) { console.warn('[init] Could not save default FB config:', e.message); }
-  }
-})();
+// (removed) A block here seeded a THIRD copy of the Firebase config into
+// localStorage on first run, carrying the same wrong project id. Because
+// getFBConfig() reads localStorage before any built-in default, that stale
+// value then won on every subsequent load — which is why a fresh browser or a
+// new colleague's machine never connected on its own and the orange "Team
+// Sync" card had to be filled in by hand. FB_DEFAULT_CONFIG is now the single
+// source of truth and getFBConfig() falls back to it.
 // Firestore sync deliberately does NOT start here any more. Until the user is
 // signed in and approved, every read is refused by the security rules, so this
 // only produced a burst of permission errors on load. authRevealApp() calls
