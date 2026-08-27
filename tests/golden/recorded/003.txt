@@ -1,0 +1,75 @@
+⚠ NO VALID POLICY PROVIDED — FINANCIAL DECISION WITHHELD
+
+1. POLICY VERIFICATION
+Policy number HDI-GR-55012 and insurer HDI Global appear on the claim form. No policy wording, schedule or certificate has been supplied in this evaluation. Per Rule 0.2, an insurer name is not a policy document. Policy validity on DOL: CANNOT BE VERIFIED — no policy provided. Plan name, annual benefit limit, waiting periods and underwriting basis: NOT PROVIDED IN DOCUMENTS.
+
+2. COVERAGE TERRITORY AND NETWORK
+Treatment took place in Thessaloniki, Greece, which is also the insured's country of residence. Whether this falls within an Area of Cover cannot be determined without the policy wording.
+
+3. PRE-AUTHORISATION STATUS
+No pre-authorisation was obtained. Whether PA was required, and what the consequence of its absence is, are both policy-dependent and cannot be assessed. Per IPMI Forum PA standards, emergency admissions ordinarily waive PA, but the actual contractual rule is unknown.
+
+4. DATE OF LOSS AND TIMELINE ANALYSIS
+DOL 19/07/2026, discharge 23/07/2026. Whether the DOL falls within a Period of Cover cannot be confirmed without the policy schedule.
+
+5. CLINICAL ASSESSMENT — DIAGNOSIS & MEDICAL NECESSITY (LAYERS A + B)
+Diagnosis: community-acquired pneumonia, right lower lobe (J18.9), ACUTE.
+DIAGNOSIS SUPPORT: Right lower lobe consolidation on chest X-ray with RR 24 and urea 7.4 supports the diagnosis.
+TREATMENT APPROPRIATENESS: IV co-amoxiclav with clarithromycin, stepped down to oral on day 3, is guideline-concordant for CAP.
+SETTING APPROPRIATENESS: CURB-65 = 2 indicates a short inpatient stay under the clinical decision rules. Admission was appropriate.
+LOS BENCHMARK: Expected 3-5 days for standard pneumonia. Actual 4 days. Within benchmark.
+DIFFERENTIAL DIAGNOSES: Pulmonary embolism and cardiac failure were reasonably excluded by the radiographic findings and clinical course.
+RED FLAGS: None. The clinical record is internally consistent and the care was proportionate.
+MEDICAL SPECIALIST OPINION: Clinically sound admission with an appropriate length of stay. Medical necessity is satisfied on the clinical evidence.
+
+6. PRE-EXISTING CONDITIONS ANALYSIS
+No pre-existing conditions are documented. Any moratorium or full medical underwriting rule that might apply is NOT PROVIDED IN DOCUMENTS and cannot be assessed.
+
+7. STANDARD EXCLUSIONS CHECK
+[DOES NOT APPLY] Pre-existing conditions (apply Section IV apportionment): Not raised by the documented facts of this admission.
+[DOES NOT APPLY] Chronic vs acute episode: Not raised by the documented facts of this admission.
+[DOES NOT APPLY] Elective / cosmetic / non-medically necessary: Not raised by the documented facts of this admission.
+[DOES NOT APPLY] Dental (non-emergency): Not raised by the documented facts of this admission.
+[DOES NOT APPLY] Mental health: Not raised by the documented facts of this admission.
+[DOES NOT APPLY] Maternity: Not raised by the documented facts of this admission.
+[DOES NOT APPLY] HIV/AIDS: Not raised by the documented facts of this admission.
+[DOES NOT APPLY] Sexually transmitted disease (STI): Not raised by the documented facts of this admission.
+[DOES NOT APPLY] Substance abuse / self-inflicted / alcohol-related: Not raised by the documented facts of this admission.
+[DOES NOT APPLY] War / terrorism (NMA 464): Not raised by the documented facts of this admission.
+[DOES NOT APPLY] Professional / hazardous sports: Not raised by the documented facts of this admission.
+[DOES NOT APPLY] Experimental / unregistered treatment: Not raised by the documented facts of this admission.
+[DOES NOT APPLY] Waiting period: Not raised by the documented facts of this admission.
+[DOES NOT APPLY] Assisted reproduction / fertility: Not raised by the documented facts of this admission.
+[DOES NOT APPLY] Congenital conditions: Not raised by the documented facts of this admission.
+
+8. BENEFIT LIMITS AND SUBLIMITS
+NOT PROVIDED IN DOCUMENTS. No benefit category, sublimit, deductible or co-payment can be stated without the policy schedule.
+
+9. INVOICE AND COST CONTAINMENT ANALYSIS (LAYER C)
+The invoice lists ward bed 4 nights at EUR 340.00 per night totalling EUR 1360.00, physician daily visits EUR 280.00, IV antibiotics EUR 260.00, chest X-ray EUR 90.00 and laboratory EUR 160.00, with a printed total of EUR 2150.00.
+R&C assessment: the Southern Europe inpatient-day benchmark is EUR 200 to EUR 700, and EUR 340.00 per night sits within it. Nothing exceeds 150% of the high benchmark. The invoice appears reasonable on its face.
+No financial calculation is performed. Per Rule 0.1 no APPROVED AMOUNT, deductible calculation or partial figure may be produced without a valid policy document.
+
+10. MEDICATION COVERAGE
+IV co-amoxiclav and clarithromycin are acute treatment of the presenting condition, not chronic maintenance. Nothing experimental, off-label or OTC. Coverage status is policy-dependent and cannot be confirmed.
+
+11. SUBROGATION AND THIRD PARTY LIABILITY
+No third-party indicators. No recovery prospect.
+
+12. FRAUD AND COMPLIANCE FLAGS
+No late notification indicators, no duplicate risk identified, no round-number billing, no provider irregularity.
+Overall fraud risk: CLEAR.
+
+13. FINAL DECISION
+DECISION: PENDING INFORMATION
+APPROVED AMOUNT: N/A — policy document required before financial assessment
+POLICY CLAUSE: NOT APPLICABLE — no policy provided. IPMI standard applied: InterQual inpatient criteria for medical necessity.
+REASON: The clinical evidence supports medical necessity, but no policy wording has been supplied, so no coverage determination or financial assessment can lawfully be made.
+NEXT STEPS: Obtain the full policy wording and schedule for HDI-GR-55012 from HDI Global, then re-run this evaluation. Reconcile final decision against actual policy wording once available.
+PENDING ITEMS: Policy wording and benefit schedule for HDI-GR-55012, required from HDI Global, before any financial assessment can be completed.
+CONFIDENCE: HIGH — the absence of the policy document is unambiguous and is itself the reason for the deferral.
+[YES] Policy wording verified against the actual document provided (not assumed from memory or general IPMI standards)
+[YES] Pre-authorization status checked (Section VI item 3)
+[YES] Every Section VI item 7 standard exclusion individually reviewed, not skipped
+[YES] Financial calculation (Section VI item 9) verified against the actual invoice figures, not estimated
+[YES] POLICY CLAUSE above is quoted or closely paraphrased from the real policy wording, not invented

@@ -1,0 +1,63 @@
+{
+  "id": "002",
+  "name": "Confirmed gonorrhoea + explicit STI exclusion — hard decline",
+  "rationale": "Tests the STI HARD RULE in SYS_EVAL Section VI item 7. The prompt states that a confirmed STI plus an explicit policy STI exclusion must produce DECLINED and must NOT produce PENDING INFORMATION. Commit 3e6ddde fixed a parser collision on this exact label, so it is also the canary for checklist-format drift.",
+  "synthetic": true,
+  "case": {
+    "caseNum": "GT-2026-0102",
+    "type": "ipmi_medical",
+    "patient": "Test Patient Beta",
+    "country": "Greece",
+    "countryOfResidence": "United Kingdom",
+    "insurer": "Canopius",
+    "policyNumber": "CAN-IPMI-88220",
+    "policyStart": "2026-01-01",
+    "policyEnd": "2026-12-31",
+    "dol": "2026-06-02",
+    "deductible": 500,
+    "copayment": 10,
+    "diagnosis": "Gonococcal urethritis",
+    "amountClaimed": "480.00",
+    "currency": "EUR",
+    "icdCodes": [
+      "A54.01"
+    ],
+    "paNumber": "none",
+    "paStatus": "not required — outpatient",
+    "desc": "Insured attended a private outpatient clinic in Athens with dysuria and urethral discharge. NAAT positive for Neisseria gonorrhoeae. Treated with single-dose ceftriaxone 1g IM plus azithromycin. Claim submitted for consultation, laboratory and medication."
+  },
+  "policy": {
+    "name": "Canopius International Health Plan — Silver",
+    "wording": "CLAUSE 3.1 ELIGIBLE TREATMENT: The Plan pays for medically necessary treatment received during the Period of Cover within the Area of Cover.\nCLAUSE 4.1 DEDUCTIBLE: An annual deductible of EUR 500 applies per Insured Person per Period of Cover.\nCLAUSE 4.2 CO-PAYMENT: The Insured Person bears 10% of eligible costs after the deductible.\nCLAUSE 6.1 EXCLUSIONS: The Plan does not cover cosmetic treatment, dental treatment other than emergency dental treatment following accident, sexually transmitted diseases, assisted reproduction, congenital conditions, or treatment of any condition arising from professional sport.\nCLAUSE 6.2 STI EXCLUSION — SCOPE: For the purposes of Clause 6.1, sexually transmitted disease means any infection transmitted principally by sexual contact, including but not limited to chlamydia, gonorrhoea, syphilis, genital herpes, HPV, trichomoniasis and HIV."
+  },
+  "documents": [
+    {
+      "name": "clinic-report.pdf",
+      "text": "ATHENS PRIVATE OUTPATIENT CLINIC\nConsultation 02/06/2026\nPresenting complaint: 4 days of dysuria and purulent urethral discharge.\nExamination: mucopurulent urethral discharge. No systemic features. Afebrile.\nInvestigation: Urethral swab NAAT POSITIVE for Neisseria gonorrhoeae. Chlamydia trachomatis NAAT negative. HIV and syphilis serology negative.\nDiagnosis: Gonococcal urethritis (A54.01).\nTreatment: Ceftriaxone 1g IM single dose, azithromycin 1g PO single dose. Partner notification advised. Test of cure arranged."
+    },
+    {
+      "name": "invoice-athens-clinic.pdf",
+      "text": "ATHENS PRIVATE OUTPATIENT CLINIC — INVOICE 2026/A-8891\nDate: 02/06/2026    Patient: Test Patient Beta\nSpecialist consultation (urology)                  EUR 150.00\nNAAT panel, urethral swab                          EUR 210.00\nSerology (HIV, syphilis)                           EUR 60.00\nCeftriaxone 1g IM and administration               EUR 40.00\nAzithromycin 1g PO                                 EUR 20.00\nTOTAL                                              EUR 480.00"
+    }
+  ],
+  "sourceFigures": [
+    150,
+    210,
+    60,
+    40,
+    20,
+    480,
+    500
+  ],
+  "expected": {
+    "verdict": "DECLINED",
+    "approvedAmount": 0,
+    "amountTolerance": 0.01,
+    "exclusionsApply": [
+      "Sexually transmitted disease (STI)"
+    ],
+    "maxUnsourcedFigures": 0,
+    "note": "Confirmed STI + explicit policy STI exclusion. SYS_EVAL forbids PENDING here. HIV/AIDS must read DOES NOT APPLY — serology was negative, so flagging it would be a fabricated finding.",
+    "maxUnsourcedFiguresNote": "Zero tolerance. Source-document figures, subset sums of them, deductible/co-pay arithmetic, and the R&C benchmark figures quoted in SYS_EVAL Section III all count as grounded, so anything left over is a figure the model invented. Raise this only with a written justification for each figure being allowed through."
+  }
+}
