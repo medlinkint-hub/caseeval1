@@ -1,0 +1,83 @@
+1. POLICY VERIFICATION
+Policy CAN-IPMI-88220, Canopius International Health Plan — Silver, in force 2026-01-01 to 2026-12-31. DOL 2026-06-02 falls within the Period of Cover. Covered on DOL: YES, subject to exclusions.
+
+2. COVERAGE TERRITORY AND NETWORK
+Treatment in Athens, Greece. Within the Area of Cover.
+
+3. PRE-AUTHORISATION STATUS
+Outpatient attendance. Clause 5.1 requires PA for planned inpatient admissions only. Not engaged.
+
+4. DATE OF LOSS AND TIMELINE ANALYSIS
+DOL 02/06/2026, within the policy period. No late-notification issue.
+
+5. CLINICAL ASSESSMENT — DIAGNOSIS & MEDICAL NECESSITY (LAYERS A + B)
+Diagnosis: gonococcal urethritis (A54.01), ACUTE.
+DIAGNOSIS SUPPORT: Urethral swab NAAT positive for Neisseria gonorrhoeae, with mucopurulent discharge on examination. The diagnosis is confirmed by laboratory evidence, not presumptive.
+TREATMENT APPROPRIATENESS: Ceftriaxone 1g IM with azithromycin is guideline-concordant dual therapy.
+SETTING APPROPRIATENESS: Outpatient management is correct; no admission indicated.
+LOS BENCHMARK: Not applicable — outpatient.
+DIFFERENTIAL DIAGNOSES: Chlamydial urethritis excluded by negative NAAT.
+RED FLAGS: None clinically. The clinical care was appropriate; the issue is contractual, not clinical.
+MEDICAL SPECIALIST OPINION: Correct diagnosis, correct treatment. The claim fails on policy terms rather than on medical necessity.
+
+6. PRE-EXISTING CONDITIONS ANALYSIS
+No pre-existing condition is documented or relevant. Proximate cause is an acute sexually transmitted infection.
+
+7. STANDARD EXCLUSIONS CHECK
+[DOES NOT APPLY] Pre-existing conditions (apply Section IV apportionment): Not raised by the documented facts of this admission.
+[DOES NOT APPLY] Chronic vs acute episode: Not raised by the documented facts of this admission.
+[DOES NOT APPLY] Elective / cosmetic / non-medically necessary: Not raised by the documented facts of this admission.
+[DOES NOT APPLY] Dental (non-emergency): Not raised by the documented facts of this admission.
+[DOES NOT APPLY] Mental health: Not raised by the documented facts of this admission.
+[DOES NOT APPLY] Maternity: Not raised by the documented facts of this admission.
+[DOES NOT APPLY] HIV/AIDS: HIV serology is recorded as negative, so this exclusion is not engaged on the documented facts.
+[APPLIES] Sexually transmitted disease (STI): Urethral NAAT is positive for Neisseria gonorrhoeae and Clause 6.1 read with Clause 6.2 excludes sexually transmitted disease expressly including gonorrhoea.
+[DOES NOT APPLY] Substance abuse / self-inflicted / alcohol-related: Not raised by the documented facts of this admission.
+[DOES NOT APPLY] War / terrorism (NMA 464): Not raised by the documented facts of this admission.
+[DOES NOT APPLY] Professional / hazardous sports: Not raised by the documented facts of this admission.
+[DOES NOT APPLY] Experimental / unregistered treatment: Not raised by the documented facts of this admission.
+[DOES NOT APPLY] Waiting period: Not raised by the documented facts of this admission.
+[DOES NOT APPLY] Assisted reproduction / fertility: Not raised by the documented facts of this admission.
+[DOES NOT APPLY] Congenital conditions: Not raised by the documented facts of this admission.
+
+8. BENEFIT LIMITS AND SUBLIMITS
+Not reached — the claim is excluded in full, so the EUR 500.00 deductible and 10% co-payment are not applied.
+
+9. INVOICE AND COST CONTAINMENT ANALYSIS (LAYER C)
+Specialist consultation EUR 150.00, NAAT panel EUR 210.00, serology EUR 60.00, ceftriaxone with administration EUR 40.00, azithromycin EUR 20.00. Printed total EUR 480.00.
+R&C assessment: the Southern Europe specialist benchmark is EUR 50 to EUR 150 and the consultation sits at the top of that range but within it. No charge exceeds 150% of the high benchmark. The pricing is not the reason for the decision.
+Cost-containment opportunities: none pursued, as no amount is payable.
+
+MANDATORY FINANCIAL CALCULATION:
+GROSS AMOUNT CLAIMED:        EUR 480.00
+LESS: Non-covered items:     EUR 480.00
+LESS: Excessive charges:     EUR 0.00
+LESS: Annual deductible:     EUR 0.00
+SUBTOTAL:                    EUR 0.00
+LESS: Co-payment (10%):      EUR 0.00
+NET ELIGIBLE AMOUNT:         EUR 0.00
+POTENTIAL SAVINGS:           EUR 0.00
+
+10. MEDICATION COVERAGE
+Ceftriaxone and azithromycin were prescribed solely to treat the excluded condition. EXCLUDED as a consequence of the primary exclusion. Neither is experimental or off-label.
+
+11. SUBROGATION AND THIRD PARTY LIABILITY
+No third-party indicators. No recovery prospect.
+
+12. FRAUD AND COMPLIANCE FLAGS
+No late notification, no duplicate risk, no round-number billing, no provider irregularity. Nothing suggests concealment.
+Overall fraud risk: CLEAR.
+
+13. FINAL DECISION
+DECISION: DECLINED
+APPROVED AMOUNT: EUR 0.00
+POLICY CLAUSE: Clause 6.1 read with Clause 6.2 (sexually transmitted disease exclusion, expressly naming gonorrhoea)
+REASON: The confirmed diagnosis of gonococcal urethritis falls squarely within the express sexually transmitted disease exclusion, which names gonorrhoea, so no part of the claim is payable.
+NEXT STEPS: Issue a declinature letter to the insured citing Clause 6.1 and 6.2 verbatim, and advise of the internal appeal route.
+PENDING ITEMS: None — the exclusion is established on the documents provided and no further information could alter it.
+CONFIDENCE: HIGH — laboratory-confirmed diagnosis and an express, specifically worded exclusion leave no interpretive ambiguity.
+[YES] Policy wording verified against the actual document provided (not assumed from memory or general IPMI standards)
+[YES] Pre-authorization status checked (Section VI item 3)
+[YES] Every Section VI item 7 standard exclusion individually reviewed, not skipped
+[YES] Financial calculation (Section VI item 9) verified against the actual invoice figures, not estimated
+[YES] POLICY CLAUSE above is quoted or closely paraphrased from the real policy wording, not invented

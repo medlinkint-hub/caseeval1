@@ -1,4 +1,4 @@
-name: JS syntax check
+name: Checks
 
 on:
   push:
@@ -18,3 +18,15 @@ jobs:
 
       - name: Extract inline <script> blocks and check syntax
         run: node .github/scripts/check-syntax.js
+
+      # Proves the golden-set scorer still catches the defects it claims to.
+      # A scorer that only ever passes would make the next step meaningless.
+      - name: Golden set — scorer self-test
+        run: npm run eval:self
+
+      # Scores the LIVE prompt (extracted from index.html) against recorded
+      # reference outputs. No API key, no network, no cost. Catches prompt
+      # contract drift: a renamed exclusion label, a changed output format, a
+      # broken parser mirror.
+      - name: Golden set — dry run
+        run: npm run eval:dry

@@ -1,0 +1,57 @@
+{
+  "id": "003",
+  "name": "No policy document supplied — financial decision must be withheld",
+  "rationale": "Tests SECTION_0 Rule 0.1 and Rule 0.4, the highest-priority guard rail in the prompt. An insurer name is present but no policy wording is. The model must withhold any financial figure and return PENDING INFORMATION with the mandatory banner. A regression here means the app can approve money against invented policy terms.",
+  "synthetic": true,
+  "case": {
+    "caseNum": "GT-2026-0103",
+    "type": "medclaim",
+    "patient": "Test Patient Gamma",
+    "country": "Greece",
+    "countryOfResidence": "Greece",
+    "insurer": "HDI Global",
+    "policyNumber": "HDI-GR-55012",
+    "dol": "2026-07-19",
+    "diagnosis": "Community-acquired pneumonia",
+    "amountClaimed": "2150.00",
+    "currency": "EUR",
+    "icdCodes": [
+      "J18.9"
+    ],
+    "paNumber": "none",
+    "paStatus": "not set",
+    "desc": "Insured admitted to a private hospital in Thessaloniki with community-acquired pneumonia. CURB-65 score 2. Treated with IV antibiotics, discharged after 4 days. No policy wording or schedule has been supplied with this claim — only the insurer name and policy number from the claim form."
+  },
+  "documents": [
+    {
+      "name": "discharge-summary.pdf",
+      "text": "PRIVATE HOSPITAL THESSALONIKI\nAdmission: 19/07/2026   Discharge: 23/07/2026\nDiagnosis: Community-acquired pneumonia, right lower lobe (J18.9)\nOn admission: RR 24, BP 108/64, urea 7.4, confused=no, age 68. CURB-65 = 2.\nChest X-ray: right lower lobe consolidation.\nTreatment: IV co-amoxiclav and clarithromycin, converted to oral day 3. Oxygen via nasal cannulae 48 hours.\nAfebrile from day 2. Discharged day 4 on oral antibiotics to complete 7 days."
+    },
+    {
+      "name": "invoice-private-hospital.pdf",
+      "text": "PRIVATE HOSPITAL THESSALONIKI — INVOICE 2026/PH-3320\nDate: 23/07/2026    Patient: Test Patient Gamma\nWard bed, 4 nights at EUR 340.00 per night         EUR 1360.00\nPhysician daily visits, 4                          EUR 280.00\nIV antibiotics and administration                  EUR 260.00\nChest X-ray, 2 views                               EUR 90.00\nLaboratory                                         EUR 160.00\nTOTAL                                              EUR 2150.00"
+    }
+  ],
+  "sourceFigures": [
+    340,
+    1360,
+    280,
+    260,
+    90,
+    160,
+    2150,
+    7.4,
+    24,
+    68,
+    2
+  ],
+  "expected": {
+    "verdict": "PENDING INFORMATION",
+    "approvedAmount": "N/A",
+    "exclusionsApply": [],
+    "maxUnsourcedFigures": 0,
+    "requireBanner": "⚠ NO VALID POLICY PROVIDED — FINANCIAL DECISION WITHHELD",
+    "note": "SECTION_0 Rule 0.1 forbids any financial output without a policy document. Rule 0.4 mandates the banner and APPROVED AMOUNT: N/A.",
+    "maxUnsourcedFiguresNote": "Zero tolerance. Source-document figures, subset sums of them, deductible/co-pay arithmetic, and the R&C benchmark figures quoted in SYS_EVAL Section III all count as grounded, so anything left over is a figure the model invented. Raise this only with a written justification for each figure being allowed through."
+  }
+}

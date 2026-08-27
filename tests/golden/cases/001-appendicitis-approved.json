@@ -1,0 +1,67 @@
+{
+  "id": "001",
+  "name": "Acute appendicitis, Greece — clean approval",
+  "rationale": "Baseline happy path. Emergency admission, PA waived, in-period, in-territory, no exclusion applies. If this case stops returning APPROVED, something broad has broken in the prompt.",
+  "synthetic": true,
+  "case": {
+    "caseNum": "GT-2026-0101",
+    "type": "ipmi_medical",
+    "patient": "Test Patient Alpha",
+    "country": "Greece",
+    "countryOfResidence": "Germany",
+    "insurer": "Canopius",
+    "policyNumber": "CAN-IPMI-88104",
+    "policyStart": "2026-01-01",
+    "policyEnd": "2026-12-31",
+    "dol": "2026-05-14",
+    "deductible": 500,
+    "copayment": 10,
+    "diagnosis": "Acute appendicitis, uncomplicated",
+    "amountClaimed": "3900.00",
+    "currency": "EUR",
+    "icdCodes": [
+      "K35.80"
+    ],
+    "paNumber": "none",
+    "paStatus": "not obtained — emergency admission",
+    "desc": "Expatriate insured resident in Germany, on business travel in Thessaloniki. Presented to the emergency department on 14/05/2026 with 18 hours of right iliac fossa pain, anorexia and low-grade fever. Alvarado score 8. Laparoscopic appendicectomy performed the same evening. Discharged day 3 without complication."
+  },
+  "policy": {
+    "name": "Canopius International Health Plan — Silver",
+    "wording": "CLAUSE 3.1 ELIGIBLE TREATMENT: The Plan pays for medically necessary inpatient and day-case treatment received during the Period of Cover within the Area of Cover.\nCLAUSE 3.2 AREA OF COVER: Worldwide excluding the United States of America.\nCLAUSE 4.1 DEDUCTIBLE: An annual deductible of EUR 500 applies per Insured Person per Period of Cover.\nCLAUSE 4.2 CO-PAYMENT: The Insured Person bears 10% of eligible costs after the deductible.\nCLAUSE 5.1 PRE-AUTHORISATION: Pre-authorisation is required for all planned inpatient admissions. Pre-authorisation is NOT required for emergency admissions; the Insurer must be notified within 48 hours of admission.\nCLAUSE 6.1 EXCLUSIONS: The Plan does not cover cosmetic treatment, dental treatment other than emergency dental treatment following accident, sexually transmitted diseases, assisted reproduction, congenital conditions, or treatment of any condition arising from professional sport.\nCLAUSE 6.4 PRE-EXISTING CONDITIONS: A 24-month moratorium applies to pre-existing conditions."
+  },
+  "documents": [
+    {
+      "name": "discharge-summary.pdf",
+      "text": "EUROMEDICA GENERAL CLINIC, THESSALONIKI\nDischarge Summary\nAdmission: 14/05/2026 21:40   Discharge: 17/05/2026 11:00\nDiagnosis: Acute appendicitis, uncomplicated (K35.80)\nOn admission: RIF tenderness with rebound, T 37.9C, WCC 14.2, CRP 62. Alvarado 8.\nUltrasound: non-compressible blind-ending tubular structure 9mm, consistent with acute appendicitis.\nProcedure 14/05/2026: Laparoscopic appendicectomy. Findings: acutely inflamed appendix, no perforation, no free pus.\nHistology: acute suppurative appendicitis.\nPost-operative course uneventful. Afebrile from day 1. Tolerating diet day 2.\nDischarged day 3 on oral analgesia. No pre-existing conditions reported. Notification to insurer sent 15/05/2026."
+    },
+    {
+      "name": "invoice-euromedica.pdf",
+      "text": "EUROMEDICA GENERAL CLINIC — INVOICE 2026/4471\nDate: 17/05/2026    Patient: Test Patient Alpha\nSurgeon fee (laparoscopic appendicectomy)         EUR 1200.00\nAnaesthesia                                        EUR 450.00\nOperating theatre                                  EUR 900.00\nWard bed, 3 nights at EUR 320.00 per night         EUR 960.00\nLaboratory (FBC, CRP, U&E, coagulation)            EUR 180.00\nHistopathology                                     EUR 120.00\nMedication and consumables                         EUR 90.00\nTOTAL                                              EUR 3900.00"
+    }
+  ],
+  "sourceFigures": [
+    1200,
+    450,
+    900,
+    320,
+    960,
+    180,
+    120,
+    90,
+    3900,
+    500,
+    14.2,
+    62,
+    9
+  ],
+  "expected": {
+    "verdict": "APPROVED",
+    "approvedAmount": 3060.0,
+    "amountTolerance": 1.0,
+    "exclusionsApply": [],
+    "maxUnsourcedFigures": 0,
+    "note": "3900 gross - 500 deductible = 3400; less 10% co-pay (340) = 3060.",
+    "maxUnsourcedFiguresNote": "Zero tolerance. Source-document figures, subset sums of them, deductible/co-pay arithmetic, and the R&C benchmark figures quoted in SYS_EVAL Section III all count as grounded, so anything left over is a figure the model invented. Raise this only with a written justification for each figure being allowed through."
+  }
+}

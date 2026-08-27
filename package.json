@@ -1,0 +1,18 @@
+{
+  "name": "caseeval1",
+  "version": "1.0.0",
+  "private": true,
+  "description": "HealthWatch TPA claims evaluation PWA (single-file) plus its golden-set evaluation harness.",
+  "scripts": {
+    "check": "node .github/scripts/check-syntax.js",
+    "eval": "node tests/golden/run-eval.mjs",
+    "eval:dry": "node tests/golden/run-eval.mjs --dry",
+    "eval:self": "node tests/golden/self-test.mjs",
+    "eval:record": "node tests/golden/run-eval.mjs --record",
+    "test": "npm run check && npm run eval:self && npm run eval:dry"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "_note": "No \"type\" field on purpose: .github/scripts/check-syntax.js is CommonJS, and the harness files use the .mjs extension so they are ESM regardless."
+}

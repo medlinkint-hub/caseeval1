@@ -1,0 +1,83 @@
+1. POLICY VERIFICATION
+Policy CAN-IPMI-88104, Canopius International Health Plan — Silver, in force 2026-01-01 to 2026-12-31. Date of loss 2026-05-14 falls within the Period of Cover. Covered on DOL: YES. Underwriting basis: MORATORIUM (Clause 6.4, 24 months).
+
+2. COVERAGE TERRITORY AND NETWORK
+Clause 3.2 gives worldwide cover excluding the USA. Treatment took place in Thessaloniki, Greece — within the Area of Cover. YES.
+
+3. PRE-AUTHORISATION STATUS
+Clause 5.1 requires pre-authorisation for planned inpatient admissions only and expressly waives it for emergency admissions, subject to notification within 48 hours. This was an emergency admission on 14/05/2026 and the discharge summary records notification to the insurer on 15/05/2026 — within 48 hours. No PA prejudice arises.
+
+4. DATE OF LOSS AND TIMELINE ANALYSIS
+DOL 14/05/2026, within the policy period. Notification the following day. No late-notification issue.
+
+5. CLINICAL ASSESSMENT — DIAGNOSIS & MEDICAL NECESSITY (LAYERS A + B)
+Diagnosis: acute appendicitis, uncomplicated (K35.80), ACUTE.
+DIAGNOSIS SUPPORT: RIF tenderness with rebound, T 37.9C, WCC 14.2, CRP 62, and ultrasound showing a non-compressible blind-ending tubular structure of 9mm. Histology confirms acute suppurative appendicitis. The diagnosis is fully supported.
+TREATMENT APPROPRIATENESS: Alvarado score 8 meets the surgical threshold (>=7) set out in the clinical decision rules. Laparoscopic appendicectomy is standard of care.
+SETTING APPROPRIATENESS: Inpatient admission is always justified for appendicitis. Confirmed appropriate.
+LOS BENCHMARK: Expected 1-3 days for uncomplicated appendicitis. Actual 3 days. Within benchmark.
+DIFFERENTIAL DIAGNOSES: Mesenteric adenitis and ureteric colic were reasonably excluded by imaging and histology.
+RED FLAGS: None. The clinical picture is internally consistent.
+MEDICAL SPECIALIST OPINION: A textbook uncomplicated presentation, appropriately investigated and appropriately treated.
+
+6. PRE-EXISTING CONDITIONS ANALYSIS
+The discharge summary records no pre-existing conditions. The 24-month moratorium at Clause 6.4 is not engaged. Proximate cause is acute appendicitis. COVERED.
+
+7. STANDARD EXCLUSIONS CHECK
+[DOES NOT APPLY] Pre-existing conditions (apply Section IV apportionment): Not raised by the documented facts of this admission.
+[DOES NOT APPLY] Chronic vs acute episode: Not raised by the documented facts of this admission.
+[DOES NOT APPLY] Elective / cosmetic / non-medically necessary: Not raised by the documented facts of this admission.
+[DOES NOT APPLY] Dental (non-emergency): Not raised by the documented facts of this admission.
+[DOES NOT APPLY] Mental health: Not raised by the documented facts of this admission.
+[DOES NOT APPLY] Maternity: Not raised by the documented facts of this admission.
+[DOES NOT APPLY] HIV/AIDS: Not raised by the documented facts of this admission.
+[DOES NOT APPLY] Sexually transmitted disease (STI): Not raised by the documented facts of this admission.
+[DOES NOT APPLY] Substance abuse / self-inflicted / alcohol-related: Not raised by the documented facts of this admission.
+[DOES NOT APPLY] War / terrorism (NMA 464): Not raised by the documented facts of this admission.
+[DOES NOT APPLY] Professional / hazardous sports: Not raised by the documented facts of this admission.
+[DOES NOT APPLY] Experimental / unregistered treatment: Not raised by the documented facts of this admission.
+[DOES NOT APPLY] Waiting period: Not raised by the documented facts of this admission.
+[DOES NOT APPLY] Assisted reproduction / fertility: Not raised by the documented facts of this admission.
+[DOES NOT APPLY] Congenital conditions: Not raised by the documented facts of this admission.
+
+8. BENEFIT LIMITS AND SUBLIMITS
+Inpatient surgical benefit. Annual deductible EUR 500.00 (Clause 4.1), co-payment 10% (Clause 4.2). No prior claims recorded this period.
+
+9. INVOICE AND COST CONTAINMENT ANALYSIS (LAYER C)
+Surgeon fee EUR 1200.00, anaesthesia EUR 450.00, theatre EUR 900.00, ward bed 3 nights at EUR 320.00 = EUR 960.00, laboratory EUR 180.00, histopathology EUR 120.00, medication and consumables EUR 90.00. Printed total EUR 3900.00.
+R&C assessment: the Southern Europe benchmark for appendectomy all-in is EUR 2500 to EUR 7000. At EUR 3900.00 this invoice sits comfortably inside the range. Ward rate of EUR 320.00 per night is within the EUR 200 to EUR 700 inpatient-day band. No item exceeds 150% of the high benchmark. No duplicate, non-medical or unbundled charges identified.
+Cost-containment opportunities: none material; the invoice is already at the lower-middle of market.
+
+MANDATORY FINANCIAL CALCULATION:
+GROSS AMOUNT CLAIMED:        EUR 3900.00
+LESS: Non-covered items:     EUR 0.00
+LESS: Excessive charges:     EUR 0.00
+LESS: Annual deductible:     EUR 500.00
+SUBTOTAL:                    EUR 3400.00
+LESS: Co-payment (10%):      EUR 340.00
+NET ELIGIBLE AMOUNT:         EUR 3060.00
+POTENTIAL SAVINGS:           EUR 0.00
+
+10. MEDICATION COVERAGE
+Peri-operative analgesia and consumables, acute and directly related to the covered procedure. COVERED. Nothing experimental, off-label or OTC.
+
+11. SUBROGATION AND THIRD PARTY LIABILITY
+No third-party indicators. No motor vehicle accident, workplace incident or assault. No recovery prospect.
+
+12. FRAUD AND COMPLIANCE FLAGS
+Notification prompt. No round-number billing. No duplicate submission identified. Provider is an established Thessaloniki clinic. No indication of upcoding or unbundling — the line items match the operative record.
+Overall fraud risk: CLEAR.
+
+13. FINAL DECISION
+DECISION: APPROVED
+APPROVED AMOUNT: EUR 3060.00
+POLICY CLAUSE: Clause 3.1 (eligible treatment) read with Clause 4.1 (deductible) and Clause 4.2 (co-payment)
+REASON: Emergency laparoscopic appendicectomy for uncomplicated acute appendicitis is medically necessary treatment within the Area of Cover during the Period of Cover, with pre-authorisation expressly waived for emergency admission under Clause 5.1.
+NEXT STEPS: Settle EUR 3060.00 to Euromedica General Clinic and notify the insured of the deductible and co-payment applied.
+PENDING ITEMS: None.
+CONFIDENCE: HIGH — the policy wording, clinical record and itemised invoice are all present and mutually consistent.
+[YES] Policy wording verified against the actual document provided (not assumed from memory or general IPMI standards)
+[YES] Pre-authorization status checked (Section VI item 3)
+[YES] Every Section VI item 7 standard exclusion individually reviewed, not skipped
+[YES] Financial calculation (Section VI item 9) verified against the actual invoice figures, not estimated
+[YES] POLICY CLAUSE above is quoted or closely paraphrased from the real policy wording, not invented
