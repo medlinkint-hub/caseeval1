@@ -1,0 +1,70 @@
+rules_version = '2';
+
+// HealthWatch TPA — Firestore security rules
+//
+// These rules, not the login screen, are what actually protect patient data.
+//
+// The app's Firebase config (project id, API key) is embedded in index.html and
+// is meant to be public — that is normal for Firebase web apps. It means anyone
+// can address this database directly over the REST API without ever loading the
+// page. So a login screen in the browser protects nothing on its own: the only
+// thing standing between a stranger and every case file is this file.
+//
+// Model: signed in is not enough. A user must ALSO have an approved membership
+// document at team/{uid}. That makes revoking someone instant (flip one field
+// in the console) and does not require redeploying rules to add or remove a
+// colleague.
+//
+// Deploy with:  firebase deploy --only firestore:rules
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Is the caller a signed-in, approved member of the HWA team?
+    function isApprovedMember() {
+      return request.auth != null
+        && exists(/databases/$(database)/documents/team/$(request.auth.uid))
+        && get(/databases/$(database)/documents/team/$(request.auth.uid)).data.approved == true;
+    }
+
+    // ── Team membership ───────────────────────────────────────────────────
+    // A member may read their own membership record so the app can show their
+    // name and role. Nobody can write these from the browser — membership is
+    // granted only in the Firebase console or by an admin SDK process.
+    // Without this, any signed-in stranger could approve themselves.
+    match /team/{uid} {
+      allow read: if request.auth != null && request.auth.uid == uid;
+      allow write: if false;
+    }
+
+    // ── Case files ────────────────────────────────────────────────────────
+    // Patient medical records. GDPR Article 9 special-category data.
+    match /cases/{caseId} {
+      allow read, write: if isApprovedMember();
+
+      // Subcollections written by the provider-verification and medical-coding
+      // features. Firestore does NOT inherit rules into subcollections, so
+      // these must be stated explicitly — without this block they would fall
+      // through to the catch-all deny below and those features would break.
+      match /provider_verification/{docId} {
+        allow read, write: if isApprovedMember();
+      }
+      match /medical_coding/{docId} {
+        allow read, write: if isApprovedMember();
+      }
+    }
+
+    // ── Policy library ────────────────────────────────────────────────────
+    // Insurer policy wordings. Commercially confidential.
+    match /policies/{policyId} {
+      allow read, write: if isApprovedMember();
+    }
+
+    // ── Everything else ───────────────────────────────────────────────────
+    // Default deny. Any collection added later is locked until a rule for it
+    // is written here deliberately.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
