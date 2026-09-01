@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
-<meta name="version" content="1780020000">
+<meta name="version" content="1780050000">
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
@@ -1150,6 +1150,17 @@ async function apiCallStream(messages, systemPrompt, maxTokens, onChunk, opts) {
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
       let fullText = '';
+      // Distinguishes "the model produced a real, valid response with no
+      // visible text" (a genuine SSE event stream — message_start,
+      // message_delta with a stop_reason, etc. — just with nothing in it)
+      // from "the connection silently delivered nothing at all" (zero
+      // parseable SSE lines, ever). The former is a legitimate empty result
+      // this function should return as-is; the latter is not normal model
+      // behavior — even a refusal produces real event structure — and points
+      // at something transport-level (a proxy, antivirus, or network
+      // intermediary) breaking the stream, which the non-streaming fallback
+      // below is far less likely to suffer from. See the check after the loop.
+      let receivedAnyEvent = false;
 
       try {
         while(true) {
@@ -1164,6 +1175,7 @@ async function apiCallStream(messages, systemPrompt, maxTokens, onChunk, opts) {
             if(data === '[DONE]') continue;
             try {
               const parsed = JSON.parse(data);
+              receivedAnyEvent = true;
               if(parsed.type === 'content_block_delta' && parsed.delta && parsed.delta.text) {
                 fullText += parsed.delta.text;
                 if(onChunk) onChunk(parsed.delta.text, fullText);
@@ -1192,7 +1204,13 @@ async function apiCallStream(messages, systemPrompt, maxTokens, onChunk, opts) {
       } finally {
         clearTimeout(evalIdleTimer);
       }
-      return fullText;
+      if(receivedAnyEvent) return fullText;
+      // The stream closed normally (no error, no timeout) but delivered zero
+      // parseable SSE events the entire time — not a real model response of
+      // any kind. Fall through to the non-streaming fetch below instead of
+      // returning empty, exactly as if this had thrown: a plain HTTP response
+      // isn't vulnerable to whatever silently emptied the SSE stream.
+      console.warn('[Stream] Received zero SSE events — falling back to non-streaming fetch');
     } catch(streamErr) {
       console.warn('[Stream] Failed, falling back to regular fetch:', streamErr.message);
       if(streamErr.name === 'AbortError') {
@@ -1227,18 +1245,38 @@ async function apiCallStream(messages, systemPrompt, maxTokens, onChunk, opts) {
     var c = Array.isArray(m.content) ? m.content : [];
     return c.some(function(b){ return b.type==='document' && b.source && b.source.media_type==='application/pdf'; });
   });
-  const res2 = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    mode: 'cors',
-    credentials: 'omit',
-    headers: Object.assign({
-      'Content-Type': 'application/json',
-      'x-api-key': key,
-      'anthropic-version': '2023-06-01',
-      'anthropic-dangerous-direct-browser-access': 'true'
-    }, hasPDF2 ? {'anthropic-beta': 'pdfs-2024-09-25'} : {}),
-    body: JSON.stringify(body2)
-  });
+  // This path had no timeout at all — a plain fetch() waits forever for a
+  // stuck or silently-dropped connection. That was already a latent gap, and
+  // now matters more directly: the streaming path above falls through to
+  // here whenever it detects a broken/empty stream, so this fallback needs
+  // its own protection against the same class of network issue, not an
+  // assumption that a non-streaming request can't also hang.
+  const _nsAbortCtrl = new AbortController();
+  const _nsTimeoutMs = Math.max(90000, (maxTokens||1500) * 50);
+  const _nsTimer = setTimeout(function(){ _nsAbortCtrl.abort(); }, _nsTimeoutMs);
+  let res2;
+  try {
+    res2 = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      mode: 'cors',
+      credentials: 'omit',
+      signal: _nsAbortCtrl.signal,
+      headers: Object.assign({
+        'Content-Type': 'application/json',
+        'x-api-key': key,
+        'anthropic-version': '2023-06-01',
+        'anthropic-dangerous-direct-browser-access': 'true'
+      }, hasPDF2 ? {'anthropic-beta': 'pdfs-2024-09-25'} : {}),
+      body: JSON.stringify(body2)
+    });
+  } catch(nsErr) {
+    if(nsErr.name === 'AbortError') {
+      throw new Error('Evaluation stalled — no response received for '+Math.round(_nsTimeoutMs/1000)+' seconds. Please try again.');
+    }
+    throw nsErr;
+  } finally {
+    clearTimeout(_nsTimer);
+  }
   const data2 = await res2.json();
   if(!res2.ok) throw new Error((data2.error&&data2.error.message)||'HTTP '+res2.status);
   if(opts && opts.usage && data2.usage) {
@@ -8102,7 +8140,7 @@ function buildAmountString(caseObj) {
 // ══════════════════════════════════════════════════════════════
 
 // ── App version — update on every significant deployment ──
-var APP_BUILD = 1780020000; // epoch-style build number (matches <meta name="version">)
+var APP_BUILD = 1780050000; // epoch-style build number (matches <meta name="version">)
 
 var FB_APP = null;
 var FB_DB = null;
