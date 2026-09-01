@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
-<meta name="version" content="1780050000">
+<meta name="version" content="1780080000">
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
@@ -2892,6 +2892,12 @@ async function runEval(caseId) {
       // fix, and without this there was no way to tell them apart after the
       // fact; every one of these looked identical to "no response."
       var _stopReasonNote = _retryOpts.stopReason || _primaryOpts.stopReason || '';
+      // This exact failure is also the highest-value moment to check for a
+      // stale tab (see checkForNewVersion() near app boot) — someone hitting
+      // this repeatedly across several deployed fixes with a browser tab
+      // that's never been reloaded would otherwise see zero change no matter
+      // how many times it's actually fixed.
+      if(typeof checkForNewVersion === 'function') checkForNewVersion();
       finalResult = 'The evaluation could not be completed — the AI returned no response after two attempts.\n\n'
         + 'DECISION: PENDING INFORMATION\n'
         + 'REASON: No response received from the evaluation model.'
@@ -8140,7 +8146,7 @@ function buildAmountString(caseObj) {
 // ══════════════════════════════════════════════════════════════
 
 // ── App version — update on every significant deployment ──
-var APP_BUILD = 1780050000; // epoch-style build number (matches <meta name="version">)
+var APP_BUILD = 1780080000; // epoch-style build number (matches <meta name="version">)
 
 var FB_APP = null;
 var FB_DB = null;
@@ -14111,6 +14117,41 @@ async function authBoot() {
 // Fetch live FX rates once at app start — non-blocking, falls back to the
 // built-in static table silently if it fails (see fetchLiveFXRates above).
 if(typeof fetchLiveFXRates === 'function') fetchLiveFXRates();
+
+// ── Version check: catches a browser tab left open across a deploy ─────────
+// This app has no build step and no service worker — a tab opened before a
+// fix ships keeps running the OLD JavaScript forever, with nothing to
+// auto-reload it. A bug fix can ship correctly and still look "not fixed" to
+// someone who never happens to reload the page — this has genuinely happened
+// (an operator re-ran the same failing evaluation four times across three
+// separate fixes with zero change, because the open tab was never refreshed).
+// Poll the deployed index.html's own version meta tag; if it's newer than
+// what's actually running here, show a persistent banner. Safe to run before
+// sign-in too — it only reads this same static file, and telling someone on
+// the login screen to refresh is equally useful.
+var _versionCheckShown = false;
+function checkForNewVersion() {
+  if(_versionCheckShown) return; // already showing — don't spam
+  fetch(location.pathname + '?_v=' + Date.now(), {cache: 'no-store'})
+    .then(function(r){ return r.text(); })
+    .then(function(html){
+      var m = html.match(/<meta name="version" content="(\d+)">/);
+      var liveBuild = m ? parseInt(m[1], 10) : null;
+      if(liveBuild && typeof APP_BUILD === 'number' && liveBuild > APP_BUILD) {
+        _versionCheckShown = true;
+        var b = document.createElement('div');
+        b.style.cssText = 'position:fixed;bottom:0;left:0;right:0;z-index:99999;background:#1a2a72;color:#fff;padding:12px 16px;display:flex;align-items:center;justify-content:center;gap:14px;font-size:13px;flex-wrap:wrap;box-shadow:0 -2px 10px rgba(0,0,0,.2)';
+        b.innerHTML = '<span>⚠ A newer version of this app is available — this tab may be missing recent fixes.</span>'
+          + '<button style="background:#fff;color:#1a2a72;border:none;padding:6px 14px;border-radius:6px;font-weight:700;cursor:pointer" onclick="location.reload()">Refresh Now</button>';
+        document.body.appendChild(b);
+      }
+    })
+    .catch(function(){}); // silent — this is a nice-to-have, not critical
+}
+// Check shortly after load, then periodically, so a long-open tab eventually
+// notices on its own — not just at the moment a fresh page load happens.
+setTimeout(checkForNewVersion, 5000);
+setInterval(checkForNewVersion, 5 * 60 * 1000);
 
 document.addEventListener('DOMContentLoaded', function() {
   // Hide the application before anything else. If any code below throws, the
