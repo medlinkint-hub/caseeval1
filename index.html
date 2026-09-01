@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
-<meta name="version" content="1779990000">
+<meta name="version" content="1780020000">
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
@@ -1177,6 +1177,15 @@ async function apiCallStream(messages, systemPrompt, maxTokens, onChunk, opts) {
                   opts.usage.output_tokens = parsed.usage.output_tokens || 0;
                 }
               }
+              // Diagnostic only, independent of opts.usage — captures WHY the model
+              // stopped (end_turn / max_tokens / refusal / stop_sequence / pause_turn)
+              // even when it produced zero visible text. Without this, an empty
+              // result and a genuine content-safety refusal look identical to the
+              // caller: both are just "" with no error thrown — there was previously
+              // no way to tell them apart after the fact.
+              if(opts && parsed.type === 'message_delta' && parsed.delta && parsed.delta.stop_reason) {
+                opts.stopReason = parsed.delta.stop_reason;
+              }
             } catch(e) {}
           }
         }
@@ -1238,6 +1247,11 @@ async function apiCallStream(messages, systemPrompt, maxTokens, onChunk, opts) {
     opts.usage.cache_read_input_tokens = data2.usage.cache_read_input_tokens || 0;
     opts.usage.cache_creation_input_tokens = data2.usage.cache_creation_input_tokens || 0;
   }
+  // Same diagnostic as the streaming path above — captures why the model
+  // stopped even when it produced no visible text (e.g. content-safety
+  // refusal), so an empty-but-successful response isn't indistinguishable
+  // from every other kind of empty-but-successful response.
+  if(opts && data2.stop_reason) opts.stopReason = data2.stop_reason;
   const result = (data2.content||[]).map(b=>b.text||'').join('');
   if(onChunk) onChunk(result, result); // single chunk callback
   return result;
@@ -2734,6 +2748,23 @@ async function runEval(caseId) {
     var _evalModeEl = G('eval_mode_sel');
     var _thinkOn = _evalModeEl ? (_evalModeEl.value === 'max') : evalThinkingEnabled();
     var _evalUsage = {}; // populated by apiCallStream with input/output token counts
+    var _primaryOpts = {
+      thinking:_thinkOn, usage:_evalUsage, // Settings → Evaluation Reasoning controls whether the model deliberates
+      // Push reasoning depth to the model's maximum when thinking is enabled —
+      // "high" (the API default we'd otherwise silently get) is good, but not
+      // the deepest available. "max" is supported by every model in this app
+      // except Haiku 4.5 (already excluded above), and directly answers the
+      // ask for the best available intellectual/reasoning result.
+      effort: _thinkOn ? 'max' : undefined,
+      // Adaptive thinking can legitimately go silent for well over the default
+      // 90s idle timeout while the model deliberates through a complex case —
+      // zero bytes reach the client during that time, indistinguishable from a
+      // dead connection at the network level. Give the thinking-enabled primary
+      // call more headroom; the non-thinking retry below stays at the default.
+      idleTimeoutMs: _thinkOn ? 240000 : 90000
+      // stopReason gets set on this object by apiCallStream — read after the
+      // call below to explain an empty result (see the "no response" branch).
+    };
     try {
       await apiCallStream(
         [{role:'user', content:msgContent}],
@@ -2746,21 +2777,7 @@ async function runEval(caseId) {
           if(streamEl) streamEl.textContent = full.replace(/<corrections>[^<]*<\/corrections>/gi, '').trim();
           if(window._currentCaseId === caseId) setEvSt('run', 'Writing decision...');
         },
-        {
-          thinking:_thinkOn, usage:_evalUsage, // Settings → Evaluation Reasoning controls whether the model deliberates
-          // Push reasoning depth to the model's maximum when thinking is enabled —
-          // "high" (the API default we'd otherwise silently get) is good, but not
-          // the deepest available. "max" is supported by every model in this app
-          // except Haiku 4.5 (already excluded above), and directly answers the
-          // ask for the best available intellectual/reasoning result.
-          effort: _thinkOn ? 'max' : undefined,
-          // Adaptive thinking can legitimately go silent for well over the default
-          // 90s idle timeout while the model deliberates through a complex case —
-          // zero bytes reach the client during that time, indistinguishable from a
-          // dead connection at the network level. Give the thinking-enabled primary
-          // call more headroom; the non-thinking retry below stays at the default.
-          idleTimeoutMs: _thinkOn ? 240000 : 90000
-        }
+        _primaryOpts
       );
     } catch(primaryErr) {
       // Only a stall/timeout is safe to recover from here by falling through to
@@ -2795,6 +2812,7 @@ async function runEval(caseId) {
       try {
         var _retryFull = '';
         var _retryUsage = {};
+        var _retryOpts = {usage:_retryUsage}; // no thinking — the entire budget goes to the visible answer
         await apiCallStream(
           [{role:'user', content:msgContent}],
           sys,
@@ -2804,7 +2822,7 @@ async function runEval(caseId) {
             if(streamEl) streamEl.textContent = full.replace(/<corrections>[^<]*<\/corrections>/gi, '').trim();
             if(window._currentCaseId === caseId) setEvSt('run', 'Writing decision...');
           },
-          {usage:_retryUsage} // no thinking — the entire budget goes to the visible answer
+          _retryOpts
         );
         if(_retryFull && _retryFull.trim().length >= 150) {
           fullResult = _retryFull;
@@ -2824,11 +2842,26 @@ async function runEval(caseId) {
 
     if(!fullResult) {
       // Both the primary call and the retry produced nothing — surface a clear,
-      // actionable message instead of saving a blank evaluation.
+      // actionable message instead of saving a blank evaluation. Both calls
+      // completed without throwing (a real API error/rejection is handled
+      // separately, in the outer catch below) — this branch means the API
+      // itself returned a normal, successful response with no visible text.
+      // stopReason (captured by apiCallStream on the opts object passed to
+      // each call) says WHY the model stopped even though it wrote nothing —
+      // e.g. "refusal" (a content-safety classifier tripped) vs "max_tokens"
+      // (thinking or the request content genuinely exhausted the budget) vs
+      // "end_turn" (the model just... stopped) — each points at a different
+      // fix, and without this there was no way to tell them apart after the
+      // fact; every one of these looked identical to "no response."
+      var _stopReasonNote = _retryOpts.stopReason || _primaryOpts.stopReason || '';
       finalResult = 'The evaluation could not be completed — the AI returned no response after two attempts.\n\n'
         + 'DECISION: PENDING INFORMATION\n'
-        + 'REASON: No response received from the evaluation model.\n'
-        + 'NEXT STEPS: Re-run the evaluation. If this persists, check your API key and account credit balance in Settings.';
+        + 'REASON: No response received from the evaluation model.'
+        + (_stopReasonNote ? ' (model stop reason: ' + _stopReasonNote + ')' : '') + '\n'
+        + 'NEXT STEPS: Re-run the evaluation.'
+        + (_stopReasonNote === 'refusal' ? ' If this persists, the request content may be triggering a content-safety refusal — try removing or replacing recently added documents.'
+          : _stopReasonNote === 'max_tokens' ? ' If this persists, the case content may be too large for the current settings — try Economic mode or reducing attached documents.'
+          : ' If this persists, check your API key and account credit balance in Settings.');
     } else if(!/^\s*DECISION\s*:\s*(DECLINED|APPROVED|PARTIALLY APPROVED|PENDING INFORMATION)\b/im.test(fullResult)) {
       // Evaluation ended without the mandatory final DECISION line — make a fast
       // second call for verdict only. Deliberately checking for the exact
@@ -8069,7 +8102,7 @@ function buildAmountString(caseObj) {
 // ══════════════════════════════════════════════════════════════
 
 // ── App version — update on every significant deployment ──
-var APP_BUILD = 1779990000; // epoch-style build number (matches <meta name="version">)
+var APP_BUILD = 1780020000; // epoch-style build number (matches <meta name="version">)
 
 var FB_APP = null;
 var FB_DB = null;
