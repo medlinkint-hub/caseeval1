@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
-<meta name="version" content="1779960000">
+<meta name="version" content="1779990000">
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
@@ -1087,7 +1087,9 @@ async function apiCallStream(messages, systemPrompt, maxTokens, onChunk, opts) {
       if(!res.ok) {
         clearTimeout(evalIdleTimer);
         const err = await res.json().catch(()=>({}));
-        throw new Error((err.error&&err.error.message)||'HTTP '+res.status);
+        const apiErr = new Error((err.error&&err.error.message)||'HTTP '+res.status);
+        apiErr._isApiRejection = true; // see the catch block below — this must never be silently retried as if streaming just wasn't supported
+        throw apiErr;
       }
 
       if(!res.body) { clearTimeout(evalIdleTimer); throw new Error('Streaming not supported'); }
@@ -1134,7 +1136,22 @@ async function apiCallStream(messages, systemPrompt, maxTokens, onChunk, opts) {
       if(streamErr.name === 'AbortError') {
         throw new Error('Evaluation stalled — no response received for '+Math.round(_idleTimeoutMs/1000)+' seconds. Please try again.');
       }
-      // Fall through to non-streaming below
+      // A real API rejection (invalid key, quota exhausted, bad request, rate
+      // limit, model overloaded, etc.) must propagate immediately — retrying
+      // via the non-streaming path below sends the exact same request with the
+      // exact same credentials, so it fails the exact same way. Silently
+      // falling through here used to swallow the real, actionable error
+      // message and mask it behind whatever the non-streaming attempt does
+      // next; if that second attempt happened to succeed with genuinely empty
+      // content (e.g. a thinking-only response with no visible text), the
+      // caller saw a normal-looking empty result instead of ever learning
+      // what actually went wrong — surfacing only as a generic "no response
+      // received after two attempts" with no real explanation.
+      if(streamErr._isApiRejection) throw streamErr;
+      // Otherwise this is a genuine local streaming-support issue (no
+      // ReadableStream, no res.body, a transport-level hiccup before any
+      // response was received) — falling back to a plain fetch is the right
+      // move.
     }
   }
 
@@ -8102,7 +8119,7 @@ async function changePassword() {
 // ══════════════════════════════════════════════════════════════
 
 // ── App version — update on every significant deployment ──
-var APP_BUILD = 1779960000; // epoch-style build number (matches <meta name="version">)
+var APP_BUILD = 1779990000; // epoch-style build number (matches <meta name="version">)
 
 var FB_APP = null;
 var FB_DB = null;
