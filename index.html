@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
-<meta name="version" content="1780080000">
+<meta name="version" content="1780110000">
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
@@ -2636,13 +2636,32 @@ async function runEval(caseId) {
   // source PDF alongside it lets Claude cross-check exact tables, amounts, and
   // clause wording against the original document instead of relying solely on
   // a possibly-lossy extraction pass.
+  //
+  // Unlike every case-document attachment above (all capped at MAX_FILE_B64 /
+  // MAX_EML_B64 with a visible skip notice), this one had NO size limit at
+  // all — it gets attached unconditionally to EVERY evaluation that uses this
+  // policy, for every case, forever. A single large stored PDF here — unlike
+  // an oversized case document, which only affects the one case it was
+  // uploaded to — would silently and consistently oversize the request for
+  // every case referencing that policy, which is exactly the pattern behind
+  // repeated "no response" failures across several different patients that
+  // all happened to share the same locked policy. The extracted policy
+  // wording is already included separately regardless, so skipping this
+  // attachment when it's too large still leaves the evaluation with real
+  // policy content — just without the original PDF as a cross-check.
   if(_matchedLibraryPolicy && _matchedLibraryPolicy.id && _matchedLibraryPolicy.pdfStored) {
     try {
       var _polPdf = await idbGet('policy_pdf_' + _matchedLibraryPolicy.id);
       if(_polPdf && _polPdf.data) {
-        msgContent.push({type:'text', text:'NOTE: The following PDF is the original source document for policy "'+(_matchedLibraryPolicy.name||'')+'", whose extracted wording appears later in this message. Use it to verify exact amounts, tables and clause text if anything in the extracted wording is unclear or ambiguous.'});
-        msgContent.push({type:'document', source:{type:'base64', media_type:'application/pdf', data:_polPdf.data}, title:_polPdf.name||(_matchedLibraryPolicy.name+' (original policy PDF)')});
-        console.log('[runEval] Attached original policy PDF:', _polPdf.name);
+        if(_polPdf.data.length > MAX_FILE_B64) {
+          var _polPdfMB = Math.round(_polPdf.data.length/1024/1024*10)/10;
+          console.warn('[runEval] Skipping oversized original policy PDF:', _polPdf.name, _polPdfMB+'MB');
+          toast('⚠ The original PDF for policy "'+esc(_matchedLibraryPolicy.name||'')+'" is '+_polPdfMB+'MB — too large to attach. Using the extracted policy wording only for this evaluation.', 10000);
+        } else {
+          msgContent.push({type:'text', text:'NOTE: The following PDF is the original source document for policy "'+(_matchedLibraryPolicy.name||'')+'", whose extracted wording appears later in this message. Use it to verify exact amounts, tables and clause text if anything in the extracted wording is unclear or ambiguous.'});
+          msgContent.push({type:'document', source:{type:'base64', media_type:'application/pdf', data:_polPdf.data}, title:_polPdf.name||(_matchedLibraryPolicy.name+' (original policy PDF)')});
+          console.log('[runEval] Attached original policy PDF:', _polPdf.name);
+        }
       }
     } catch(_polPdfErr) { console.warn('[runEval] Could not load stored policy PDF:', _polPdfErr.message); }
   }
@@ -8146,7 +8165,7 @@ function buildAmountString(caseObj) {
 // ══════════════════════════════════════════════════════════════
 
 // ── App version — update on every significant deployment ──
-var APP_BUILD = 1780080000; // epoch-style build number (matches <meta name="version">)
+var APP_BUILD = 1780110000; // epoch-style build number (matches <meta name="version">)
 
 var FB_APP = null;
 var FB_DB = null;
