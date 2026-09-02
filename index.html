@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
-<meta name="version" content="1780140000">
+<meta name="version" content="1780170000">
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
@@ -2928,10 +2928,25 @@ async function runEval(caseId) {
       // that's never been reloaded would otherwise see zero change no matter
       // how many times it's actually fixed.
       if(typeof checkForNewVersion === 'function') checkForNewVersion();
+      // Diagnostic only, no effect on the request that already ran — records
+      // exactly how large THIS request was and how many documents/what mode,
+      // since "Test API Connection" (a single short message, no attachments,
+      // no streaming) succeeding while full evaluations fail empty points at
+      // something specific to large/long requests, not basic connectivity.
+      // Capturing this automatically on every occurrence, instead of relying
+      // on manually reproducing it under controlled conditions, is the only
+      // way to see whether size/attachment count actually correlates.
+      var _attachCount = 0, _payloadChars = (sys||'').length;
+      msgContent.forEach(function(b){
+        if(b.type==='document' || b.type==='image') { _attachCount++; _payloadChars += (b.source && b.source.data ? b.source.data.length : 0); }
+        else if(b.type==='text') _payloadChars += (b.text||'').length;
+      });
+      var _payloadMB = Math.round(_payloadChars/1024/1024*10)/10;
       finalResult = 'The evaluation could not be completed — the AI returned no response after two attempts.\n\n'
         + 'DECISION: PENDING INFORMATION\n'
         + 'REASON: No response received from the evaluation model.'
         + (_stopReasonNote ? ' (model stop reason: ' + _stopReasonNote + ')' : '') + '\n'
+        + 'DIAGNOSTIC: request size ~' + _payloadMB + 'MB, ' + _attachCount + ' attachment(s), mode: ' + (_thinkOn ? 'Best Quality (thinking)' : 'Economic') + '.\n'
         + 'NEXT STEPS: Re-run the evaluation.'
         + (_stopReasonNote === 'refusal' ? ' If this persists, the request content may be triggering a content-safety refusal — try removing or replacing recently added documents.'
           : _stopReasonNote === 'max_tokens' ? ' If this persists, the case content may be too large for the current settings — try Economic mode or reducing attached documents.'
@@ -8176,7 +8191,7 @@ function buildAmountString(caseObj) {
 // ══════════════════════════════════════════════════════════════
 
 // ── App version — update on every significant deployment ──
-var APP_BUILD = 1780140000; // epoch-style build number (matches <meta name="version">)
+var APP_BUILD = 1780170000; // epoch-style build number (matches <meta name="version">)
 
 var FB_APP = null;
 var FB_DB = null;
