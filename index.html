@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
-<meta name="version" content="1780110000">
+<meta name="version" content="1780140000">
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
@@ -2106,6 +2106,17 @@ async function completeDecisionFromPartial(partialText) {
     'You are a senior IPMI claims evaluator. Output ONLY the final decision section in the exact format requested. Be definitive.',
     500
   );
+  // apiCall() can complete successfully with a genuinely empty response (the
+  // same "API says OK but wrote nothing" class of failure fixed for the
+  // streaming path in apiCallStream) — without this check, that silently
+  // produced partialText + "\n\n" with no decision, no error, and nothing for
+  // either caller's catch block to react to: an evaluation that visibly
+  // stops mid-sentence with truly nothing after it, no PENDING INFORMATION
+  // fallback, nothing. Throwing here lets both call sites' existing
+  // catch blocks do what they already do for a real failure.
+  if(!verdictResult || !verdictResult.trim()) {
+    throw new Error('Verdict-completion call returned an empty response');
+  }
   return partialText + '\n\n' + verdictResult;
 }
 
@@ -8165,7 +8176,7 @@ function buildAmountString(caseObj) {
 // ══════════════════════════════════════════════════════════════
 
 // ── App version — update on every significant deployment ──
-var APP_BUILD = 1780110000; // epoch-style build number (matches <meta name="version">)
+var APP_BUILD = 1780140000; // epoch-style build number (matches <meta name="version">)
 
 var FB_APP = null;
 var FB_DB = null;
