@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
-<meta name="version" content="1780200000">
+<meta name="version" content="1780230000">
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
@@ -2822,12 +2822,20 @@ async function runEval(caseId) {
     var textOnlyPseudo = pseudonymise(txt, [c.patient, c.policyHolder].filter(Boolean)) + '\n\nNOTE: Document attachments were removed due to a technical issue sending them. Please evaluate based on the case information above.';
     var textOnlyContent = [{type:'text', text: textOnlyPseudo}];
     var retryResult = '';
+    // Pass opts so apiCallStream can report back WHY this attempt produced
+    // nothing (stop_reason) — this call has no attachments and no thinking,
+    // so if it still comes back empty with a captured reason, that's the
+    // cleanest signal yet for what's actually happening; if it comes back
+    // empty with NO reason at all (not even from a plain, minimal request),
+    // that points away from content/thinking/attachments entirely.
+    var _textOnlyOpts = {};
     await apiCallStream(
       [{role:'user', content:textOnlyContent}],
       sys, 6000,
-      function(chunk, full){ retryResult = full; if(streamEl) streamEl.textContent = full; }
+      function(chunk, full){ retryResult = full; if(streamEl) streamEl.textContent = full; },
+      _textOnlyOpts
     );
-    if(!retryResult) throw new Error('Text-only retry returned an empty response');
+    if(!retryResult) throw new Error('Text-only retry returned an empty response' + (_textOnlyOpts.stopReason ? ' (stop reason: ' + _textOnlyOpts.stopReason + ')' : ' (no stop reason captured — see diagnostic)'));
     var retryPseudoMap = getPseudoMap();
     if(retryPseudoMap && Object.keys(retryPseudoMap).length && typeof reidentify === 'function') {
       retryResult = reidentify(retryResult, retryPseudoMap);
@@ -2996,6 +3004,7 @@ async function runEval(caseId) {
       // outer catch below already does for a THROWN file-related error; here
       // there's no error to catch, just two clean-but-empty responses, so it
       // needs its own trigger.
+      var _textOnlyFailNote = '';
       if(_attachCount > 0) {
         if(window._currentCaseId === caseId) setEvSt('run', '⏳ Retrying without document attachments...');
         try {
@@ -3004,14 +3013,32 @@ async function runEval(caseId) {
           return;
         } catch(textOnlyErr) {
           console.warn('[runEval] Text-only retry also failed:', textOnlyErr.message);
+          _textOnlyFailNote = ' — a text-only retry without attachments was also attempted and failed (' + textOnlyErr.message + ')';
         }
+      }
+
+      // One more, very cheap diagnostic: does THIS system prompt (SYS_EVAL —
+      // the one substantial thing every failing attempt has in common with
+      // every other failing attempt, and the one thing the always-successful
+      // "Test API Connection" call never sends) work at all for a trivial,
+      // 20-token completion? If this succeeds, the system prompt itself is
+      // usable and the real cause is something about a longer/heavier
+      // request specifically; if this also comes back empty, that points
+      // straight at this exact system prompt content or this API key/account
+      // combination, independent of request size or attachments entirely.
+      var _sysProbeNote = '';
+      try {
+        var _probeResult = await apiCall([{role:'user', content:'Reply with exactly the word: CONFIRMED'}], sys, 20);
+        _sysProbeNote = ' System-prompt probe: ' + (_probeResult && _probeResult.trim() ? 'succeeded.' : 'also returned empty.');
+      } catch(probeErr) {
+        _sysProbeNote = ' System-prompt probe: failed (' + probeErr.message + ').';
       }
 
       finalResult = 'The evaluation could not be completed — the AI returned no response after two attempts.\n\n'
         + 'DECISION: PENDING INFORMATION\n'
         + 'REASON: No response received from the evaluation model.'
         + (_stopReasonNote ? ' (model stop reason: ' + _stopReasonNote + ')' : '') + '\n'
-        + 'DIAGNOSTIC: request size ~' + _payloadMB + 'MB, ' + _attachCount + ' attachment(s), mode: ' + (_thinkOn ? 'Best Quality (thinking)' : 'Economic') + (_attachCount > 0 ? ' — a text-only retry without attachments was also attempted and failed' : '') + '.\n'
+        + 'DIAGNOSTIC: request size ~' + _payloadMB + 'MB, ' + _attachCount + ' attachment(s), mode: ' + (_thinkOn ? 'Best Quality (thinking)' : 'Economic') + _textOnlyFailNote + '.' + _sysProbeNote + '\n'
         + 'NEXT STEPS: Re-run the evaluation.'
         + (_stopReasonNote === 'refusal' ? ' If this persists, the request content may be triggering a content-safety refusal — try removing or replacing recently added documents.'
           : _stopReasonNote === 'max_tokens' ? ' If this persists, the case content may be too large for the current settings — try Economic mode or reducing attached documents.'
@@ -8221,7 +8248,7 @@ function buildAmountString(caseObj) {
 // ══════════════════════════════════════════════════════════════
 
 // ── App version — update on every significant deployment ──
-var APP_BUILD = 1780200000; // epoch-style build number (matches <meta name="version">)
+var APP_BUILD = 1780230000; // epoch-style build number (matches <meta name="version">)
 
 var FB_APP = null;
 var FB_DB = null;
