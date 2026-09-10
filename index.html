@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
-<meta name="version" content="1780170000">
+<meta name="version" content="1780200000">
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
@@ -2803,6 +2803,52 @@ async function runEval(caseId) {
   var streamEl = null;
   var fullResult = '';
   var finalResult = ''; // also hoisted — the catch block's file-too-large retry path assigns to this
+
+  // Shared by two call sites below: the existing "file/image error" recovery
+  // path in the outer catch, and the "both attempts came back successfully
+  // empty" path inside the try. Every occurrence of the latter observed so
+  // far has had at least one document/image attachment, and none has ever
+  // happened on a request with none (e.g. Settings' "Test API Connection"
+  // always succeeds on the same networks) — so it's worth trying once more
+  // with attachments stripped entirely before giving up, regardless of
+  // whether the original failure was a thrown error or a silent empty
+  // response. Throws on failure so both callers can just try/catch it.
+  async function attemptTextOnlyRetry() {
+    // Pseudonymise this exactly like the primary attempt — this used to send
+    // raw, un-redacted case text (patient name and other identifiers
+    // included) straight to the API, bypassing GDPR pseudonymisation
+    // entirely, since it was built from `txt` directly instead of the
+    // already-pseudonymised `txtPseudo`.
+    var textOnlyPseudo = pseudonymise(txt, [c.patient, c.policyHolder].filter(Boolean)) + '\n\nNOTE: Document attachments were removed due to a technical issue sending them. Please evaluate based on the case information above.';
+    var textOnlyContent = [{type:'text', text: textOnlyPseudo}];
+    var retryResult = '';
+    await apiCallStream(
+      [{role:'user', content:textOnlyContent}],
+      sys, 6000,
+      function(chunk, full){ retryResult = full; if(streamEl) streamEl.textContent = full; }
+    );
+    if(!retryResult) throw new Error('Text-only retry returned an empty response');
+    var retryPseudoMap = getPseudoMap();
+    if(retryPseudoMap && Object.keys(retryPseudoMap).length && typeof reidentify === 'function') {
+      retryResult = reidentify(retryResult, retryPseudoMap);
+    }
+    var retryHeader = '=== EVALUATION (text-only retry) ===\n'
+      + 'Date: '+new Date().toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'})+'\n'
+      + 'Time: '+new Date().toLocaleTimeString('en',{hour:'2-digit',minute:'2-digit'})+'\n'
+      + 'Evaluator: '+(typeof S==='function'?S().name||'Team Member':'Team Member')+'\n'
+      + '=================\n\n';
+    var textOnlyFinal = retryResult;
+    var retryDecMatches = [...textOnlyFinal.matchAll(/^\s*DECISION\s*:\s*(DECLINED|APPROVED|PARTIALLY APPROVED|PENDING INFORMATION)\b/gim)];
+    var retryDecision = retryDecMatches.length ? retryDecMatches[retryDecMatches.length-1][1].trim() : 'UNKNOWN';
+    var retryStatus = /^DECLIN/.test(retryDecision) ? 'declined' : /^APPROV/.test(retryDecision) ? 'approved' : /^PARTIAL/.test(retryDecision) ? 'partial' : 'reviewing';
+    updC(caseId, {eval: retryHeader + textOnlyFinal, status: retryStatus, lastDecision: retryDecision, lastEvalAt: new Date().toISOString()});
+    if(window._currentCaseId === caseId) {
+      if(erDiv) erDiv.innerHTML = renderEvalTxt(textOnlyFinal);
+      setEvSt('done', 'Done (text-only) — '+new Date().toLocaleTimeString('en',{hour:'2-digit',minute:'2-digit'}));
+    }
+    toast('✓ Evaluation completed WITHOUT document attachments — please verify manually against the original documents', 9000);
+  }
+
   try {
     console.log('[runEval] streaming request, blocks:', msgContent.length);
 
@@ -2942,11 +2988,30 @@ async function runEval(caseId) {
         else if(b.type==='text') _payloadChars += (b.text||'').length;
       });
       var _payloadMB = Math.round(_payloadChars/1024/1024*10)/10;
+
+      // Every occurrence of this exact "both attempts came back successfully
+      // empty, no error, no stop_reason" failure observed so far has had at
+      // least one document/image attachment — try once more with attachments
+      // stripped entirely before giving up. This is the same recovery the
+      // outer catch below already does for a THROWN file-related error; here
+      // there's no error to catch, just two clean-but-empty responses, so it
+      // needs its own trigger.
+      if(_attachCount > 0) {
+        if(window._currentCaseId === caseId) setEvSt('run', '⏳ Retrying without document attachments...');
+        try {
+          await attemptTextOnlyRetry();
+          if(btn) btn.disabled = false;
+          return;
+        } catch(textOnlyErr) {
+          console.warn('[runEval] Text-only retry also failed:', textOnlyErr.message);
+        }
+      }
+
       finalResult = 'The evaluation could not be completed — the AI returned no response after two attempts.\n\n'
         + 'DECISION: PENDING INFORMATION\n'
         + 'REASON: No response received from the evaluation model.'
         + (_stopReasonNote ? ' (model stop reason: ' + _stopReasonNote + ')' : '') + '\n'
-        + 'DIAGNOSTIC: request size ~' + _payloadMB + 'MB, ' + _attachCount + ' attachment(s), mode: ' + (_thinkOn ? 'Best Quality (thinking)' : 'Economic') + '.\n'
+        + 'DIAGNOSTIC: request size ~' + _payloadMB + 'MB, ' + _attachCount + ' attachment(s), mode: ' + (_thinkOn ? 'Best Quality (thinking)' : 'Economic') + (_attachCount > 0 ? ' — a text-only retry without attachments was also attempted and failed' : '') + '.\n'
         + 'NEXT STEPS: Re-run the evaluation.'
         + (_stopReasonNote === 'refusal' ? ' If this persists, the request content may be triggering a content-safety refusal — try removing or replacing recently added documents.'
           : _stopReasonNote === 'max_tokens' ? ' If this persists, the case content may be too large for the current settings — try Economic mode or reducing attached documents.'
@@ -3228,44 +3293,9 @@ async function runEval(caseId) {
       setEvSt('run', '⚠ File error detected — retrying without attachments...');
       toast('⚠ One or more files caused an error. Retrying evaluation without file attachments...');
       try {
-        // Retry with text only - no files. Pseudonymise this exactly like the
-        // primary attempt above — this retry sent raw, un-redacted case text
-        // (patient name and other identifiers included) straight to the API,
-        // bypassing GDPR pseudonymisation entirely, since it was built from
-        // `txt` directly instead of the already-pseudonymised `txtPseudo`.
-        var textOnlyPseudo = pseudonymise(txt, [c.patient, c.policyHolder].filter(Boolean)) + '\n\nNOTE: Document attachments were removed due to size/format issues. Please evaluate based on the case information above.';
-        var textOnlyContent = [{type:'text', text: textOnlyPseudo}];
-        var retryResult = '';
-        await apiCallStream(
-          [{role:'user', content:textOnlyContent}],
-          sys, 6000,
-          function(chunk, full){ retryResult = full; if(streamEl) streamEl.textContent = full; }
-        );
-        if(retryResult) {
-          var retryPseudoMap = getPseudoMap();
-          if(retryPseudoMap && Object.keys(retryPseudoMap).length && typeof reidentify === 'function') {
-            retryResult = reidentify(retryResult, retryPseudoMap);
-          }
-          var retryHeader = '=== EVALUATION (text-only retry) ===\n'
-            + 'Date: '+new Date().toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'})+'\n'
-            + 'Time: '+new Date().toLocaleTimeString('en',{hour:'2-digit',minute:'2-digit'})+'\n'
-            + 'Evaluator: '+(typeof S==='function'?S().name||'Team Member':'Team Member')+'\n'
-            + '=================\n\n';
-          finalResult = retryResult;
-          // Extract the real decision instead of always leaving status as
-          // "reviewing" regardless of what the AI actually decided.
-          var retryDecMatches = [...finalResult.matchAll(/^\s*DECISION\s*:\s*(DECLINED|APPROVED|PARTIALLY APPROVED|PENDING INFORMATION)\b/gim)];
-          var retryDecision = retryDecMatches.length ? retryDecMatches[retryDecMatches.length-1][1].trim() : 'UNKNOWN';
-          var retryStatus = /^DECLIN/.test(retryDecision) ? 'declined' : /^APPROV/.test(retryDecision) ? 'approved' : /^PARTIAL/.test(retryDecision) ? 'partial' : 'reviewing';
-          updC(caseId, {eval: retryHeader + finalResult, status: retryStatus, lastDecision: retryDecision, lastEvalAt: new Date().toISOString()});
-          if(window._currentCaseId === caseId) {
-            if(erDiv) erDiv.innerHTML = renderEvalTxt(finalResult);
-            setEvSt('done', 'Done (text-only) — '+new Date().toLocaleTimeString('en',{hour:'2-digit',minute:'2-digit'}));
-          }
-          toast('✓ Evaluation completed (without file attachments)');
-          if(btn) btn.disabled = false;
-          return;
-        }
+        await attemptTextOnlyRetry();
+        if(btn) btn.disabled = false;
+        return;
       } catch(retryErr) {
         console.error('[runEval] Retry also failed:', retryErr.message);
       }
@@ -8191,7 +8221,7 @@ function buildAmountString(caseObj) {
 // ══════════════════════════════════════════════════════════════
 
 // ── App version — update on every significant deployment ──
-var APP_BUILD = 1780170000; // epoch-style build number (matches <meta name="version">)
+var APP_BUILD = 1780200000; // epoch-style build number (matches <meta name="version">)
 
 var FB_APP = null;
 var FB_DB = null;
