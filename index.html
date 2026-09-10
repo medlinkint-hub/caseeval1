@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
-<meta name="version" content="1780290000">
+<meta name="version" content="1780320000">
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
@@ -1019,7 +1019,10 @@ function confirmVerificationSignoff(caseId) {
 // ══════════════════════════════════════════════
 // API CALL — core function used by ALL AI features
 // ══════════════════════════════════════════════
-async function apiCall(messages, systemPrompt, maxTokens) {
+// opts (optional): { attempts: N, timeoutMs: N, quiet: true } — used by short
+// diagnostic probes that must answer fast and must not surface "API busy"
+// toasts unrelated to the evaluation the operator is actually waiting on.
+async function apiCall(messages, systemPrompt, maxTokens, opts) {
   const key = getKey();
   if(!key) {
     toast('No API key! Go to Settings and save your key first.');
@@ -1036,12 +1039,12 @@ async function apiCall(messages, systemPrompt, maxTokens) {
   });
 
   // Retry up to 3 times for 529 Overloaded with exponential backoff
-  var maxRetries = 3;
+  var maxRetries = (opts && opts.attempts > 0) ? opts.attempts : 3;
   var lastError = null;
   for(var attempt = 0; attempt < maxRetries; attempt++) {
     if(attempt > 0) {
       var waitSec = Math.pow(2, attempt) * 5; // 10s, 20s
-      toast('⏳ API busy — retrying in '+waitSec+' seconds... (attempt '+(attempt+1)+'/'+maxRetries+')');
+      if(!(opts && opts.quiet)) toast('⏳ API busy — retrying in '+waitSec+' seconds... (attempt '+(attempt+1)+'/'+maxRetries+')');
       await new Promise(function(resolve){ setTimeout(resolve, waitSec * 1000); });
     }
     // Hard timeout per attempt — a plain fetch() has no default timeout, so a
@@ -1053,7 +1056,7 @@ async function apiCall(messages, systemPrompt, maxTokens) {
     // tight for an 8000-token completion (e.g. Medical Coding & Pricing),
     // which can legitimately take several minutes to fully generate.
     var _acCtrl = new AbortController();
-    var _acTimeoutMs = Math.max(90000, (maxTokens||1500) * 50);
+    var _acTimeoutMs = (opts && opts.timeoutMs > 0) ? opts.timeoutMs : Math.max(90000, (maxTokens||1500) * 50);
     var _acTimer = setTimeout(function(){ _acCtrl.abort(); }, _acTimeoutMs);
     try {
       const res = await fetch('https://api.anthropic.com/v1/messages', {
@@ -1281,8 +1284,14 @@ async function apiCallStream(messages, systemPrompt, maxTokens, onChunk, opts) {
   // here whenever it detects a broken/empty stream, so this fallback needs
   // its own protection against the same class of network issue, not an
   // assumption that a non-streaming request can't also hang.
+  // Scaled with max_tokens like apiCall(), but capped at 10 minutes: the
+  // evaluation asks for up to 48000 tokens, which would otherwise arm a
+  // 40-minute timer — and a non-streaming request that has produced nothing
+  // in 10 minutes is not going to (the API itself steers anything longer to
+  // streaming). Without the cap a broken intermediary that also swallowed the
+  // stream above would lock the Run button for most of an hour.
   const _nsAbortCtrl = new AbortController();
-  const _nsTimeoutMs = Math.max(90000, (maxTokens||1500) * 50);
+  const _nsTimeoutMs = Math.min(600000, Math.max(90000, (maxTokens||1500) * 50));
   const _nsTimer = setTimeout(function(){ _nsAbortCtrl.abort(); }, _nsTimeoutMs);
   let res2;
   try {
@@ -2697,7 +2706,7 @@ async function runEval(caseId) {
         if(_polPdf.data.length > MAX_FILE_B64) {
           var _polPdfMB = Math.round(_polPdf.data.length/1024/1024*10)/10;
           console.warn('[runEval] Skipping oversized original policy PDF:', _polPdf.name, _polPdfMB+'MB');
-          toast('⚠ The original PDF for policy "'+esc(_matchedLibraryPolicy.name||'')+'" is '+_polPdfMB+'MB — too large to attach. Using the extracted policy wording only for this evaluation.', 10000);
+          toast('⚠ The original PDF for policy "'+(_matchedLibraryPolicy.name||'')+'" is '+_polPdfMB+'MB — too large to attach. Using the extracted policy wording only for this evaluation.', 10000);
         } else {
           msgContent.push({type:'text', text:'NOTE: The following PDF is the original source document for policy "'+(_matchedLibraryPolicy.name||'')+'", whose extracted wording appears later in this message. Use it to verify exact amounts, tables and clause text if anything in the extracted wording is unclear or ambiguous.'});
           msgContent.push({type:'document', source:{type:'base64', media_type:'application/pdf', data:_polPdf.data}, title:_polPdf.name||(_matchedLibraryPolicy.name+' (original policy PDF)')});
@@ -3066,7 +3075,10 @@ async function runEval(caseId) {
       // combination, independent of request size or attachments entirely.
       var _sysProbeNote = '';
       try {
-        var _probeResult = await apiCall([{role:'user', content:'Reply with exactly the word: CONFIRMED'}], sys, 20);
+        // Single attempt, 45s cap, no "API busy" toasts: this is a diagnostic,
+        // not a retry — apiCall's default 3×90s+backoff could hold the operator
+        // for five minutes just to compose an error message.
+        var _probeResult = await apiCall([{role:'user', content:'Reply with exactly the word: CONFIRMED'}], sys, 20, {attempts:1, timeoutMs:45000, quiet:true});
         _sysProbeNote = ' System-prompt probe: ' + (_probeResult && _probeResult.trim() ? 'succeeded.' : 'also returned empty.');
       } catch(probeErr) {
         _sysProbeNote = ' System-prompt probe: failed (' + probeErr.message + ').';
@@ -3340,6 +3352,12 @@ async function runEval(caseId) {
     // ── Auto-extract financial info from documents in background ──
     const hasFiles = FILES.filter(f=>f.data&&['img','pdf','doc','txt','xls'].includes(f.ext));
     if(hasFiles.length) {
+      // The evaluation itself is finished — stop the elapsed/last-data ticker
+      // here (the finally block does the same later) so this status doesn't
+      // carry a frozen "…last data Ns ago — AI is thinking" suffix while the
+      // background finance extraction runs.
+      window._evalRunStart = null; window._evalLastChunk = null;
+      if(window._evalTicker) { clearInterval(window._evalTicker); window._evalTicker = null; }
       if(window._currentCaseId === caseId) setEvSt('run', 'Extracting financial info...');
       autoExtractFinance(caseId, hasFiles).then(()=>{
         if(window._currentCaseId === caseId) setEvSt('done', 'Evaluation + finances done — '+new Date().toLocaleTimeString());
@@ -8327,7 +8345,7 @@ function buildAmountString(caseObj) {
 // ══════════════════════════════════════════════════════════════
 
 // ── App version — update on every significant deployment ──
-var APP_BUILD = 1780290000; // epoch-style build number (matches <meta name="version">)
+var APP_BUILD = 1780320000; // epoch-style build number (matches <meta name="version">)
 
 var FB_APP = null;
 var FB_DB = null;
