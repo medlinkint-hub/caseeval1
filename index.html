@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
-<meta name="version" content="1780230000">
+<meta name="version" content="1780260000">
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
@@ -958,6 +958,11 @@ function recommendEvalMode(c) {
 }
 
 function evalModeHintHTML(rec) {
+  // When Economic is recommended despite one complexity signal, say so
+  // explicitly — "Economic — high claim value" read as a contradiction.
+  if(rec.mode !== 'max' && rec.score > 0) {
+    return '💡 Recommended: <b>Economic</b> — only '+rec.score+' complexity signal ('+esc(rec.reasons.join(', '))+'); Best Quality is suggested at 2 or more';
+  }
   return '💡 Recommended: <b>'+(rec.mode==='max'?'Best Quality':'Economic')+'</b> — '+esc(rec.reasons.join(', '));
 }
 
@@ -2792,6 +2797,10 @@ async function runEval(caseId) {
   const steps = ['Verifying policy & coverage...','Checking territory & network...','Checking PA status...','Analysing medical necessity & DRG benchmark...','Checking pre-existing conditions...','Running exclusions checklist...','Analysing invoices & cost containment...','Checking medication coverage...','Running fraud & subrogation check...','Calculating eligible amount...','Writing final decision...'];
   let si = 0;
   const iv = setInterval(()=>{ si=Math.min(si+1,steps.length-1); setEvSt('run',steps[si]); }, 3000);
+  // Live timing for the status pill (see setEvSt): start now, updated on every
+  // streamed chunk below, cleared in the outer finally so it can't outlive the run.
+  window._evalRunStart = Date.now();
+  window._evalLastChunk = null;
 
   // Hoisted out of the try block below (not just declared inside it) so that if
   // the primary streaming call throws mid-generation, the outer catch can still
@@ -2832,7 +2841,7 @@ async function runEval(caseId) {
     await apiCallStream(
       [{role:'user', content:textOnlyContent}],
       sys, 6000,
-      function(chunk, full){ retryResult = full; if(streamEl) streamEl.textContent = full; },
+      function(chunk, full){ retryResult = full; window._evalLastChunk = Date.now(); if(streamEl) streamEl.textContent = full; },
       _textOnlyOpts
     );
     if(!retryResult) throw new Error('Text-only retry returned an empty response' + (_textOnlyOpts.stopReason ? ' (stop reason: ' + _textOnlyOpts.stopReason + ')' : ' (no stop reason captured — see diagnostic)'));
@@ -2894,6 +2903,7 @@ async function runEval(caseId) {
         _thinkOn ? 48000 : 16000, // thinking output shares this budget with the final answer — raised for max effort's deeper reasoning; see retry-without-thinking safety net below
         (chunk, full) => {
           fullResult = full;
+          window._evalLastChunk = Date.now();
           clearInterval(iv);
           // Strip machine-readable corrections block before streaming display
           if(streamEl) streamEl.textContent = full.replace(/<corrections>[^<]*<\/corrections>/gi, '').trim();
@@ -2941,6 +2951,7 @@ async function runEval(caseId) {
           16000,
           function(chunk, full){
             _retryFull = full;
+            window._evalLastChunk = Date.now();
             if(streamEl) streamEl.textContent = full.replace(/<corrections>[^<]*<\/corrections>/gi, '').trim();
             if(window._currentCaseId === caseId) setEvSt('run', 'Writing decision...');
           },
@@ -3396,6 +3407,14 @@ async function runEval(caseId) {
         toast('Error: '+errMsg.substring(0,80)+'. Try removing large files and retry.');
       }
     }
+  } finally {
+    // Runs on every exit path — including the several early `return`s inside
+    // both the try and the catch — so the live timing suffix in setEvSt can
+    // never keep ticking against a run that has already finished.
+    clearInterval(iv);
+    window._evalRunStart = null;
+    window._evalLastChunk = null;
+    if(window._evalTicker) { clearInterval(window._evalTicker); window._evalTicker = null; }
   }
   if(btn) {
     btn.disabled = false;
@@ -4006,7 +4025,36 @@ function setEvSt(state, msg) {
     done:'<svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg>',
     err:'<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/></svg>'
   };
-  el.innerHTML = (icons[state]||icons.idle)+'&nbsp;'+esc(msg);
+  // While an evaluation is running, append live timing so the operator can
+  // tell "still working" from "stuck": Best Quality on a large policy can
+  // legitimately run for several minutes, and adaptive thinking can go
+  // silent for a while — a frozen "Writing decision..." with no numbers
+  // reads as broken even when it isn't. The ticker below refreshes the
+  // numbers every couple of seconds and stops itself once the status
+  // leaves the running state (or the element disappears).
+  var suffix = '';
+  if(state === 'run' && window._evalRunStart) {
+    var elapsed = Math.max(0, Math.round((Date.now() - window._evalRunStart)/1000));
+    var sinceData = window._evalLastChunk ? Math.round((Date.now() - window._evalLastChunk)/1000) : null;
+    var parts = [_fmtElapsed(elapsed) + ' elapsed'];
+    if(sinceData !== null) parts.push(sinceData < 3 ? 'receiving data' : 'last data ' + _fmtElapsed(sinceData) + ' ago');
+    var hint = (sinceData === null && elapsed > 20) ? ' — AI is thinking, this is normal' : (sinceData !== null && sinceData > 20) ? ' — AI is thinking, please wait' : '';
+    suffix = ' <span style="opacity:.7;font-size:11px;font-weight:400">(' + parts.join(' · ') + hint + ')</span>';
+  }
+  el.dataset.msg = msg;
+  el.innerHTML = (icons[state]||icons.idle)+'&nbsp;'+esc(msg)+suffix;
+  if(state === 'run' && window._evalRunStart && !window._evalTicker) {
+    window._evalTicker = setInterval(function(){
+      var cur = G('evSt');
+      if(!cur || !window._evalRunStart || cur.className.indexOf('evr') === -1) {
+        clearInterval(window._evalTicker); window._evalTicker = null; return;
+      }
+      setEvSt('run', cur.dataset.msg || 'Working...');
+    }, 2000);
+  }
+}
+function _fmtElapsed(s) {
+  return s >= 60 ? Math.floor(s/60) + 'm ' + String(s%60).padStart(2,'0') + 's' : s + 's';
 }
 
 function renderEvalTxt(txt) {
@@ -8248,7 +8296,7 @@ function buildAmountString(caseObj) {
 // ══════════════════════════════════════════════════════════════
 
 // ── App version — update on every significant deployment ──
-var APP_BUILD = 1780230000; // epoch-style build number (matches <meta name="version">)
+var APP_BUILD = 1780260000; // epoch-style build number (matches <meta name="version">)
 
 var FB_APP = null;
 var FB_DB = null;
