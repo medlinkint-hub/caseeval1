@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
-<meta name="version" content="1780260000">
+<meta name="version" content="1780290000">
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
@@ -641,9 +641,34 @@ const MODEL_PRICING = {
   'claude-opus-4-7':           {in: 5.00, out: 25.00},
   'claude-haiku-4-5-20251001': {in: 1.00, out: 5.00}
 };
-function estimateCostUSD(mod, inputTokens, outputTokens) {
+// `usage` is optional: when it carries cache_read_input_tokens / cache_creation_input_tokens
+// those are priced at the published multipliers (reads 0.1×, 5-minute writes 1.25× of input).
+// Note the API's input_tokens already EXCLUDES cached tokens, so the three are additive.
+function estimateCostUSD(mod, inputTokens, outputTokens, usage) {
   var p = MODEL_PRICING[mod] || {in: 3.00, out: 15.00};
-  return ((inputTokens||0)/1e6)*p.in + ((outputTokens||0)/1e6)*p.out;
+  var cacheRead  = (usage && usage.cache_read_input_tokens) || 0;
+  var cacheWrite = (usage && usage.cache_creation_input_tokens) || 0;
+  return ((inputTokens||0)/1e6)*p.in
+       + (cacheRead/1e6)*p.in*0.1
+       + (cacheWrite/1e6)*p.in*1.25
+       + ((outputTokens||0)/1e6)*p.out;
+}
+
+// Prompt caching for the (large, static) system prompt. The evaluation system
+// prompt is ~28K characters and identical for every run in a session; without a
+// cache breakpoint the API re-processes it in full on every call. With one, the
+// second and later calls within the cache window read it back at ~10% of the
+// input price and skip the prefill work, which is a measurable share of the
+// time-to-first-token on Best Quality runs. Prefixes shorter than the model's
+// minimum (512–4096 tokens) are silently not cached, so short prompts are sent
+// as plain strings — the block form buys nothing there. Verified through
+// usage.cache_read_input_tokens, which apiCallStream already records.
+const CACHE_SYSTEM_MIN_CHARS = 4000;
+function buildSystemParam(systemPrompt) {
+  if(!systemPrompt) return null;
+  if(typeof systemPrompt !== 'string') return systemPrompt; // caller already built blocks
+  if(systemPrompt.length < CACHE_SYSTEM_MIN_CHARS) return systemPrompt;
+  return [{ type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' } }];
 }
 function evalThinkingEnabled() { return (localStorage.getItem('mp_eval_thinking')||'on') !== 'off'; }
 
@@ -1002,7 +1027,7 @@ async function apiCall(messages, systemPrompt, maxTokens) {
   }
   const mod = getMod();
   const body = { model: mod, max_tokens: maxTokens||1500, messages: messages };
-  if(systemPrompt) body.system = systemPrompt;
+  if(systemPrompt) body.system = buildSystemParam(systemPrompt);
 
   // Check if any message contains a PDF document block — need beta header
   var hasPDF = messages.some(function(m){
@@ -1100,7 +1125,7 @@ async function apiCallStream(messages, systemPrompt, maxTokens, onChunk, opts) {
   if(typeof ReadableStream !== 'undefined' && typeof TextDecoder !== 'undefined') {
     try {
       const body = { model: mod, max_tokens: maxTokens||1500, messages: messages, stream: true };
-      if(systemPrompt) body.system = systemPrompt;
+      if(systemPrompt) body.system = buildSystemParam(systemPrompt);
       if(wantsThinking) body.thinking = {type:'adaptive'};
       if(wantsEffort) body.output_config = {effort: opts.effort};
 
@@ -1243,7 +1268,7 @@ async function apiCallStream(messages, systemPrompt, maxTokens, onChunk, opts) {
   // Non-streaming fallback
   console.log('[Stream] Using non-streaming fetch');
   const body2 = { model: mod, max_tokens: maxTokens||1500, messages: messages };
-  if(systemPrompt) body2.system = systemPrompt;
+  if(systemPrompt) body2.system = buildSystemParam(systemPrompt);
   if(wantsThinking) body2.thinking = {type:'adaptive'};
   if(wantsEffort) body2.output_config = {effort: opts.effort};
   var hasPDF2 = messages.some(function(m){
@@ -2968,6 +2993,8 @@ async function runEval(caseId) {
         // Retry cost is additive on top of the primary (failed) call
         _evalUsage.input_tokens = (_evalUsage.input_tokens||0) + (_retryUsage.input_tokens||0);
         _evalUsage.output_tokens = (_evalUsage.output_tokens||0) + (_retryUsage.output_tokens||0);
+        _evalUsage.cache_read_input_tokens = (_evalUsage.cache_read_input_tokens||0) + (_retryUsage.cache_read_input_tokens||0);
+        _evalUsage.cache_creation_input_tokens = (_evalUsage.cache_creation_input_tokens||0) + (_retryUsage.cache_creation_input_tokens||0);
       } catch(retryErr) {
         console.warn('[runEval] Non-thinking retry failed:', retryErr.message);
       }
@@ -3085,9 +3112,13 @@ async function runEval(caseId) {
     // verdict-completion / clause-verification calls) — intended as a usage indicator
     // so cost drivers (model choice, thinking) are visible per case, not just on the bill.
     var _usageLine = '';
-    if(_evalUsage && (_evalUsage.input_tokens || _evalUsage.output_tokens)) {
-      var _estCost = estimateCostUSD(getMod(), _evalUsage.input_tokens, _evalUsage.output_tokens);
-      _usageLine = 'Tokens Used: '+(_evalUsage.input_tokens||0).toLocaleString()+' in / '+(_evalUsage.output_tokens||0).toLocaleString()+' out — Est. Cost: $'+_estCost.toFixed(3)+' ('+getMod()+(_thinkOn?', thinking on':'')+')\n';
+    if(_evalUsage && (_evalUsage.input_tokens || _evalUsage.output_tokens || _evalUsage.cache_read_input_tokens)) {
+      var _estCost = estimateCostUSD(getMod(), _evalUsage.input_tokens, _evalUsage.output_tokens, _evalUsage);
+      // The API's input_tokens excludes cached tokens — show the full input picture.
+      var _cacheRead = _evalUsage.cache_read_input_tokens||0, _cacheWrite = _evalUsage.cache_creation_input_tokens||0;
+      var _totalIn = (_evalUsage.input_tokens||0) + _cacheRead + _cacheWrite;
+      var _cacheNote = _cacheRead ? ' ('+_cacheRead.toLocaleString()+' from cache)' : (_cacheWrite ? ' ('+_cacheWrite.toLocaleString()+' cached for next run)' : '');
+      _usageLine = 'Tokens Used: '+_totalIn.toLocaleString()+' in'+_cacheNote+' / '+(_evalUsage.output_tokens||0).toLocaleString()+' out — Est. Cost: $'+_estCost.toFixed(3)+' ('+getMod()+(_thinkOn?', thinking on':'')+')\n';
     }
     var evalHeader = policyAbsentBanner
       + '=== EVALUATION ===\n'
@@ -3269,7 +3300,7 @@ async function runEval(caseId) {
     var verdictColors = {declined:'#e8231a', approved:'#16a34a', partial:'#f59e0b', reviewing:'#1a2a72'};
     var verdictMsg = {declined:'⛔ DECLINED', approved:'✅ APPROVED', partial:'⚠ PARTIALLY APPROVED', reviewing:'⏳ PENDING INFORMATION'};
     var _costSuffix = (_evalUsage && (_evalUsage.input_tokens || _evalUsage.output_tokens))
-      ? '  (~$'+estimateCostUSD(getMod(), _evalUsage.input_tokens, _evalUsage.output_tokens).toFixed(3)+')'
+      ? '  (~$'+estimateCostUSD(getMod(), _evalUsage.input_tokens, _evalUsage.output_tokens, _evalUsage).toFixed(3)+')'
       : '';
     var _changeSuffix = _isSupplementary ? ('  (was: ' + _priorDecisionText + (_decisionChanged?' → CHANGED':' → unchanged') + ')') : '';
     toast((verdictMsg[finalStatus]||'Evaluation complete') + ' — ' + (savedDecision||'') + (_verificationFlag ? '  ⚠ Clause citation unverified — held at Reviewing pending second-reviewer sign-off' : '') + _costSuffix + _changeSuffix);
@@ -8296,7 +8327,7 @@ function buildAmountString(caseObj) {
 // ══════════════════════════════════════════════════════════════
 
 // ── App version — update on every significant deployment ──
-var APP_BUILD = 1780260000; // epoch-style build number (matches <meta name="version">)
+var APP_BUILD = 1780290000; // epoch-style build number (matches <meta name="version">)
 
 var FB_APP = null;
 var FB_DB = null;
