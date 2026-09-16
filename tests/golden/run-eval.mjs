@@ -70,6 +70,11 @@ async function callAnthropic(system, userText) {
     body: JSON.stringify({
       model: MODEL,
       max_tokens: MAX_TOKENS,
+      // Mirrors the app's Economic mode. On Sonnet 5 / Opus 5 an omitted
+      // thinking field means thinking ON, and the hidden reasoning shares
+      // max_tokens with the answer — at 8000 tokens that returned
+      // stop_reason max_tokens with no text at all. Haiku rejects the field.
+      ...(MODEL.includes('haiku') ? {} : { thinking: { type: 'disabled' } }),
       system,
       messages: [{ role: 'user', content: [{ type: 'text', text: userText }] }],
     }),

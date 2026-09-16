@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
-<meta name="version" content="1780320000">
+<meta name="version" content="1780350000">
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
@@ -663,6 +663,26 @@ function estimateCostUSD(mod, inputTokens, outputTokens, usage) {
 // minimum (512–4096 tokens) are silently not cached, so short prompts are sent
 // as plain strings — the block form buys nothing there. Verified through
 // usage.cache_read_input_tokens, which apiCallStream already records.
+// Explicit thinking parameter for every request. On Claude Sonnet 5 and
+// Opus 5 (the app's default and next-best models) adaptive thinking is ON
+// when the field is omitted — the model then reasons silently at default
+// effort, and that reasoning shares max_tokens with the visible answer. A
+// call sized for a plain answer (an "Economic" evaluation at 16000 tokens,
+// a 6000-token retry, a 300-token verification) burns its whole budget on
+// reasoning and returns stop_reason max_tokens with NO text at all. So:
+//   wantThinking = true  → {type:'adaptive'} (Best Quality; caller also
+//                          passes an effort level)
+//   wantThinking = false → {type:'disabled'} — the entire budget goes to the
+//                          visible answer, restoring the pre-Sonnet-5
+//                          behaviour every non-evaluation feature was
+//                          written against.
+// Haiku 4.5 does not think unless told to and rejects some of these
+// shapes, so it gets no thinking field at all, as before.
+function thinkingParam(mod, wantThinking) {
+  if(mod.indexOf('haiku') !== -1) return null;
+  return wantThinking ? {type:'adaptive'} : {type:'disabled'};
+}
+
 const CACHE_SYSTEM_MIN_CHARS = 4000;
 function buildSystemParam(systemPrompt) {
   if(!systemPrompt) return null;
@@ -1031,6 +1051,12 @@ async function apiCall(messages, systemPrompt, maxTokens, opts) {
   const mod = getMod();
   const body = { model: mod, max_tokens: maxTokens||1500, messages: messages };
   if(systemPrompt) body.system = buildSystemParam(systemPrompt);
+  // apiCall() is for short, deterministic helpers (verdict completion, clause
+  // verification, letters, coding). None of them want hidden reasoning eating
+  // their small max_tokens — on Sonnet 5 / Opus 5 that is the default unless
+  // thinking is disabled explicitly. See thinkingParam().
+  var _acThinking = thinkingParam(mod, false);
+  if(_acThinking) body.thinking = _acThinking;
 
   // Check if any message contains a PDF document block — need beta header
   var hasPDF = messages.some(function(m){
@@ -1123,13 +1149,21 @@ async function apiCallStream(messages, systemPrompt, maxTokens, onChunk, opts) {
   // Effort level, opt-in per call. Haiku 4.5 (and older models generally) reject
   // an explicit effort value outright, so it's excluded the same way thinking is.
   const wantsEffort = opts && opts.effort && mod.indexOf('haiku') === -1;
+  // The thinking field is always sent explicitly (see thinkingParam()): on
+  // Sonnet 5 / Opus 5 an OMITTED field means thinking ON, and the hidden
+  // reasoning then shares max_tokens with the visible answer. That is what
+  // produced the long run of "no response after two attempts" — every
+  // "Economic" / retry call thought silently until it hit max_tokens with
+  // zero visible text, which also made the retries pointless since they
+  // repeated the same mistake.
+  const _thinkingParam = thinkingParam(mod, wantsThinking);
 
   // Try streaming first, fall back to regular if not supported
   if(typeof ReadableStream !== 'undefined' && typeof TextDecoder !== 'undefined') {
     try {
       const body = { model: mod, max_tokens: maxTokens||1500, messages: messages, stream: true };
       if(systemPrompt) body.system = buildSystemParam(systemPrompt);
-      if(wantsThinking) body.thinking = {type:'adaptive'};
+      if(_thinkingParam) body.thinking = _thinkingParam;
       if(wantsEffort) body.output_config = {effort: opts.effort};
 
       // Check if any message contains a PDF document block — need beta header
@@ -1212,6 +1246,12 @@ async function apiCallStream(messages, systemPrompt, maxTokens, onChunk, opts) {
               if(parsed.type === 'content_block_delta' && parsed.delta && parsed.delta.text) {
                 fullText += parsed.delta.text;
                 if(onChunk) onChunk(parsed.delta.text, fullText);
+              } else if(opts && parsed.type === 'content_block_start' && parsed.content_block && /thinking/.test(parsed.content_block.type||'')) {
+                // Diagnostic: the model opened a (hidden) reasoning block. If the
+                // call then ends on max_tokens with no visible text, this is the
+                // reason — reasoning consumed the budget — and the caller can say
+                // so instead of guessing at network or payload problems.
+                opts.sawThinking = true;
               } else if(opts && opts.usage) {
                 // Capture token usage for cost estimation — no effect on the response text.
                 if(parsed.type === 'message_start' && parsed.message && parsed.message.usage) {
@@ -1272,7 +1312,7 @@ async function apiCallStream(messages, systemPrompt, maxTokens, onChunk, opts) {
   console.log('[Stream] Using non-streaming fetch');
   const body2 = { model: mod, max_tokens: maxTokens||1500, messages: messages };
   if(systemPrompt) body2.system = buildSystemParam(systemPrompt);
-  if(wantsThinking) body2.thinking = {type:'adaptive'};
+  if(_thinkingParam) body2.thinking = _thinkingParam;
   if(wantsEffort) body2.output_config = {effort: opts.effort};
   var hasPDF2 = messages.some(function(m){
     var c = Array.isArray(m.content) ? m.content : [];
@@ -2871,10 +2911,13 @@ async function runEval(caseId) {
     // cleanest signal yet for what's actually happening; if it comes back
     // empty with NO reason at all (not even from a plain, minimal request),
     // that points away from content/thinking/attachments entirely.
-    var _textOnlyOpts = {};
+    var _textOnlyOpts = {thinking:false};
+    // 6000 tokens was too small for the mandated 13-section evaluation on
+    // the Sonnet 5 tokenizer (~30% more tokens per word than Sonnet 4.6)
+    // even with thinking off — the answer itself would have been cut.
     await apiCallStream(
       [{role:'user', content:textOnlyContent}],
-      sys, 6000,
+      sys, 16000,
       function(chunk, full){ retryResult = full; window._evalLastChunk = Date.now(); if(streamEl) streamEl.textContent = full; },
       _textOnlyOpts
     );
@@ -2934,7 +2977,7 @@ async function runEval(caseId) {
       await apiCallStream(
         [{role:'user', content:msgContent}],
         sys,
-        _thinkOn ? 48000 : 16000, // thinking output shares this budget with the final answer — raised for max effort's deeper reasoning; see retry-without-thinking safety net below
+        _thinkOn ? 64000 : 20000, // thinking output shares this budget with the final answer — headroom for max-effort reasoning plus the Sonnet 5 tokenizer (~30% more tokens per word); see retry-without-thinking safety net below
         (chunk, full) => {
           fullResult = full;
           window._evalLastChunk = Date.now();
@@ -2978,11 +3021,11 @@ async function runEval(caseId) {
       try {
         var _retryFull = '';
         var _retryUsage = {};
-        var _retryOpts = {usage:_retryUsage}; // no thinking — the entire budget goes to the visible answer
+        var _retryOpts = {usage:_retryUsage, thinking:false}; // thinking explicitly DISABLED — the entire budget goes to the visible answer
         await apiCallStream(
           [{role:'user', content:msgContent}],
           sys,
-          16000,
+          20000,
           function(chunk, full){
             _retryFull = full;
             window._evalLastChunk = Date.now();
@@ -3088,7 +3131,9 @@ async function runEval(caseId) {
         + 'DECISION: PENDING INFORMATION\n'
         + 'REASON: No response received from the evaluation model.'
         + (_stopReasonNote ? ' (model stop reason: ' + _stopReasonNote + ')' : '') + '\n'
-        + 'DIAGNOSTIC: request size ~' + _payloadMB + 'MB, ' + _attachCount + ' attachment(s), mode: ' + (_thinkOn ? 'Best Quality (thinking)' : 'Economic') + _textOnlyFailNote + '.' + _sysProbeNote + '\n'
+        + 'DIAGNOSTIC: request size ~' + _payloadMB + 'MB, ' + _attachCount + ' attachment(s), mode: ' + (_thinkOn ? 'Best Quality (thinking)' : 'Economic')
+        + ((_retryOpts.sawThinking || _primaryOpts.sawThinking) && _stopReasonNote === 'max_tokens' ? ' — the model spent the entire output budget on hidden reasoning before writing any answer' : '')
+        + _textOnlyFailNote + '.' + _sysProbeNote + '\n'
         + 'NEXT STEPS: Re-run the evaluation.'
         + (_stopReasonNote === 'refusal' ? ' If this persists, the request content may be triggering a content-safety refusal — try removing or replacing recently added documents.'
           : _stopReasonNote === 'max_tokens' ? ' If this persists, the case content may be too large for the current settings — try Economic mode or reducing attached documents.'
@@ -8345,7 +8390,7 @@ function buildAmountString(caseObj) {
 // ══════════════════════════════════════════════════════════════
 
 // ── App version — update on every significant deployment ──
-var APP_BUILD = 1780320000; // epoch-style build number (matches <meta name="version">)
+var APP_BUILD = 1780350000; // epoch-style build number (matches <meta name="version">)
 
 var FB_APP = null;
 var FB_DB = null;
