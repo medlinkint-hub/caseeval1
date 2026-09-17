@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
-<meta name="version" content="1780350000">
+<meta name="version" content="1780380000">
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
@@ -529,9 +529,7 @@ function delFileCur(i){
     toast('Error: wrong case context. Please reopen the case and try again.');
     return;
   }
-  FILES.splice(i,1);updC(CURID,{filesData:FILES.map(function(f){return {name:f.name,size:f.size,type:f.type||'',ext:f.ext,_key:f._key||null,addedAt:f.addedAt||null,
-    ...(f._isEvalReport ? {_isEvalReport:true, _decision:f._decision||'', _evalDate:f._evalDate||''} : {})};})});renderFL_C(CURID);
-  if(typeof refreshEvalModeHint==='function') refreshEvalModeHint(CURID);
+  deleteCaseFile(CURID, i);
 }
 function toggleDT(el){var b=el.parentElement.querySelector('.dtb');if(b)b.classList.toggle('open');}
 function goNew(){navTo('new')}
@@ -4596,6 +4594,123 @@ function renderUrgent() { renderCases(c=>c.priority==='critical'&&c.status!=='cl
 // ══════════════════════════════════════════════
 // CASE DETAIL
 // ══════════════════════════════════════════════
+// ── Case file storage helpers ─────────────────────────────────────────────
+// FILES is a single global; _filesForCaseId records which case it belongs to.
+// Every reader and writer must go through these so a list rendered, added to,
+// deleted from, or persisted is always the list of the case on screen.
+
+// Metadata shape stored in case.filesData (never the base64 data). Keeps the
+// eval-report markers — several older writers dropped them, which turned a
+// case's own evaluation report into an ordinary "document used in evaluation"
+// after the next upload.
+function fileMetaOf(f) {
+  var m = {name:f.name, size:f.size, type:f.type||'', ext:f.ext||fxt(f.name||''), _key:f._key||null, addedAt:f.addedAt||null};
+  if(f._isEvalReport) { m._isEvalReport = true; m._decision = f._decision||''; m._evalDate = f._evalDate||''; }
+  return m;
+}
+
+// Same file listed twice (same name + size) collapses to one entry, preferring
+// the one that actually has data.
+function dedupeFiles(list) {
+  var seen = {}, out = [];
+  list.forEach(function(f) {
+    var k = (f.name||'') + '|' + (f.size||0);
+    if(seen[k] !== undefined) {
+      if(f.data && !out[seen[k]].data) out[seen[k]] = f;
+      return;
+    }
+    seen[k] = out.length; out.push(f);
+  });
+  return out;
+}
+
+// Loads case `id`'s files into FILES from storage: metadata first (so names
+// render immediately), then the actual data per file from IndexedDB. Claims
+// ownership synchronously so a concurrent open of another case can't
+// interleave. Returns a promise resolving once data is in.
+function loadCaseFiles(id) {
+  var c = getC(id);
+  FILES = [];
+  _filesForCaseId = id;
+  if(!c || !c.filesData || !c.filesData.length) return Promise.resolve(FILES);
+  var _idbKey = c._idbKey || ('casefiles_' + id);
+  FILES = dedupeFiles(c.filesData.map(function(meta){ return Object.assign({}, meta); }));
+  return idbGet(_idbKey).catch(function(){ return null; }).then(function(idbFiles) {
+    if(_filesForCaseId !== id) { console.warn('[loadCaseFiles] Case switched during IDB load — discarding', id); return FILES; }
+    // The combined array (if any) is a fast path only; each file is otherwise
+    // reconstructed from its own per-file key. See the history in git for why
+    // both layers exist — the short version is that two upload paths stored
+    // files differently and a reload must be able to read either.
+    var combinedByName = {};
+    if(idbFiles && Array.isArray(idbFiles)) {
+      idbFiles.forEach(function(f){ if(f && f.name && f.data) combinedByName[f.name] = f.data; });
+    }
+    return Promise.all(FILES.map(function(meta) {
+      var fd = Object.assign({}, meta);
+      if(fd.data && fd.data.length > 100) return fd;
+      if(combinedByName[meta.name]) { fd.data = combinedByName[meta.name]; return fd; }
+      if(!meta._key) return fd;
+      return idbGet(meta._key).then(function(data){
+        if(data) { fd.data = data; return fd; }
+        var stored = null;
+        try { stored = localStorage.getItem(meta._key); } catch(e){}
+        try { if(!stored) stored = sessionStorage.getItem(meta._key); } catch(e){}
+        if(stored) fd.data = stored;
+        return fd;
+      }).catch(function(){ return fd; });
+    })).then(function(rebuilt) {
+      if(_filesForCaseId !== id) { console.warn('[loadCaseFiles] Case switched during per-file IDB load — discarding', id); return FILES; }
+      FILES = rebuilt;
+      FILES.forEach(function(f) { if(f.data) _FILE_CACHE[id + '_' + f.name] = f; });
+      console.log('[loadCaseFiles] Loaded', FILES.filter(function(f){return f.data && f.data.length>100;}).length, '/', FILES.length, 'file(s) with data for case', id);
+      if(window._currentCaseId === id && document.getElementById('fl_c')) renderFL_C(id);
+      return FILES;
+    });
+  });
+}
+
+// Writes the current FILES back to the case: metadata into case.filesData and
+// the combined data array under the case's IndexedDB key (merged with what is
+// already stored there, so a file whose data is not loaded in this session is
+// not dropped). Only ever acts on the case that owns FILES.
+function persistCaseFiles(caseId) {
+  if(_filesForCaseId !== caseId) return Promise.resolve();
+  var c = getC(caseId);
+  var idbKey = (c && c._idbKey) || ('casefiles_' + caseId);
+  updC(caseId, {filesData: FILES.map(fileMetaOf), _idbKey: idbKey});
+  var keep = {};
+  FILES.forEach(function(f){ keep[f.name] = true; });
+  return idbGet(idbKey).catch(function(){ return null; }).then(function(existing) {
+    var byName = {};
+    (Array.isArray(existing) ? existing : []).forEach(function(f){ if(f && f.name && keep[f.name]) byName[f.name] = f; });
+    FILES.forEach(function(f) {
+      if(f.data) byName[f.name] = {name:f.name, ext:f.ext, size:f.size, type:f.type||'', data:f.data,
+        _key:f._key||null, _isEvalReport:f._isEvalReport||false, _decision:f._decision||'', _evalDate:f._evalDate||''};
+    });
+    return idbSet(idbKey, Object.keys(byName).map(function(n){ return byName[n]; }));
+  }).catch(function(e){ console.warn('[persistCaseFiles] IDB save failed:', e.message); });
+}
+
+// Removes one file (by index into FILES) from the case: memory, metadata,
+// its own IndexedDB entry, and the combined array. The old "Clear all" only
+// emptied memory, so every file came straight back on the next open.
+function deleteCaseFile(caseId, idx) {
+  if(_filesForCaseId !== caseId) { toast('Please reopen the case and try again.'); return; }
+  var f = FILES[idx];
+  if(!f) return;
+  if(!confirm('Remove "' + (f.name||'file') + '" from this case?')) return;
+  FILES.splice(idx, 1);
+  delete _FILE_CACHE[caseId + '_' + f.name];
+  if(f._key && /^fd(tmp)?_/.test(f._key)) {
+    idbDelete(f._key).catch(function(){});
+    try { localStorage.removeItem(f._key); } catch(e){}
+  }
+  persistCaseFiles(caseId);
+  renderFL_C(caseId);
+  if(typeof refreshEvalModeHint==='function') refreshEvalModeHint(caseId);
+  toast('Removed ' + (f.name||'file'));
+}
+
 function openCase(id) { window._currentCaseId = id;
   if(typeof CURRENT_PAGE !== 'undefined') CURRENT_PAGE = 'cases';
   CURID = id;
@@ -4607,64 +4722,7 @@ function openCase(id) { window._currentCaseId = id;
 
   if(!currentFilesAreForThisCase) {
     // Different case (or no data loaded) — clear and reload from IndexedDB
-    FILES = [];
-    _filesForCaseId = id; // claim ownership immediately so concurrent openCase() calls don't double-load
-    if(c.filesData && c.filesData.length) {
-      var _idbKey = c._idbKey || ('casefiles_' + id);
-      // Show metadata immediately so UI renders file names while data loads
-      FILES = c.filesData.map(function(meta){ return Object.assign({}, meta); });
-      // Load actual data from IDB
-      idbGet(_idbKey).then(function(idbFiles) {
-        // Guard: user may have navigated to a different case while we were loading
-        if(_filesForCaseId !== id) { console.warn('[openCase] Case switched during IDB load — discarding', id); return; }
-        // Index the combined-array result (if any) by filename — used as a fast
-        // path only, never trusted wholesale. addFiles() (the normal "Add
-        // Documents" upload flow) stores each file under its OWN individual
-        // IndexedDB key (meta._key), not in this combined array — a different,
-        // less-common bulk-save path writes the combined array. So this array
-        // can be completely absent for a case whose files were all added
-        // normally, or present but stale/incomplete if more files were added
-        // via addFiles() after it was last written. Reconstruct every file from
-        // c.filesData (the authoritative list) per-file, using whichever source
-        // actually has its data — previously the fallback for a missing/partial
-        // combined array only checked localStorage/sessionStorage, the wrong
-        // storage layer entirely for per-file IndexedDB entries, which silently
-        // lost such a file's actual content on every reload (case switch, tab
-        // close, browser restart) while its filename kept showing in the file
-        // list as if it were still there.
-        var combinedByName = {};
-        if(idbFiles && Array.isArray(idbFiles)) {
-          idbFiles.forEach(function(f){ if(f && f.name && f.data) combinedByName[f.name] = f.data; });
-        }
-        Promise.all(c.filesData.map(function(meta) {
-          var fd = Object.assign({}, meta);
-          if(combinedByName[meta.name]) { fd.data = combinedByName[meta.name]; return fd; }
-          if(!meta._key) return fd;
-          return idbGet(meta._key).then(function(data){
-            if(data) { fd.data = data; return fd; }
-            var stored = null;
-            try { stored = localStorage.getItem(meta._key); } catch(e){}
-            try { if(!stored) stored = sessionStorage.getItem(meta._key); } catch(e){}
-            if(stored) fd.data = stored;
-            return fd;
-          }).catch(function(){ return fd; });
-        })).then(function(rebuilt) {
-          if(_filesForCaseId !== id) { console.warn('[openCase] Case switched during per-file IDB load — discarding', id); return; }
-          FILES = rebuilt;
-          // Populate _FILE_CACHE so subsequent reads (runEval, docManifest) are instant
-          FILES.forEach(function(f) {
-            if(f.data) _FILE_CACHE[id + '_' + f.name] = f;
-          });
-          console.log('[openCase] Loaded', FILES.filter(function(f){return f.data && f.data.length>100;}).length, '/', FILES.length, 'file(s) with data for case', id);
-          var flc = document.getElementById('fl_c');
-          if(flc) renderFL_C(id);
-        });
-      }).catch(function(e){
-        console.warn('[openCase] IndexedDB load failed:', e.message);
-        var flc = document.getElementById('fl_c');
-        if(flc) renderFL_C(id);
-      });
-    }
+    loadCaseFiles(id);
   } else {
     console.log('[openCase] Using existing FILES array for case', id, '-', FILES.length, 'files already loaded');
   }
@@ -8390,7 +8448,7 @@ function buildAmountString(caseObj) {
 // ══════════════════════════════════════════════════════════════
 
 // ── App version — update on every significant deployment ──
-var APP_BUILD = 1780350000; // epoch-style build number (matches <meta name="version">)
+var APP_BUILD = 1780380000; // epoch-style build number (matches <meta name="version">)
 
 var FB_APP = null;
 var FB_DB = null;
@@ -13059,10 +13117,9 @@ function addFiles(list, caseId) {
       // documents were uploaded after the previous evaluation ran (see runEval's
       // supplementary-evaluation logic). Must be preserved on existing entries too,
       // or every re-upload would wipe the timestamp off files added earlier.
-      var meta = {name:f.name, size:f.size, type:f.type, ext:fd.ext, _key:fileKey, addedAt:_addedAt};
       var existing = (getC(caseId)||{}).filesData||[];
-      var metas = existing.map(function(m){ return {name:m.name,size:m.size,type:m.type,ext:m.ext,_key:m._key||null,addedAt:m.addedAt||null}; });
-      metas.push(meta);
+      var metas = existing.map(fileMetaOf); // keeps eval-report markers intact
+      metas.push(fileMetaOf(fd));
       updC(caseId, {filesData:metas});
       renderFL_C(caseId);
       if(typeof refreshEvalModeHint==='function') refreshEvalModeHint(caseId);
@@ -13525,7 +13582,7 @@ function reuploadCaseFiles(caseId) {
         pending--;
         if(pending === 0) {
           // Update case filesData
-          updC(caseId, {filesData: FILES.map(function(f,i){ return {name:f.name,size:f.size,type:f.type||'',ext:f.ext,_key:f._key||null}; })});
+          updC(caseId, {filesData: FILES.map(fileMetaOf)});
           renderFL_C(caseId);
           toast('✓ Re-uploaded: '+matched+' matched, '+unmatched+' new files added');
         }
@@ -13539,49 +13596,52 @@ function reuploadCaseFiles(caseId) {
 
 function handleCaseFiles(fileList, caseId) {
   if(!fileList || !fileList.length) return;
-  // IMPORTANT: Reset FILES for this case to prevent bleed
-  window.FILES = [];
-  window._filesForCaseId = caseId; // claim ownership for this case
+  // This is the "Add more documents" path. It used to EMPTY the in-memory
+  // list and then rewrite the case's file metadata from only the files just
+  // picked — so adding a document silently dropped every earlier one from
+  // the case record, and the same file picked twice was listed twice. Now:
+  // make sure FILES is this case's list (load its metadata if another case
+  // owned FILES), then merge the new files in, replacing same-name entries.
+  if(_filesForCaseId !== caseId) {
+    var _c0 = getC(caseId);
+    FILES = dedupeFiles(((_c0 && _c0.filesData) || []).map(function(m){ return Object.assign({}, m); }));
+    _filesForCaseId = caseId;
+  }
   var total = fileList.length;
   var loaded = 0;
+  var added = [];
   var el = G('fl_c');
-  
+
   // Show loading
-  var statusDiv = el ? el.querySelector('div[style*="background"]') : null;
   if(el) {
     var loadDiv = el.querySelector('div:last-child');
     if(loadDiv) loadDiv.innerHTML = '⏳ Loading ' + total + ' file(s)...';
   }
-  
-  Array.from(fileList).forEach(function(file) {
+
+  Array.from(fileList).forEach(function(file, fi) {
     var ext = fxt(file.name);
     var r = new FileReader();
     r.onload = function(ev) {
-      FILES.push({name:file.name, ext:ext, data:ev.target.result, size:file.size, _key:null});
+      if(_filesForCaseId !== caseId) { console.warn('[handleCaseFiles] Case switched during file load — discarding', file.name); return; }
+      var fileKey = 'fd_' + caseId + '_' + Date.now() + '_' + fi;
+      var fd = {name:file.name, ext:ext, data:ev.target.result, size:file.size, type:file.type||'', _key:fileKey, addedAt:new Date().toISOString()};
+      var existingIdx = FILES.findIndex(function(f){ return f.name === file.name && !f._isEvalReport; });
+      if(existingIdx !== -1) FILES[existingIdx] = fd; else FILES.push(fd);
+      added.push(fd);
+      _FILE_CACHE[caseId + '_' + fd.name] = fd;
+      idbSet(fileKey, fd.data).catch(function(e){ console.warn('[handleCaseFiles] per-file IDB save failed:', e.message); });
       loaded++;
       if(loaded === total) {
-        // Save to IndexedDB for persistence
-        var idbKey = 'casefiles_' + caseId;
-        idbSet(idbKey, FILES.map(function(f){ 
-          return {name:f.name, ext: fxt(f.name), size:f.size, type:f.type||'', data:f.data||null};
-        })).then(function(){
-          console.log('[handleCaseFiles] Saved', FILES.length, 'files to IndexedDB');
-        }).catch(function(e){ console.warn('[handleCaseFiles] IDB save failed:', e.message); });
-        
-        // ── Populate _FILE_CACHE (Layer 1 — instant session reads) ──
-        FILES.forEach(function(f) {
-          if(f.data) _FILE_CACHE[caseId + '_' + f.name] = f;
-        });
-        console.log('[handleCaseFiles] _FILE_CACHE populated:', Object.keys(_FILE_CACHE).length, 'entries');
+        persistCaseFiles(caseId);
         renderFL_C(caseId);
-        toast('✓ ' + total + ' file(s) saved for this case');
-        updC(caseId, {filesData: FILES.map(function(f,i){ return {name:f.name, size:f.size, ext:f.ext, type:'', _key:'idb_'+caseId+'_'+i}; }), _idbKey: idbKey});
+        toast('✓ ' + added.length + ' file(s) added to this case');
+        if(typeof refreshEvalModeHint==='function') refreshEvalModeHint(caseId);
 
-        // Auto-extract from all supported file types (emails, PDFs, images, Word)
+        // Auto-extract from the NEW files only (emails, PDFs, images, Word)
         var EXTRACTABLE_CF = ['img','heic','pdf','doc','xls','rtf','eml','msg','html','txt'];
-        FILES.forEach(function(f) {
+        added.forEach(function(f) {
           if(EXTRACTABLE_CF.indexOf(f.ext) !== -1) {
-            extractAndMerge(f, caseId).then(function(){ renderFL_C(caseId); }).catch(function(){});
+            extractAndMerge(f, caseId).then(function(){ if(_filesForCaseId === caseId) renderFL_C(caseId); }).catch(function(){});
           }
         });
       }
@@ -13596,25 +13656,31 @@ function handleCaseFiles(fileList, caseId) {
 }
 
 function clearSessionFiles(caseId) {
-  window.FILES = [];
-  window._filesForCaseId = null;
-  toast('Files cleared');
+  // Kept for old callers; a real clear is clearCaseDocuments(). This used to
+  // empty only the in-memory list, so every file reappeared on the next open.
+  clearCaseDocuments(caseId);
 }
 
 function clearCaseDocuments(caseId) {
-  if(!confirm('Clear all document attachments from this case? You can re-upload them.')) return;
+  if(!confirm('Remove ALL documents from this case (including the evaluation report file)? You can re-upload them.')) return;
   var c = getC(caseId);
   if(!c) return;
-  // Remove file data from localStorage
+  // Delete every stored copy: per-file IndexedDB keys, legacy localStorage
+  // keys, and the combined array under the case's key.
   (c.filesData||[]).forEach(function(f) {
-    if(f._key) { try { localStorage.removeItem(f._key); } catch(e){} }
+    if(f._key) {
+      try { localStorage.removeItem(f._key); } catch(e){}
+      if(/^fd(tmp)?_/.test(f._key)) idbDelete(f._key).catch(function(){});
+    }
+    delete _FILE_CACHE[caseId + '_' + f.name];
   });
-  // Clear filesData
+  idbDelete(c._idbKey || ('casefiles_' + caseId)).catch(function(){});
   updC(caseId, {filesData: []});
   window.FILES = [];
-  window._filesForCaseId = null;
+  window._filesForCaseId = caseId; // the (now empty) list still belongs to this case
   renderFL_C(caseId);
-  toast('✓ Documents cleared — you can now re-upload the correct files');
+  if(typeof refreshEvalModeHint==='function') refreshEvalModeHint(caseId);
+  toast('✓ Documents removed — you can now upload the correct files');
 }
 
 // ── Save evaluation as a persistent document in case files ──
@@ -13780,6 +13846,15 @@ function renderFL_C(caseId) {
   var el = G('fl_c');
   if(!el) return;
   var c = getC(caseId);
+  // Never render another case's files here. FILES is a single global; if it
+  // belongs to a different case (an async loader or extraction finishing
+  // late, a refresh from sync, a stale caller), show this case's own list
+  // instead — loading it if needed. This is how documents from one case were
+  // appearing under another.
+  if(_filesForCaseId !== caseId) {
+    console.warn('[renderFL_C] FILES belongs to', _filesForCaseId, 'not', caseId, '— reloading this case\'s files');
+    loadCaseFiles(caseId); // claims ownership synchronously; re-renders when data arrives
+  }
   var evalReports = FILES.filter(function(f){ return f._isEvalReport && f.data; });
   var regularFiles = FILES.filter(function(f){ return !f._isEvalReport && f.data && f.data.length > 100; });
   var h = '';
@@ -13821,6 +13896,7 @@ function renderFL_C(caseId) {
     h += '<button onclick="openEvalReport('+fileIdx+')" style="flex:1;min-width:90px;padding:8px 10px;background:'+decColor+';color:#fff;border:none;border-radius:7px;font-size:12px;font-weight:700;cursor:pointer">🖨 Open &amp; Print</button>';
     h += '<button onclick="downloadEvalReport('+fileIdx+')" style="flex:1;min-width:90px;padding:8px 10px;background:#fff;color:'+decColor+';border:2px solid '+decBorder+';border-radius:7px;font-size:12px;font-weight:700;cursor:pointer">⬇ Download</button>';
     h += '<button onclick="emailEvalReport('+fileIdx+',\''+caseId+'\')" style="flex:1;min-width:90px;padding:8px 10px;background:#059669;color:#fff;border:none;border-radius:7px;font-size:12px;font-weight:700;cursor:pointer">✉ Send Email</button>';
+    h += '<button onclick="deleteCaseFile(\''+caseId+'\','+fileIdx+')" title="Remove this report file" style="padding:8px 10px;background:transparent;color:#991b1b;border:1px solid rgba(153,27,27,.35);border-radius:7px;font-size:12px;font-weight:700;cursor:pointer">✕</button>';
     h += '</div></div>';
   });
 
@@ -13880,11 +13956,13 @@ function renderFL_C(caseId) {
       h += '<div style="font-size:10px;color:var(--tx3)">'+Math.round((f.size||0)/1024)+'KB</div>';
       if(isEmail) h += '<div style="font-size:10px;color:#6d28d9;font-weight:600">✅ Email + all attachments fully read during evaluation</div>';
       h += '</div>';
+      var _fIdx = FILES.indexOf(f);
+      h += '<button onclick="deleteCaseFile(\''+caseId+'\','+_fIdx+')" title="Remove this document from the case" aria-label="Remove '+esc(f.name)+'" style="flex-shrink:0;width:26px;height:26px;border-radius:6px;background:transparent;color:#991b1b;border:1px solid rgba(153,27,27,.3);font-size:12px;font-weight:700;cursor:pointer;line-height:1">✕</button>';
       h += '</div>';
     });
     h += '<div style="display:flex;gap:8px;margin-top:8px">';
     h += '<label for="fi_c" style="flex:1;display:flex;align-items:center;justify-content:center;gap:6px;text-align:center;font-size:12px;font-weight:700;color:var(--navy);cursor:pointer;padding:10px 12px;background:rgba(26,42,114,.06);border:1.5px dashed var(--navy);border-radius:8px">📎 Add more documents (e.g. for re-evaluation)</label>';
-    h += '<button onclick="clearSessionFiles(\''+caseId+'\');renderFL_C(\''+caseId+'\')" style="font-size:11px;color:#e8231a;background:transparent;border:none;cursor:pointer;padding:4px;flex-shrink:0">✕ Clear all</button>';
+    h += '<button onclick="clearCaseDocuments(\''+caseId+'\')" style="font-size:11px;color:#e8231a;background:transparent;border:none;cursor:pointer;padding:4px;flex-shrink:0">✕ Clear all</button>';
     h += '</div></div>';
   }
 
