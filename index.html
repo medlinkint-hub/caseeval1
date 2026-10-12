@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
-<meta name="version" content="1780410000">
+<meta name="version" content="1780440000">
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
@@ -4634,7 +4634,11 @@ function loadCaseFiles(id) {
   _filesForCaseId = id;
   if(!c || !c.filesData || !c.filesData.length) return Promise.resolve(FILES);
   var _idbKey = c._idbKey || ('casefiles_' + id);
-  FILES = dedupeFiles(c.filesData.map(function(meta){ return Object.assign({}, meta); }));
+  // No de-duplication yet: before any data is loaded every entry is
+  // metadata-only, so "prefer the entry with data" could not apply and the
+  // first of two same-name entries would always win — possibly the one whose
+  // storage key is dead. Dedupe happens in the merge below, once data is known.
+  FILES = c.filesData.map(function(meta){ return Object.assign({}, meta); });
   return idbGet(_idbKey).catch(function(){ return null; }).then(function(idbFiles) {
     if(_filesForCaseId !== id) { console.warn('[loadCaseFiles] Case switched during IDB load — discarding', id); return FILES; }
     // The combined array (if any) is a fast path only; each file is otherwise
@@ -4663,8 +4667,22 @@ function loadCaseFiles(id) {
       // Merge rather than replace: a file the user added while this load was
       // in flight (handleCaseFiles pushes into FILES synchronously as each
       // file is read) must survive, and an in-memory entry that already has
-      // data wins over the stored copy.
+      // data wins over the stored copy. Two more rules: (1) `rebuilt` is a
+      // snapshot — a file deleted during the load is gone from the case
+      // record, so drop it here too instead of resurrecting it; (2) a freshly
+      // added file replaces a stored one of the same NAME even when the size
+      // differs (a corrected re-upload), so it is not listed twice.
       var current = FILES;
+      var liveNow = {};
+      ((getC(id) || {}).filesData || []).forEach(function(m){ liveNow[(m.name||'') + '|' + (m.size||0)] = true; });
+      var replacedByName = {};
+      current.forEach(function(f){ if(f.data && f.data.length > 100 && !f._isEvalReport) replacedByName[f.name] = true; });
+      rebuilt = rebuilt.filter(function(f){
+        var k = (f.name||'') + '|' + (f.size||0);
+        if(!liveNow[k]) return false;
+        if(!f._isEvalReport && replacedByName[f.name] && !current.some(function(cf){ return cf === f || ((cf.name||'')+'|'+(cf.size||0)) === k; })) return false;
+        return true;
+      });
       var byKey = {};
       rebuilt.forEach(function(f){ byKey[(f.name||'') + '|' + (f.size||0)] = f; });
       current.forEach(function(f){
@@ -8459,7 +8477,7 @@ function buildAmountString(caseObj) {
 // ══════════════════════════════════════════════════════════════
 
 // ── App version — update on every significant deployment ──
-var APP_BUILD = 1780410000; // epoch-style build number (matches <meta name="version">)
+var APP_BUILD = 1780440000; // epoch-style build number (matches <meta name="version">)
 
 var FB_APP = null;
 var FB_DB = null;
@@ -13637,7 +13655,17 @@ function handleCaseFiles(fileList, caseId) {
       var fileKey = 'fd_' + caseId + '_' + Date.now() + '_' + fi;
       var fd = {name:file.name, ext:ext, data:ev.target.result, size:file.size, type:file.type||'', _key:fileKey, addedAt:new Date().toISOString()};
       var existingIdx = FILES.findIndex(function(f){ return f.name === file.name && !f._isEvalReport; });
-      if(existingIdx !== -1) FILES[existingIdx] = fd; else FILES.push(fd);
+      if(existingIdx !== -1) {
+        // Replacing a same-name document: drop the old copy's own storage
+        // entry so re-uploading a corrected file does not leak the previous
+        // blob in IndexedDB forever.
+        var _old = FILES[existingIdx];
+        if(_old._key && /^fd(tmp)?_/.test(_old._key) && _old._key !== fileKey) {
+          idbDelete(_old._key).catch(function(){});
+          try { localStorage.removeItem(_old._key); } catch(e){}
+        }
+        FILES[existingIdx] = fd;
+      } else FILES.push(fd);
       added.push(fd);
       _FILE_CACHE[caseId + '_' + fd.name] = fd;
       idbSet(fileKey, fd.data).catch(function(e){ console.warn('[handleCaseFiles] per-file IDB save failed:', e.message); });
@@ -13660,7 +13688,7 @@ function handleCaseFiles(fileList, caseId) {
     r.onerror = function() {
       loaded++;
       toast('⚠ Could not read: ' + file.name);
-      if(loaded === total) renderFL_C(caseId);
+      if(loaded === total && _filesForCaseId === caseId) renderFL_C(caseId);
     };
     r.readAsDataURL(file);
   });
@@ -13828,15 +13856,29 @@ function saveEvalAsDocument(caseId, evalText, decision) {
     FILES.push(evalFileEntry);
   }
 
-  // Persist to IndexedDB — merge eval report into whatever is stored for this case
-  var idbKey = 'casefiles_' + caseId;
-  var filesToSave = (_filesForCaseId === caseId)
-    ? FILES.map(function(f){
-        return {name:f.name, ext:f.ext, size:f.size, type:f.type||'', data:f.data||null,
-          _key:f._key||null, _isEvalReport:f._isEvalReport||false, _decision:f._decision||'', _evalDate:f._evalDate||''};
-      })
-    : [evalFileEntry]; // FILES belongs to a different case — save only the eval report
-  idbSet(idbKey, filesToSave).then(function(){
+  // Persist to IndexedDB — merge the eval report into whatever is stored for
+  // this case. Never overwrite the combined array wholesale: when FILES
+  // belongs to another case (evaluation finished after the user moved on),
+  // the old code wrote [evalFileEntry] alone and wiped every other file's
+  // stored data under this key.
+  var idbKey = (c._idbKey) || ('casefiles_' + caseId);
+  var _evalRow = {name:evalFileEntry.name, ext:'html', size:fileSize, type:'text/html', data:htmlB64,
+    _key:null, _isEvalReport:true, _decision:decision, _evalDate:evalFileEntry._evalDate};
+  idbGet(idbKey).catch(function(){ return null; }).then(function(existing) {
+    var rows = (Array.isArray(existing) ? existing : []).filter(function(f){ return f && f.name && !f._isEvalReport; });
+    if(_filesForCaseId === caseId) {
+      // In-memory data is the freshest copy of each file we have loaded
+      var byName = {};
+      rows.forEach(function(f){ byName[f.name] = f; });
+      FILES.forEach(function(f){
+        if(f.data && !f._isEvalReport) byName[f.name] = {name:f.name, ext:f.ext, size:f.size, type:f.type||'', data:f.data,
+          _key:f._key||null, _isEvalReport:false, _decision:'', _evalDate:''};
+      });
+      rows = Object.keys(byName).map(function(n){ return byName[n]; });
+    }
+    rows.push(_evalRow);
+    return idbSet(idbKey, rows);
+  }).then(function(){
     console.log('[saveEvalAsDocument] Evaluation saved as document:', fileName);
   }).catch(function(e){ console.warn('[saveEvalAsDocument] IDB save failed:', e.message); });
 
@@ -13863,6 +13905,9 @@ function renderFL_C(caseId) {
   // instead — loading it if needed. This is how documents from one case were
   // appearing under another.
   if(_filesForCaseId !== caseId) {
+    // A stale caller for a case that is no longer on screen must not re-own
+    // FILES (that would overwrite the list of the case the user is looking at).
+    if(window._currentCaseId && window._currentCaseId !== caseId) return;
     console.warn('[renderFL_C] FILES belongs to', _filesForCaseId, 'not', caseId, '— reloading this case\'s files');
     loadCaseFiles(caseId); // claims ownership synchronously; re-renders when data arrives
   }
