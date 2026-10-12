@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
-<meta name="version" content="1780380000">
+<meta name="version" content="1780410000">
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
@@ -2261,7 +2261,7 @@ async function runEval(caseId) {
     }));
     // Guard: abort if user switched cases during the per-file IDB load
     if(window._currentCaseId !== caseId) { console.warn('[runEval] Case switched during per-file IDB load — aborting'); return; }
-    FILES = _rebuilt0;
+    FILES = dedupeFiles(_rebuilt0);
     _filesForCaseId = caseId; // mark these files as belonging to caseId
     var loaded = FILES.some(function(f){ return f.data && f.data.length > 100; });
     console.log('[runEval] Loaded', FILES.filter(function(f){return f.data && f.data.length>100;}).length, '/', FILES.length, 'file(s) with data for case', caseId);
@@ -4660,7 +4660,18 @@ function loadCaseFiles(id) {
       }).catch(function(){ return fd; });
     })).then(function(rebuilt) {
       if(_filesForCaseId !== id) { console.warn('[loadCaseFiles] Case switched during per-file IDB load — discarding', id); return FILES; }
-      FILES = rebuilt;
+      // Merge rather than replace: a file the user added while this load was
+      // in flight (handleCaseFiles pushes into FILES synchronously as each
+      // file is read) must survive, and an in-memory entry that already has
+      // data wins over the stored copy.
+      var current = FILES;
+      var byKey = {};
+      rebuilt.forEach(function(f){ byKey[(f.name||'') + '|' + (f.size||0)] = f; });
+      current.forEach(function(f){
+        var k = (f.name||'') + '|' + (f.size||0);
+        if(!byKey[k] || (f.data && f.data.length > 100)) byKey[k] = f;
+      });
+      FILES = dedupeFiles(rebuilt.concat(current).map(function(f){ return byKey[(f.name||'') + '|' + (f.size||0)]; }));
       FILES.forEach(function(f) { if(f.data) _FILE_CACHE[id + '_' + f.name] = f; });
       console.log('[loadCaseFiles] Loaded', FILES.filter(function(f){return f.data && f.data.length>100;}).length, '/', FILES.length, 'file(s) with data for case', id);
       if(window._currentCaseId === id && document.getElementById('fl_c')) renderFL_C(id);
@@ -8448,7 +8459,7 @@ function buildAmountString(caseObj) {
 // ══════════════════════════════════════════════════════════════
 
 // ── App version — update on every significant deployment ──
-var APP_BUILD = 1780380000; // epoch-style build number (matches <meta name="version">)
+var APP_BUILD = 1780410000; // epoch-style build number (matches <meta name="version">)
 
 var FB_APP = null;
 var FB_DB = null;
@@ -13603,9 +13614,9 @@ function handleCaseFiles(fileList, caseId) {
   // make sure FILES is this case's list (load its metadata if another case
   // owned FILES), then merge the new files in, replacing same-name entries.
   if(_filesForCaseId !== caseId) {
-    var _c0 = getC(caseId);
-    FILES = dedupeFiles(((_c0 && _c0.filesData) || []).map(function(m){ return Object.assign({}, m); }));
-    _filesForCaseId = caseId;
+    // Claims ownership and puts this case's metadata in FILES synchronously;
+    // the data load it starts merges with whatever we add below.
+    loadCaseFiles(caseId);
   }
   var total = fileList.length;
   var loaded = 0;
