@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
-<meta name="version" content="1780500000">
+<meta name="version" content="1780530000">
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
@@ -8495,7 +8495,7 @@ function buildAmountString(caseObj) {
 // ══════════════════════════════════════════════════════════════
 
 // ── App version — update on every significant deployment ──
-var APP_BUILD = 1780500000; // epoch-style build number (matches <meta name="version">)
+var APP_BUILD = 1780530000; // epoch-style build number (matches <meta name="version">)
 
 var FB_APP = null;
 var FB_DB = null;
@@ -10456,12 +10456,21 @@ function wirePolicyLibrary1() {
           if(delPol.pdfStored && delPol.id && typeof idbDelete === 'function') {
             idbDelete('policy_pdf_' + delPol.id).catch(function(){});
           }
-          // Also delete from Firebase so it doesn't come back
-          if(typeof FB_READY!=='undefined' && FB_READY && FB_DB && delPol.id) {
-            FB_DB.collection(typeof FB_POLICIES_KEY!=='undefined'?FB_POLICIES_KEY:'policies')
-              .doc(delPol.id).delete()
+          // Also delete from Firebase so it doesn't come back. The policy
+          // listener treats Firebase as authoritative ("Firebase wins"), so a
+          // copy left there is re-added to every browser within seconds. Older
+          // policies may have no id (ids were assigned on first push) — for
+          // those, delete by name so they cannot resurrect either.
+          if(typeof FB_READY!=='undefined' && FB_READY && FB_DB) {
+            var _polCol = FB_DB.collection(typeof FB_POLICIES_KEY!=='undefined'?FB_POLICIES_KEY:'policies');
+            var _delRemote = delPol.id
+              ? _polCol.doc(delPol.id).delete()
+              : _polCol.where('name','==',delPol.name||'').get().then(function(snap){
+                  return Promise.all(snap.docs.map(function(d){ return d.ref.delete(); }));
+                });
+            _delRemote
               .then(function(){ console.log('[Policies] Deleted from Firebase:', delPol.name); })
-              .catch(function(e){ console.warn('[Policies] Firebase delete failed:', e.message); });
+              .catch(function(e){ console.warn('[Policies] Firebase delete failed:', e.message); toast('⚠ Policy removed here, but could not be removed from the shared library: ' + e.message, 8000); });
           }
           renderSet();
           toast('Policy deleted');
