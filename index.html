@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
-<meta name="version" content="1780470000">
+<meta name="version" content="1780500000">
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
@@ -6129,18 +6129,29 @@ async function processExtractQueue() {
     } else if(isNative && !isApiError) {
       // PDF/image — Claude will read it natively during evaluation — green
       // (only if there was no API-level error; API errors get amber ⚠ below)
+      // Two distinct situations land here and used to look identical:
+      //  (a) the AI read the file fine but found no claim data in it — typical
+      //      for a photo of a damaged item or luggage rather than a document;
+      //  (b) a local (non-API) error while reading the file.
+      var _noClaimData = e._noData === true;
       if(statusSpan) {
         statusSpan.textContent = '🟢';
         statusSpan.style.color = '';
-        statusSpan.title = 'File saved ✓ — will be read in full during evaluation';
+        statusSpan.title = _noClaimData
+          ? 'Saved ✓ — the AI read this image but found no claim fields in it (a photo rather than a document?). It will still be shown to the AI during evaluation.'
+          : 'File saved ✓ — will be read in full during evaluation';
       }
       if(item.rowDiv) item.rowDiv.style.borderLeftColor = '#16a34a';
-      // Add subtle label to row
+      // Add a label to the row that says WHAT happened — the tooltip is
+      // invisible on touch screens and in screenshots.
       if(item.rowDiv && !item.rowDiv.querySelector('.read-note')) {
         var note = document.createElement('span');
         note.className = 'read-note';
-        note.style.cssText = 'font-size:9px;color:#6b7280;flex-shrink:0';
-        note.textContent = 'will read at eval';
+        note.style.cssText = 'font-size:9px;color:#6b7280;flex-shrink:0;max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+        note.textContent = _noClaimData
+          ? '📷 no claim text found (photo?) — included at eval'
+          : 'will read at eval — ' + errMsg.substring(0, 90);
+        note.title = errMsg;
         item.rowDiv.appendChild(note);
       }
     } else {
@@ -6189,7 +6200,9 @@ async function processExtractQueue() {
           }).catch(function(e2){
             rereadBtn.textContent = '↺ Retry';
             rereadBtn.disabled = false;
-            toast('⚠ '+fd.name+': '+e2.message, 4000);
+            var note2 = item.rowDiv.querySelector('.read-note');
+            if(note2) { note2.textContent = 'failed — ' + (e2.message||'unknown error').substring(0, 90); note2.title = e2.message||''; }
+            toast('⚠ '+fd.name+': '+e2.message, 8000);
           });
         };
         item.rowDiv.appendChild(rereadBtn);
@@ -8482,7 +8495,7 @@ function buildAmountString(caseObj) {
 // ══════════════════════════════════════════════════════════════
 
 // ── App version — update on every significant deployment ──
-var APP_BUILD = 1780470000; // epoch-style build number (matches <meta name="version">)
+var APP_BUILD = 1780500000; // epoch-style build number (matches <meta name="version">)
 
 var FB_APP = null;
 var FB_DB = null;
@@ -12556,6 +12569,7 @@ async function extractFromFile(fd) {
     + 'First character MUST be { and last character MUST be }. '
     + 'ZERO HALLUCINATION RULES: (1) Extract ONLY information explicitly visible in the document. (2) NEVER infer, guess, or derive missing fields. (3) NEVER assign ICD/CPT codes yourself — only if printed. (4) NEVER infer diagnosis from medications. (5) NEVER fill dates from context. (6) Unknown or absent fields = null, never a plausible-sounding substitute. (7) Report uncertain or hard-to-read fields in the extraction_warnings array, and normally-expected-but-absent fields in critical_fields_missing — do not embed markers like [UNCERTAIN] inside a field value itself. '
     + 'If you cannot read the document, return: {"document_type":"unreadable","confidence":"low","notes":"could not read"} '
+    + 'If the image is a PHOTOGRAPH of an object, scene, injury, damaged item or luggage rather than a text document, do NOT call it unreadable: set document_type to "photograph" and describe factually in notes what is shown (item, visible damage, labels, serial numbers, any readable text). '
     + 'NEVER refuse. NEVER say you cannot extract. ALWAYS return valid JSON.';
 
   // ── Short reliable extraction prompt ───────────────────────
