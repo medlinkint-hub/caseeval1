@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
-<meta name="version" content="1780530000">
+<meta name="version" content="1780560000">
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
@@ -7473,7 +7473,7 @@ function renderSet() {
   var gId=(localStorage.getItem('mp_gist_id')||'').trim();
   let html='';
   html += syncBanner;
-  if(usedPct>=80){html+='<div style="background:linear-gradient(135deg,#dc2626,#991b1b);color:#fff;padding:14px 18px;border-radius:10px;margin-bottom:16px;display:flex;align-items:center;gap:12px"><svg viewBox="0 0 24 24" style="width:24px;height:24px;stroke:#fff;fill:none;stroke-width:2.5;flex-shrink:0"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/></svg><div><b>Storage '+usedPct+'% full</b><br><small>Click Free Up Space</small></div><button type="button" onclick="aggressiveCleanup1()" style="margin-left:auto;padding:8px 14px;background:#fff;color:#dc2626;border:none;border-radius:6px;font-weight:800;font-size:12px;cursor:pointer;flex-shrink:0">Free Up Space</button></div>';}
+  if(usedPct>=80){html+='<div style="background:linear-gradient(135deg,#dc2626,#991b1b);color:#fff;padding:14px 18px;border-radius:10px;margin-bottom:16px;display:flex;align-items:center;gap:12px"><svg viewBox="0 0 24 24" style="width:24px;height:24px;stroke:#fff;fill:none;stroke-width:2.5;flex-shrink:0"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/></svg><div><b>Storage '+usedPct+'% full</b><br><small>Click Free Up Space, then use “Clean Up Old Cases” below to delete finished cases in bulk</small></div><button type="button" onclick="aggressiveCleanup1()" style="margin-left:auto;padding:8px 14px;background:#fff;color:#dc2626;border:none;border-radius:6px;font-weight:800;font-size:12px;cursor:pointer;flex-shrink:0">Free Up Space</button></div>';}
   html+='<div class="card"><div class="ct">API Connection</div>';
   html+='<div class="ib"><p>Get your API key at <a href="https://console.anthropic.com" target="_blank" style="color:var(--navy);font-weight:600">console.anthropic.com</a> &rarr; API Keys &rarr; Create Key.</p></div>';
   html+='<div class="g2" style="margin-bottom:14px">';
@@ -7603,6 +7603,26 @@ function renderSet() {
   html += '<div style="margin-top:10px;font-size:11px;color:var(--tx3)">';
   html += '<strong>How to use Chrome:</strong> In Edge → Settings → Export All Cases → save file. In Chrome → Settings → Import Cases → select the file. All cases appear instantly.';
   html += '</div>';
+  html += '</div>';
+
+  // ── Clean Up Old Cases ──
+  var _decidedCount = CASES.filter(function(c){ return CLEANUP_DECIDED.indexOf(c.status) !== -1; }).length;
+  html += '<div class="card">';
+  html += '<div class="ct">🧹 Clean Up Old Cases</div>';
+  html += '<div class="ib" style="margin-bottom:12px"><p>Browser storage: <b>'+usedMB+' MB of ~5 MB ('+usedPct+'%)</b> · '+CASES.length+' cases, '+_decidedCount+' decided or closed. '
+    + 'Delete finished cases in bulk to free space. Deleted cases are removed from Firebase and from every team member\'s app, so <b>export a backup first</b>.</p></div>';
+  html += '<div class="g2" style="margin-bottom:10px">';
+  html += '<div class="fg"><label>Which cases</label><select id="cu_scope" onchange="previewCleanup()">'
+    + '<option value="decided">Decided or closed only (approved, declined, partial, closed)</option>'
+    + '<option value="all">Any status</option></select></div>';
+  html += '<div class="fg"><label>Last activity older than</label><select id="cu_days" onchange="previewCleanup()">'
+    + '<option value="30">30 days</option><option value="90" selected>90 days</option><option value="180">180 days</option><option value="365">1 year</option><option value="0">Any age</option></select></div>';
+  html += '</div>';
+  html += '<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">';
+  html += '<button class="btn bs" type="button" onclick="previewCleanup()">👁 Preview</button>';
+  html += '<button class="btn" id="cu_delete_btn" type="button" style="display:none;background:#dc2626;color:#fff" onclick="runCleanup()">🗑 Delete</button>';
+  html += '</div>';
+  html += '<div id="cu_preview" style="margin-top:10px"></div>';
   html += '</div>';
 
   // ── App version footer ──────────────────────────────────────────────────────
@@ -8028,43 +8048,16 @@ function exportCase(id) {
 
 function deleteCase(id) {
   if(!confirm('Delete this case? Cannot be undone.\n\nAll files, invoices, and evaluation data will be permanently removed.')) return;
+  bulkDeleteCases([id]);
+  renderCases();
+  toast('✅ Case deleted');
+}
 
-  // 1. Remove from memory and localStorage CASES array
-  var deletedCase = CASES.find(function(c){ return c.id===id; }) || {};
-  CASES = CASES.filter(function(c){ return c.id!==id; });
-
-  // 1a. Register deletion BEFORE save/sync so no sync path can re-add the case
-  addDeletedId(id);
-
-  // 1b. Free orphaned file keys first so save() has room even on a full storage
-  freeStorage();
-
-  // 1c. Persist — if full storage prevents normal save, strip evals as last resort
-  //     so the deletion is ALWAYS written (never silently lost)
-  try {
-    save();
-  } catch(e) {
-    // save() itself should not throw, but if it does, write a no-eval fallback
-    try {
-      var _bare = CASES.map(function(c){ return Object.assign({},c,{eval:''}); });
-      localStorage.setItem('mp_cases', JSON.stringify(_bare));
-    } catch(e2) { console.warn('[deleteCase] Could not persist deletion to localStorage:', e2); }
-  }
-
-  // 1d. Push to Gist immediately — bypass the 2s debounce so the next pullFromGist1
-  //     (which runs every 60s) sees the deletion and cannot re-add the case
-  if(typeof pushToGist1==='function' && typeof gistReady1==='function' && gistReady1()) {
-    if(typeof save._pt1 !== 'undefined') clearTimeout(save._pt1);
-    pushToGist1(true);
-  }
-
-  // 2. Delete from Firebase
-  deleteCaseFromFirestore(id);
-
-  // 3. Delete invoice data from localStorage
+// Per-case storage cleanup shared by single and bulk delete: invoices,
+// legacy localStorage file keys, medical-coding cache, IndexedDB file arrays
+// and per-file entries, and the in-memory file list if it was this case's.
+function _cleanupCaseStorage(id, deletedCase) {
   try { localStorage.removeItem('invs_'+id); } catch(e){}
-
-  // 4. Delete legacy file keys stored directly in localStorage (fd_<id>_*)
   try {
     var _lsKeys = [];
     for(var _li=0; _li<localStorage.length; _li++) {
@@ -8073,32 +8066,101 @@ function deleteCase(id) {
     }
     _lsKeys.forEach(function(k){ localStorage.removeItem(k); });
   } catch(e){}
-
-  // 5. Delete medical coding data if cached
   try { localStorage.removeItem('mcd_'+id); } catch(e){}
-
-  // 6. Delete files from IndexedDB — try all known key patterns including legacy
   var _idbKeysToDelete = [
-    deletedCase._idbKey,
+    deletedCase && deletedCase._idbKey,
     'casefiles_'+id,
     'hw_idb_'+id
   ].filter(Boolean);
+  ((deletedCase && deletedCase.filesData) || []).forEach(function(f){
+    if(f && f._key && /^fd(tmp)?_/.test(f._key)) _idbKeysToDelete.push(f._key);
+  });
   _idbKeysToDelete.forEach(function(k){
     idbDelete(k).catch(function(e){ console.warn('[deleteCase] IDB delete failed for key:', k, e); });
   });
-
-  // 7. Clear FILES if they belonged to this case
   if(_filesForCaseId === id) { FILES = []; _filesForCaseId = null; }
+  if(window._currentCaseId === id) { window._currentCaseId = null; CURID = null; }
+}
 
-  // 8. Clear current case context if the deleted case was open
-  if(window._currentCaseId === id) {
-    window._currentCaseId = null;
-    CURID = null;
+// Deletes several cases in one pass: one save, one sync push, and the same
+// per-case cleanup as a single delete. Used by the Settings clean-up tool —
+// deleting cases one at a time through each case's Delete button is not
+// practical once the browser's 5 MB case store is full.
+function bulkDeleteCases(ids) {
+  var idSet = new Set(ids);
+  var deleted = CASES.filter(function(c){ return idSet.has(c.id); });
+  if(!deleted.length) return 0;
+  CASES = CASES.filter(function(c){ return !idSet.has(c.id); });
+
+  // Register deletions BEFORE save/sync so no sync path can re-add them
+  deleted.forEach(function(c){ addDeletedId(c.id); });
+
+  // Free orphaned file keys first so save() has room even on a full storage
+  freeStorage();
+
+  // Persist — if full storage prevents normal save, strip evals as last
+  // resort so the deletion is ALWAYS written (never silently lost)
+  try {
+    save();
+  } catch(e) {
+    try {
+      var _bare = CASES.map(function(c){ return Object.assign({},c,{eval:''}); });
+      localStorage.setItem('mp_cases', JSON.stringify(_bare));
+    } catch(e2) { console.warn('[bulkDeleteCases] Could not persist deletion to localStorage:', e2); }
   }
 
+  // Push to Gist immediately — bypass the debounce so the next pull cannot re-add
+  if(typeof pushToGist1==='function' && typeof gistReady1==='function' && gistReady1()) {
+    if(typeof save._pt1 !== 'undefined') clearTimeout(save._pt1);
+    pushToGist1(true);
+  }
+
+  deleted.forEach(function(c){
+    deleteCaseFromFirestore(c.id);
+    _cleanupCaseStorage(c.id, c);
+  });
+
   updBadges();
-  renderCases();
-  toast('✅ Case deleted');
+  return deleted.length;
+}
+
+// ── Settings → Clean Up Old Cases ──────────────────────────────────────────
+var CLEANUP_DECIDED = ['approved','declined','closed','partial'];
+function _cleanupCandidates() {
+  var scope = (G('cu_scope')||{}).value || 'decided';
+  var days = parseInt((G('cu_days')||{}).value || '90', 10);
+  var cutoff = Date.now() - days*86400000;
+  return CASES.filter(function(c){
+    if(scope === 'decided' && CLEANUP_DECIDED.indexOf(c.status) === -1) return false;
+    var t = new Date(c.lastEvalAt || c.updatedAt || c.created || 0).getTime();
+    return t > 0 && t < cutoff;
+  }).sort(function(a,b){ return new Date(a.lastEvalAt||a.updatedAt||a.created||0) - new Date(b.lastEvalAt||b.updatedAt||b.created||0); });
+}
+function previewCleanup() {
+  var list = _cleanupCandidates();
+  var out = G('cu_preview'); if(!out) return;
+  var btn = G('cu_delete_btn');
+  if(!list.length) {
+    out.innerHTML = '<div style="padding:10px 12px;background:var(--grbg);border-radius:6px;font-size:12px;color:#065f46">No cases match — nothing to delete with these settings.</div>';
+    if(btn) btn.style.display = 'none';
+    return;
+  }
+  var rows = list.slice(0, 40).map(function(c){
+    var when = c.lastEvalAt || c.updatedAt || c.created;
+    return '<li><b>'+esc(c.caseNum||'')+'</b> — '+esc(c.patient||'')+' <span style="color:var(--tx3)">('+esc(c.status||'')+', '+(when?new Date(when).toLocaleDateString('en-GB'):'')+')</span></li>';
+  }).join('');
+  out.innerHTML = '<div style="padding:10px 12px;background:#fef3c7;border:1px solid #f59e0b;border-radius:6px;font-size:12px;color:#92400e">'
+    + '<b>'+list.length+' case(s)</b> would be deleted — on this browser, on Firebase, and for every team member. Export a backup first.'
+    + '<ul style="margin:8px 0 0 18px;max-height:220px;overflow:auto;line-height:1.7">'+rows+(list.length>40?'<li>… and '+(list.length-40)+' more</li>':'')+'</ul></div>';
+  if(btn) { btn.style.display = ''; btn.textContent = '🗑 Delete these '+list.length+' case(s)'; }
+}
+function runCleanup() {
+  var list = _cleanupCandidates();
+  if(!list.length) { toast('Nothing to delete'); return; }
+  if(!confirm('Permanently delete '+list.length+' case(s)?\n\nThis removes them from this browser, from Firebase, and from every team member\'s app. It cannot be undone.\n\nHave you exported a backup?')) return;
+  var n = bulkDeleteCases(list.map(function(c){ return c.id; }));
+  toast('✅ Deleted '+n+' case(s) — storage freed');
+  renderSet();
 }
 
 // ══════════════════════════════════════════════
@@ -8495,7 +8557,7 @@ function buildAmountString(caseObj) {
 // ══════════════════════════════════════════════════════════════
 
 // ── App version — update on every significant deployment ──
-var APP_BUILD = 1780530000; // epoch-style build number (matches <meta name="version">)
+var APP_BUILD = 1780560000; // epoch-style build number (matches <meta name="version">)
 
 var FB_APP = null;
 var FB_DB = null;
