@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
-<meta name="version" content="1780560000">
+<meta name="version" content="1780590000">
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
@@ -8126,32 +8126,50 @@ function bulkDeleteCases(ids) {
 
 // ── Settings → Clean Up Old Cases ──────────────────────────────────────────
 var CLEANUP_DECIDED = ['approved','declined','closed','partial'];
+// "Last activity" for clean-up purposes = last evaluation, else creation.
+// Deliberately NOT updatedAt: Firebase sync and background touches refresh
+// that on every case, which made all cases look brand new and the tool
+// find nothing to delete.
+function _caseActivityTime(c) {
+  return new Date(c.lastEvalAt || c.created || c.updatedAt || 0).getTime();
+}
 function _cleanupCandidates() {
   var scope = (G('cu_scope')||{}).value || 'decided';
   var days = parseInt((G('cu_days')||{}).value || '90', 10);
   var cutoff = Date.now() - days*86400000;
   return CASES.filter(function(c){
     if(scope === 'decided' && CLEANUP_DECIDED.indexOf(c.status) === -1) return false;
-    var t = new Date(c.lastEvalAt || c.updatedAt || c.created || 0).getTime();
+    var t = _caseActivityTime(c);
     return t > 0 && t < cutoff;
-  }).sort(function(a,b){ return new Date(a.lastEvalAt||a.updatedAt||a.created||0) - new Date(b.lastEvalAt||b.updatedAt||b.created||0); });
+  }).sort(function(a,b){ return _caseActivityTime(a) - _caseActivityTime(b); });
+}
+function _cleanupAgeHint() {
+  var now = Date.now();
+  var bands = [30, 90, 180, 365].map(function(d){
+    var n = CASES.filter(function(c){ var t = _caseActivityTime(c); return t > 0 && t < now - d*86400000; }).length;
+    return n + ' older than ' + (d === 365 ? '1 year' : d + ' days');
+  });
+  var times = CASES.map(_caseActivityTime).filter(function(t){ return t > 0; });
+  var oldest = times.length ? new Date(Math.min.apply(null, times)).toLocaleDateString('en-GB') : '—';
+  return 'By last evaluation / creation date: ' + bands.join(' · ') + '. Oldest case: ' + oldest + '.';
 }
 function previewCleanup() {
   var list = _cleanupCandidates();
   var out = G('cu_preview'); if(!out) return;
   var btn = G('cu_delete_btn');
+  var hint = '<div style="font-size:11px;color:var(--tx3);margin-top:6px">'+esc(_cleanupAgeHint())+'</div>';
   if(!list.length) {
-    out.innerHTML = '<div style="padding:10px 12px;background:var(--grbg);border-radius:6px;font-size:12px;color:#065f46">No cases match — nothing to delete with these settings.</div>';
+    out.innerHTML = '<div style="padding:10px 12px;background:var(--grbg);border-radius:6px;font-size:12px;color:#065f46">No cases match — try a shorter age (30 days or “Any age”) or “Any status”.</div>' + hint;
     if(btn) btn.style.display = 'none';
     return;
   }
   var rows = list.slice(0, 40).map(function(c){
-    var when = c.lastEvalAt || c.updatedAt || c.created;
+    var when = _caseActivityTime(c);
     return '<li><b>'+esc(c.caseNum||'')+'</b> — '+esc(c.patient||'')+' <span style="color:var(--tx3)">('+esc(c.status||'')+', '+(when?new Date(when).toLocaleDateString('en-GB'):'')+')</span></li>';
   }).join('');
   out.innerHTML = '<div style="padding:10px 12px;background:#fef3c7;border:1px solid #f59e0b;border-radius:6px;font-size:12px;color:#92400e">'
     + '<b>'+list.length+' case(s)</b> would be deleted — on this browser, on Firebase, and for every team member. Export a backup first.'
-    + '<ul style="margin:8px 0 0 18px;max-height:220px;overflow:auto;line-height:1.7">'+rows+(list.length>40?'<li>… and '+(list.length-40)+' more</li>':'')+'</ul></div>';
+    + '<ul style="margin:8px 0 0 18px;max-height:220px;overflow:auto;line-height:1.7">'+rows+(list.length>40?'<li>… and '+(list.length-40)+' more</li>':'')+'</ul></div>' + hint;
   if(btn) { btn.style.display = ''; btn.textContent = '🗑 Delete these '+list.length+' case(s)'; }
 }
 function runCleanup() {
@@ -8557,7 +8575,7 @@ function buildAmountString(caseObj) {
 // ══════════════════════════════════════════════════════════════
 
 // ── App version — update on every significant deployment ──
-var APP_BUILD = 1780560000; // epoch-style build number (matches <meta name="version">)
+var APP_BUILD = 1780590000; // epoch-style build number (matches <meta name="version">)
 
 var FB_APP = null;
 var FB_DB = null;
