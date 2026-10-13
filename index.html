@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
-<meta name="version" content="1780440000">
+<meta name="version" content="1780470000">
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
@@ -6997,14 +6997,19 @@ async function extractInvoiceData(fd) {
   let mc = [];
 
   if(fd.ext === 'img') {
-    // Images: JPEG, PNG, GIF, WebP, HEIC etc
+    // Images: JPEG, PNG, GIF, WebP, BMP — normalised to a size-capped JPEG
     const dataUrl = fd.data;
-    let mtype = 'image/jpeg'; // safe default for all phone photos
-    if(dataUrl.startsWith('data:image/png')) mtype = 'image/png';
-    else if(dataUrl.startsWith('data:image/gif')) mtype = 'image/gif';
-    else if(dataUrl.startsWith('data:image/webp')) mtype = 'image/webp';
-    const b64 = dataUrl.indexOf(',') > -1 ? dataUrl.substring(dataUrl.indexOf(',')+1) : dataUrl;
-    mc.push({type:'image', source:{type:'base64', media_type:mtype, data:b64}});
+    const prepared = await prepareImageForAI(dataUrl);
+    if(prepared && prepared.b64) {
+      mc.push({type:'image', source:{type:'base64', media_type:prepared.mime, data:prepared.b64}});
+    } else {
+      let mtype = 'image/jpeg'; // safe default for all phone photos
+      if(dataUrl.startsWith('data:image/png')) mtype = 'image/png';
+      else if(dataUrl.startsWith('data:image/gif')) mtype = 'image/gif';
+      else if(dataUrl.startsWith('data:image/webp')) mtype = 'image/webp';
+      const b64 = dataUrl.indexOf(',') > -1 ? dataUrl.substring(dataUrl.indexOf(',')+1) : dataUrl;
+      mc.push({type:'image', source:{type:'base64', media_type:mtype, data:b64}});
+    }
 
   } else if(fd.ext === 'pdf') {
     // PDF documents
@@ -8477,7 +8482,7 @@ function buildAmountString(caseObj) {
 // ══════════════════════════════════════════════════════════════
 
 // ── App version — update on every significant deployment ──
-var APP_BUILD = 1780440000; // epoch-style build number (matches <meta name="version">)
+var APP_BUILD = 1780470000; // epoch-style build number (matches <meta name="version">)
 
 var FB_APP = null;
 var FB_DB = null;
@@ -10646,6 +10651,7 @@ async function processPolicyFile1(file) {
         setS('Reading policy from image...','run');
         var mt=ext==='png'?'image/png':ext==='webp'?'image/webp':'image/jpeg';
         var imgB64=data.indexOf(',')>-1?data.substring(data.indexOf(',')+1):data;
+        var _polPrep=await prepareImageForAI(data); if(_polPrep&&_polPrep.b64){mt=_polPrep.mime;imgB64=_polPrep.b64;}
         var resp2=await fetch('https://api.anthropic.com/v1/messages',{method:'POST',headers:{'Content-Type':'application/json','x-api-key':key,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},body:JSON.stringify({model:localStorage.getItem('mp_mod')||'claude-sonnet-5',max_tokens:2000,messages:[{role:'user',content:[{type:'image',source:{type:'base64',media_type:mt,data:imgB64}},{type:'text',text:'Extract ALL text from this insurance policy document or membership card. Include policy number, insurer, plan, dates, limits, exclusions. Plain text only.'}]}]})});
         var rdata2=await resp2.json();rawText=(rdata2.content&&rdata2.content[0]&&rdata2.content[0].text)||'';usedAI=true;
       }
@@ -11302,19 +11308,77 @@ function b64AB(b64) {
 }
 
 // ── HEIC / TIFF → JPEG via canvas ───────────────────────────
-function convertToJPEG(dataUrl) {
-  return new Promise(function(resolve){
+// ── Prepare any browser-decodable image for the Claude API ──────────────
+// One routine for every image we send (case documents, invoices, policy
+// cards, email attachments). It fixes the two things that made PNG and JPEG
+// uploads fail to extract:
+//   1. Transparent PNGs (screenshots, exports) were drawn onto a transparent
+//      canvas and re-encoded as JPEG — JPEG has no alpha, so every transparent
+//      pixel became BLACK and the document was unreadable. The canvas is now
+//      filled white first.
+//   2. Photos were never downscaled and were re-encoded at 95% quality, so a
+//      12-megapixel phone photo came out well over the API's 5 MB per-image
+//      limit and every extraction pass was rejected. Images are now capped
+//      at 2400 px on the long edge (the models' vision ceiling is lower than
+//      that anyway) and re-encoded with quality/scale stepped down until the
+//      base64 payload is under 4.8 MB.
+// Also normalises GIF/WebP/BMP to JPEG (BMP is not accepted by the API) and
+// upscales small images a little for OCR. opts: {enhance:bool, rotate:deg}.
+// Resolves to {dataUrl, b64, mime:'image/jpeg', width, height} or null.
+var IMG_MAX_EDGE = 2400, IMG_MIN_EDGE = 1200, IMG_MAX_B64 = 4.8 * 1024 * 1024;
+function prepareImageForAI(dataUrl, opts) {
+  opts = opts || {};
+  return new Promise(function(resolve) {
+    if(!dataUrl) { resolve(null); return; }
     var img = new Image();
-    img.onload = function(){
-      var cv = document.createElement('canvas');
-      cv.width = img.naturalWidth||img.width;
-      cv.height = img.naturalHeight||img.height;
-      cv.getContext('2d').drawImage(img,0,0);
-      resolve(cv.toDataURL('image/jpeg',0.92));
+    img.onload = function() {
+      try {
+        var w0 = img.naturalWidth || img.width, h0 = img.naturalHeight || img.height;
+        if(!w0 || !h0) { resolve(null); return; }
+        var rot = ((opts.rotate || 0) % 360 + 360) % 360;
+        var maxDim = Math.max(w0, h0);
+        var scale = maxDim > IMG_MAX_EDGE ? IMG_MAX_EDGE / maxDim : (maxDim < IMG_MIN_EDGE ? Math.min(2, IMG_MIN_EDGE / maxDim) : 1);
+        var quality = 0.9, out = null, tries = 0;
+        while(tries < 8) {
+          var w = Math.max(1, Math.round(w0 * scale)), h = Math.max(1, Math.round(h0 * scale));
+          var cv = document.createElement('canvas');
+          if(rot === 90 || rot === 270) { cv.width = h; cv.height = w; } else { cv.width = w; cv.height = h; }
+          var ctx = cv.getContext('2d');
+          ctx.fillStyle = '#ffffff';
+          ctx.fillRect(0, 0, cv.width, cv.height); // white backing — alpha must not become black
+          ctx.save();
+          ctx.translate(cv.width / 2, cv.height / 2);
+          ctx.rotate(rot * Math.PI / 180);
+          ctx.drawImage(img, -w / 2, -h / 2, w, h);
+          ctx.restore();
+          if(opts.enhance) {
+            // Mild contrast/brightness lift for faded receipts and scans
+            var imageData = ctx.getImageData(0, 0, cv.width, cv.height);
+            var d = imageData.data, contrastLevel = 40, brightness = 6;
+            var factor = (259 * (contrastLevel + 255)) / (255 * (259 - contrastLevel));
+            for(var i = 0; i < d.length; i += 4) {
+              d[i]   = Math.min(255, Math.max(0, factor * (d[i]   - 128) + 128 + brightness));
+              d[i+1] = Math.min(255, Math.max(0, factor * (d[i+1] - 128) + 128 + brightness));
+              d[i+2] = Math.min(255, Math.max(0, factor * (d[i+2] - 128) + 128 + brightness));
+            }
+            ctx.putImageData(imageData, 0, 0);
+          }
+          out = cv.toDataURL('image/jpeg', quality);
+          if(out.length <= IMG_MAX_B64 + 40) break;
+          tries++;
+          if(quality > 0.6) quality -= 0.12; else { scale *= 0.8; quality = 0.8; }
+        }
+        if(!out || out.indexOf(',') === -1) { resolve(null); return; }
+        resolve({dataUrl: out, b64: out.substring(out.indexOf(',') + 1), mime: 'image/jpeg', width: cv.width, height: cv.height});
+      } catch(e) { console.warn('[prepareImageForAI] canvas failed:', e.message); resolve(null); }
     };
-    img.onerror = function(){ resolve(dataUrl); };
+    img.onerror = function() { resolve(null); };
     img.src = dataUrl;
   });
+}
+
+function convertToJPEG(dataUrl) {
+  return prepareImageForAI(dataUrl).then(function(r){ return r ? r.dataUrl : dataUrl; });
 }
 
 // ── Load SheetJS on demand ───────────────────────────────────
@@ -11343,43 +11407,9 @@ function readTextFromDataUrl(dataUrl) {
   return '';
 }
 
-// ── Enhance image for better OCR — contrast boost + sharpening ──
+// ── Enhance image for better OCR — kept as a thin wrapper over prepareImageForAI ──
 function enhanceImageForOCR(dataUrl) {
-  return new Promise(function(resolve) {
-    var img = new Image();
-    img.onload = function() {
-      try {
-        var cv = document.createElement('canvas');
-        // Scale up small images for better OCR
-        var scale = Math.max(1, Math.min(2, 1500 / Math.max(img.naturalWidth, img.naturalHeight)));
-        cv.width  = Math.round(img.naturalWidth  * scale);
-        cv.height = Math.round(img.naturalHeight * scale);
-        var ctx = cv.getContext('2d');
-
-        // Draw original
-        ctx.drawImage(img, 0, 0, cv.width, cv.height);
-
-        // Apply contrast + brightness boost (helps with faded receipts/scans)
-        var imageData = ctx.getImageData(0, 0, cv.width, cv.height);
-        var data = imageData.data;
-        // Correct contrast formula: contrast is -255..255 (positive = more contrast)
-        var contrastLevel = 60; // moderate boost
-        var brightness = 8;
-        var factor = (259 * (contrastLevel + 255)) / (255 * (259 - contrastLevel));
-        for(var i = 0; i < data.length; i += 4) {
-          data[i]   = Math.min(255, Math.max(0, factor * (data[i]   - 128) + 128 + brightness));
-          data[i+1] = Math.min(255, Math.max(0, factor * (data[i+1] - 128) + 128 + brightness));
-          data[i+2] = Math.min(255, Math.max(0, factor * (data[i+2] - 128) + 128 + brightness));
-        }
-        ctx.putImageData(imageData, 0, 0);
-
-        // Return as JPEG at high quality
-        resolve(cv.toDataURL('image/jpeg', 0.95));
-      } catch(e) { resolve(null); }
-    };
-    img.onerror = function() { resolve(null); };
-    img.src = dataUrl;
-  });
+  return prepareImageForAI(dataUrl, {enhance: true}).then(function(r){ return r ? r.dataUrl : null; });
 }
 
 // ── MASTER: build Claude content array from any file ────────
@@ -11470,10 +11500,16 @@ async function readFileForAI(fd) {
   var ext = fd.ext || fxt(fd.name||'');
   var data = fd.data||'';
 
-  // ── Standard images — with canvas enhancement for better OCR ──
+  // ── Standard images — normalised through prepareImageForAI ──
   if(ext==='img') {
     if(!data) return [{type:'text',text:'[Image: '+fd.name+' — no data]'}];
-    // Detect actual image type from data URL or filename
+    // Every format the browser can decode (JPEG, PNG incl. transparency, GIF,
+    // WebP, BMP) comes out as a size-capped, white-backed JPEG. Only if the
+    // browser cannot decode it at all do we fall back to the raw bytes.
+    try {
+      var prepared = await prepareImageForAI(data, {enhance: true});
+      if(prepared && prepared.b64) return [{type:'image', source:{type:'base64', media_type: prepared.mime, data: prepared.b64}}];
+    } catch(e) { console.warn('[readFileForAI] image prepare failed, sending original:', e.message); }
     var imgMime = 'image/jpeg';
     if(data.startsWith('data:image/png')) imgMime = 'image/png';
     else if(data.startsWith('data:image/gif')) imgMime = 'image/gif';
@@ -11481,17 +11517,10 @@ async function readFileForAI(fd) {
     else if(/\.png$/i.test(fd.name||'')) imgMime = 'image/png';
     else if(/\.webp$/i.test(fd.name||'')) imgMime = 'image/webp';
     else if(/\.gif$/i.test(fd.name||'')) imgMime = 'image/gif';
-    // Extract raw base64
+    if(/\.bmp$/i.test(fd.name||'') || data.startsWith('data:image/bmp')) return [{type:'text',text:'[Image: '+fd.name+' — BMP could not be converted; please upload as JPEG or PNG]'}];
     var b64img = data.indexOf(',')>-1 ? data.substring(data.indexOf(',')+1) : data;
     if(!b64img) return [{type:'text',text:'[Image: '+fd.name+' — no data]'}];
-    // Enhance for better OCR (contrast, scale-up for small images)
-    // Only enhance JPEG/PNG — GIF/WebP pass through
-    if(imgMime === 'image/jpeg' || imgMime === 'image/png') {
-      try {
-        var enhanced = await enhanceImageForOCR(data);
-        if(enhanced) { b64img = enhanced.split(',')[1] || b64img; imgMime = 'image/jpeg'; }
-      } catch(e) { /* use original on canvas error */ }
-    }
+    if(b64img.length > IMG_MAX_B64) return [{type:'text',text:'[Image: '+fd.name+' — too large ('+Math.round(b64img.length*0.75/1024/1024)+'MB) to send and could not be resized]'}];
     return [{type:'image', source:{type:'base64', media_type: imgMime, data:b64img}}];
   }
 
@@ -12134,14 +12163,15 @@ async function readFileForAI(fd) {
           b64i=b64i.replace(/[^A-Za-z0-9+/=]/g,'');
           while(b64i.length%4!==0) b64i+='=';
           // 6.5MB base64 ≈ 5MB raw — Anthropic image API limit
-          var imgTooBig = b64i.length > 6.5*1024*1024;
           if(b64i.length>200) {
             attachmentNames.push(part.fname||'image');
-            if(/tiff?/i.test(mime2)||imgTooBig) {
-              var reason=imgTooBig?' (too large: '+Math.round(b64i.length*0.75/1024/1024)+'MB)':' — TIFF format';
-              blocks.push({type:'text',text:'[IMAGE ATTACHMENT: '+(part.fname||'image')+reason+'. Contains visual medical data; see original file.]'});
+            if(/tiff?/i.test(mime2)) {
+              blocks.push({type:'text',text:'[IMAGE ATTACHMENT: '+(part.fname||'image')+' — TIFF format. Contains visual medical data; see original file.]'});
             } else {
-              blocks.push({type:'image',source:{type:'base64',media_type:mime2,data:b64i}});
+              // Every embedded image is normalised after the (synchronous)
+              // MIME walk — white-backed, size-capped JPEG — so a 6 MB phone
+              // photo attached to an email is downscaled rather than dropped.
+              blocks.push({type:'image',source:{type:'base64',media_type:mime2,data:b64i},_emlFname:(part.fname||'image')});
             }
           }
         } catch(e3){console.warn('[EML] Image:',e3.message);}
@@ -12226,6 +12256,22 @@ async function readFileForAI(fd) {
     } catch(emlErr) {
       console.error('[EML] Parser error:', emlErr.message);
       return [{type:'text', text:'[EMAIL: '+fd.name+']\n\n'+emlRaw.substring(0,80000)}];
+    }
+
+    // Normalise embedded images (async, so it cannot live inside walk()):
+    // white-backed, size-capped JPEG via prepareImageForAI. One that still
+    // cannot be prepared and is over the API limit becomes a text note.
+    for(var _bi=0; _bi<blocks.length; _bi++) {
+      var _blk=blocks[_bi];
+      if(_blk.type!=='image' || !_blk.source) continue;
+      var _fname=_blk._emlFname||'image'; delete _blk._emlFname;
+      try {
+        var _prep=await prepareImageForAI('data:'+_blk.source.media_type+';base64,'+_blk.source.data);
+        if(_prep&&_prep.b64) { _blk.source={type:'base64',media_type:_prep.mime,data:_prep.b64}; continue; }
+      } catch(e){}
+      if(_blk.source.data.length > IMG_MAX_B64) {
+        blocks[_bi]={type:'text',text:'[IMAGE ATTACHMENT: '+_fname+' (too large: '+Math.round(_blk.source.data.length*0.75/1024/1024)+'MB). Contains visual medical data; see original file.]'};
+      }
     }
 
     // Build rich header summary
@@ -12787,27 +12833,10 @@ async function extractFromFile(fd) {
     for(var ri = 0; ri < rotations.length; ri++) {
       try {
         var rotDeg = rotations[ri];
-        var rotated = await new Promise(function(resolve) {
-          var img2 = new Image();
-          img2.onload = function() {
-            try {
-              var cv2 = document.createElement('canvas');
-              var w2 = img2.naturalWidth, h2 = img2.naturalHeight;
-              if(rotDeg === 90 || rotDeg === 270) { cv2.width=h2; cv2.height=w2; }
-              else { cv2.width=w2; cv2.height=h2; }
-              var ctx2 = cv2.getContext('2d');
-              ctx2.translate(cv2.width/2, cv2.height/2);
-              ctx2.rotate(rotDeg * Math.PI / 180);
-              ctx2.drawImage(img2, -w2/2, -h2/2);
-              resolve(cv2.toDataURL('image/jpeg', 0.92));
-            } catch(e2) { resolve(null); }
-          };
-          img2.onerror = function() { resolve(null); };
-          // Use the original (pre-enhancement) data for rotation
-          img2.src = fd.data;
-        });
-        if(!rotated) continue;
-        var rotB64 = rotated.split(',')[1];
+        // Rotate from the original data through the same preparer (white
+        // backing, size cap) — the old inline canvas had neither.
+        var rotPrep = await prepareImageForAI(fd.data, {rotate: rotDeg});
+        var rotB64 = rotPrep && rotPrep.b64;
         if(!rotB64) continue;
         var p5msgs = [{role:'user', content:[
           {type:'image', source:{type:'base64', media_type:'image/jpeg', data:rotB64}},
