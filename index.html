@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
-<meta name="version" content="1780620000">
+<meta name="version" content="1780650000">
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
@@ -8578,7 +8578,7 @@ function buildAmountString(caseObj) {
 // ══════════════════════════════════════════════════════════════
 
 // ── App version — update on every significant deployment ──
-var APP_BUILD = 1780620000; // epoch-style build number (matches <meta name="version">)
+var APP_BUILD = 1780650000; // epoch-style build number (matches <meta name="version">)
 
 var FB_APP = null;
 var FB_DB = null;
@@ -11601,6 +11601,566 @@ function htmlToMdWithTables(html) {
   return html;
 }
 
+// ── Outlook .msg parser (Compound File Binary + MAPI properties) ────────────
+// Replaces the former byte-scan heuristic, which (a) kept only ASCII so Greek
+// or any non-Latin text vanished, (b) could not separate an attached Outlook
+// item from the outer message, and (c) assumed attachments were contiguous in
+// the file — CFB stores streams in 512-byte sectors that need not be adjacent.
+//
+// cfbOpen(bytes) → {entries, read(entry), children(entry), find(parent,name)}
+// msgParse(bytes) → {subject, from, to, cc, date, bodyText, attachments:[...]}
+//   attachments: {name, mime, bytes}  or  {name, embedded: <msgParse result>}
+// ── Email parsing helpers (shared by .msg, .eml and the Outlook parser) ──
+// Strip HTML to readable text while preserving table/list structure
+function htmlEmailToText(html) {
+  return html
+    .replace(/<style[\s\S]*?<\/style>/gi,'')
+    .replace(/<script[\s\S]*?<\/script>/gi,'')
+    .replace(/<br\s*\/?>/gi,'\n')
+    .replace(/<\/p>/gi,'\n\n').replace(/<p[^>]*>/gi,'\n')
+    .replace(/<\/div>/gi,'\n').replace(/<div[^>]*>/gi,'')
+    .replace(/<\/tr>/gi,'\n').replace(/<tr[^>]*>/gi,'')
+    .replace(/<td[^>]*>/gi,'  ').replace(/<th[^>]*>/gi,'  ')
+    .replace(/<\/li>/gi,'\n').replace(/<li[^>]*>/gi,'• ')
+    .replace(/<h[1-6][^>]*>/gi,'\n\n').replace(/<\/h[1-6]>/gi,'\n')
+    .replace(/<hr[^>]*>/gi,'\n────────────────────\n')
+    .replace(/<[^>]+>/g,'')
+    .replace(/&nbsp;/g,' ').replace(/&amp;/g,'&').replace(/&lt;/g,'<')
+    .replace(/&gt;/g,'>').replace(/&quot;/g,'"').replace(/&#(\d+);/g,function(m,n){return String.fromCharCode(parseInt(n));})
+    .replace(/\t{3,}/g,'  ').replace(/ {4,}/g,'   ')
+    .replace(/\n{4,}/g,'\n\n').trim();
+}
+
+// Split an email body with quoted/forwarded chains into labeled sections
+function parseEmailThread(body) {
+  var SPLITS = [
+    /^-{3,}\s*(?:Original Message|Original E-?mail|Forwarded message|Begin forwarded message)\s*-{3,}/im,
+    /^On .{10,200}wrote:\s*$/im,
+    /^From:[ \t]+\S.*\r?\nSent:[ \t]+/im,
+    /^-{2,}[ \t]*Forwarded/im,
+    /^={5,}$/m,
+    /^_{5,}$/m,
+  ];
+  var bestSplit = null, bestIdx = Infinity;
+  SPLITS.forEach(function(re){
+    var m = re.exec(body);
+    if(m && m.index < bestIdx){ bestSplit = m; bestIdx = m.index; }
+  });
+
+  if(!bestSplit) {
+    // Line-quoted thread (> prefix)
+    var lines = body.split('\n');
+    var direct = [], quoted = [];
+    lines.forEach(function(l){ (/^\s*>/.test(l) ? quoted : direct).push(l.replace(/^\s*>+\s?/,'')); });
+    if(quoted.length > 5 && direct.length > 1) {
+      return '=== CURRENT MESSAGE ===\n'+direct.join('\n').trim()
+        +'\n\n=== QUOTED PRIOR CORRESPONDENCE ===\n'+quoted.join('\n').trim();
+    }
+    return body;
+  }
+
+  // Split at each detected boundary
+  var segments = [], cursor = 0, pass = body, n = 0;
+  while(n < 8) {
+    var firstSplit = null, firstIdx2 = Infinity;
+    SPLITS.forEach(function(re){
+      var m2 = re.exec(pass.substring(cursor));
+      if(m2 && (cursor + m2.index) < firstIdx2){ firstSplit = m2; firstIdx2 = cursor + m2.index; }
+    });
+    if(!firstSplit) break;
+    var seg = pass.substring(cursor, firstIdx2).trim();
+    if(seg.length > 20) segments.push(seg);
+    cursor = firstIdx2 + firstSplit[0].length;
+    n++;
+  }
+  var tail = pass.substring(cursor).trim();
+  if(tail.length > 20) segments.push(tail);
+
+  if(segments.length < 2) return body;
+  return segments.map(function(s,i){
+    return '=== EMAIL CHAIN — '+(i===0?'LATEST':'PRIOR #'+i)+' ===\n'+s;
+  }).join('\n\n');
+}
+
+// Identify sender role from email/name string
+function identifyEmailRole(str) {
+  if(!str) return '';
+  var s = str.toLowerCase();
+  if(/hospital|clinic|medical cent|health cent|medic|nhs|spital/i.test(s)) return ' [HOSPITAL/CLINIC]';
+  if(/\bdr\.?\b|doctor|physician|specialist|surgeon|prof\./i.test(s)) return ' [DOCTOR]';
+  if(/insurance|insur(?:er|ance)|\btpa\b|assist|aon|aig|allianz|axa|zurich|cigna|bupa|generali|globelink|mapfre|medlink/i.test(s)) return ' [INSURER/TPA]';
+  if(/pharmac/i.test(s)) return ' [PHARMACY]';
+  if(/@(?:gmail|hotmail|yahoo|outlook|live|proton|icloud|me\.com)/i.test(s)) return ' [PATIENT/INDIVIDUAL]';
+  return '';
+}
+
+
+function cfbOpen(bytes) {
+  var u8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+  var dv = new DataView(u8.buffer, u8.byteOffset, u8.byteLength);
+  if(u8.length < 512 || dv.getUint32(0, true) !== 0xE011CFD0 || dv.getUint32(4, true) !== 0xE11AB1A1) throw new Error('Not a compound file');
+  var secShift = dv.getUint16(0x1E, true), miniShift = dv.getUint16(0x20, true);
+  var secSize = 1 << secShift, miniSize = 1 << miniShift;
+  var numFat = dv.getUint32(0x2C, true), firstDir = dv.getUint32(0x30, true);
+  var miniCutoff = dv.getUint32(0x38, true), firstMiniFat = dv.getUint32(0x3C, true), numMiniFat = dv.getUint32(0x40, true);
+  var firstDifat = dv.getUint32(0x44, true), numDifat = dv.getUint32(0x48, true);
+  var ENDOFCHAIN = 0xFFFFFFFE, FREESECT = 0xFFFFFFFF;
+  var secOff = function(n){ return (n + 1) * secSize; };
+  var perSec = secSize / 4;
+
+  // DIFAT → list of FAT sector numbers
+  var fatSectors = [];
+  for(var i = 0; i < 109 && fatSectors.length < numFat; i++) {
+    var s = dv.getUint32(0x4C + i*4, true); if(s < FREESECT - 1) fatSectors.push(s);
+  }
+  var dsec = firstDifat, guard = 0;
+  while(dsec < FREESECT - 1 && guard++ < numDifat + 2) {
+    var base = secOff(dsec);
+    for(var j = 0; j < perSec - 1 && fatSectors.length < numFat; j++) {
+      var fs = dv.getUint32(base + j*4, true); if(fs < FREESECT - 1) fatSectors.push(fs);
+    }
+    dsec = dv.getUint32(base + (perSec - 1)*4, true);
+  }
+  var fat = new Uint32Array(fatSectors.length * perSec);
+  fatSectors.forEach(function(fsn, idx){
+    var b = secOff(fsn);
+    for(var k = 0; k < perSec; k++) fat[idx*perSec + k] = (b + k*4 + 4 <= u8.length) ? dv.getUint32(b + k*4, true) : FREESECT;
+  });
+  function chain(start, table) {
+    var out = [], s = start, n = 0;
+    while(s < FREESECT - 1 && n++ < 1e6) { out.push(s); s = table[s]; if(s === undefined) break; }
+    return out;
+  }
+  function readChain(start, size) {
+    var secs = chain(start, fat), out = new Uint8Array(size), pos = 0;
+    for(var i = 0; i < secs.length && pos < size; i++) {
+      var o = secOff(secs[i]), len = Math.min(secSize, size - pos, u8.length - o);
+      if(len <= 0) break;
+      out.set(u8.subarray(o, o + len), pos); pos += len;
+    }
+    return out;
+  }
+  // Directory
+  var dirBytes = readChain(firstDir, chain(firstDir, fat).length * secSize);
+  var ddv = new DataView(dirBytes.buffer, dirBytes.byteOffset, dirBytes.byteLength);
+  var entries = [];
+  for(var e = 0; e + 128 <= dirBytes.length; e += 128) {
+    var nameLen = ddv.getUint16(e + 64, true), type = dirBytes[e + 66];
+    if(type === 0) { entries.push(null); continue; }
+    var name = '';
+    for(var c = 0; c + 1 < Math.min(nameLen, 64); c += 2) { var cc = ddv.getUint16(e + c, true); if(cc) name += String.fromCharCode(cc); }
+    entries.push({ id: entries.length, name: name, type: type, left: ddv.getUint32(e + 68, true), right: ddv.getUint32(e + 72, true),
+      child: ddv.getUint32(e + 76, true), start: ddv.getUint32(e + 116, true), size: ddv.getUint32(e + 120, true) });
+  }
+  var root = entries[0];
+  // Mini FAT + mini stream
+  var miniFat = new Uint32Array(0);
+  if(numMiniFat && firstMiniFat < FREESECT - 1) {
+    var mf = readChain(firstMiniFat, chain(firstMiniFat, fat).length * secSize);
+    miniFat = new Uint32Array(mf.buffer, mf.byteOffset, Math.floor(mf.byteLength / 4));
+  }
+  var miniStream = root ? readChain(root.start, root.size) : new Uint8Array(0);
+  function read(entry) {
+    if(!entry || entry.type !== 2) return new Uint8Array(0);
+    if(entry.size < miniCutoff) {
+      var secs = chain(entry.start, miniFat), out = new Uint8Array(entry.size), pos = 0;
+      for(var i = 0; i < secs.length && pos < entry.size; i++) {
+        var o = secs[i] * miniSize, len = Math.min(miniSize, entry.size - pos, miniStream.length - o);
+        if(len <= 0) break;
+        out.set(miniStream.subarray(o, o + len), pos); pos += len;
+      }
+      return out;
+    }
+    return readChain(entry.start, entry.size);
+  }
+  function children(entry) {
+    var out = [], stack = [], NOSTREAM = 0xFFFFFFFF;
+    if(!entry || entry.child === NOSTREAM) return out;
+    stack.push(entry.child);
+    var seen = {};
+    while(stack.length) {
+      var id = stack.pop();
+      if(id === NOSTREAM || seen[id] || !entries[id]) continue;
+      seen[id] = true; out.push(entries[id]);
+      stack.push(entries[id].left, entries[id].right);
+    }
+    return out;
+  }
+  function find(parent, name) {
+    var kids = children(parent);
+    for(var i = 0; i < kids.length; i++) if(kids[i].name === name) return kids[i];
+    return null;
+  }
+  return { entries: entries, root: root, read: read, children: children, find: find };
+}
+
+// LZFu (MS-OXRTFCP) decompression of PR_RTF_COMPRESSED
+function rtfDecompress(bytes) {
+  var dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  if(bytes.length < 16) return '';
+  var rawSize = dv.getUint32(4, true), magic = dv.getUint32(8, true);
+  var out = [];
+  if(magic === 0x414C454D) { // MELA — stored uncompressed
+    for(var i = 16; i < bytes.length; i++) out.push(String.fromCharCode(bytes[i]));
+    return out.join('');
+  }
+  if(magic !== 0x75465A4C) return '';
+  var initStr = '{\\rtf1\\ansi\\mac\\deff0\\deftab720{\\fonttbl;}{\\f0\\fnil \\froman \\fswiss \\fmodern \\fscript \\fdecor MS Sans SerifSymbolArialTimes New RomanCourier{\\colortbl\\red0\\green0\\blue0\r\n\\par \\pard\\plain\\f0\\fs20\\b\\i\\u\\tab\\tx';
+  var dict = new Uint8Array(4096), wp = 0;
+  for(var d = 0; d < initStr.length; d++) dict[wp++] = initStr.charCodeAt(d);
+  var p = 16;
+  while(p < bytes.length && out.length < rawSize) {
+    var ctrl = bytes[p++];
+    for(var bit = 0; bit < 8 && p < bytes.length && out.length < rawSize; bit++) {
+      if(ctrl & (1 << bit)) {
+        if(p + 1 >= bytes.length) return out.join('');
+        var ref = (bytes[p] << 8) | bytes[p + 1]; p += 2;
+        var off = ref >> 4, len = (ref & 0x0F) + 2;
+        if(off === wp) return out.join('');
+        for(var k = 0; k < len; k++) { var ch = dict[(off + k) & 0xFFF]; out.push(String.fromCharCode(ch)); dict[wp] = ch; wp = (wp + 1) & 0xFFF; }
+      } else {
+        var b = bytes[p++]; out.push(String.fromCharCode(b)); dict[wp] = b; wp = (wp + 1) & 0xFFF;
+      }
+    }
+  }
+  return out.join('');
+}
+
+// RTF → plain text. Handles Outlook's "fromhtml" RTF (HTML markup lives in
+// {\*\htmltag} groups and RTF-only text between \htmlrtf … \htmlrtf0).
+function rtfToText(rtf, codepage) {
+  if(!rtf) return '';
+  var out = [], i = 0, n = rtf.length, depth = 0, skipDepth = -1, htmlrtf = 0;
+  var hexBuf = [];
+  function flushHex() {
+    if(!hexBuf.length) return;
+    var arr = new Uint8Array(hexBuf); hexBuf = [];
+    try { out.push(new TextDecoder(codepage || 'windows-1252').decode(arr)); } catch(e) { out.push(String.fromCharCode.apply(null, arr)); }
+  }
+  var skipWords = {fonttbl:1, colortbl:1, stylesheet:1, info:1, pict:1, object:1, header:1, footer:1, headerl:1, headerr:1, footerl:1, footerr:1, themedata:1, colorschememapping:1, latentstyles:1, datastore:1, xmlnstbl:1, listtable:1, listoverridetable:1, rsidtbl:1, generator:1, mmathPr:1, fldinst:1, 'pntext':1};
+  var ucSkip = 1, pendingSkip = 0, tagDepth = -1, tagBuf = '';
+  while(i < n) {
+    var ch = rtf[i];
+    if(ch === '{') { depth++; i++; continue; }
+    if(ch === '}') {
+      if(tagDepth === depth) { if(/<(br|\/p|\/div|\/tr|\/li|\/h\d|\/table|p\b|div\b|tr\b|li\b)/i.test(tagBuf)) out.push('\n'); tagDepth = -1; tagBuf = ''; }
+      if(skipDepth === depth) skipDepth = -1; depth--; i++; continue;
+    }
+    if(tagDepth !== -1 && depth >= tagDepth) { tagBuf += ch; i++; continue; }
+    if(skipDepth !== -1 && depth >= skipDepth) { i++; continue; }
+    if(ch === '\\') {
+      var m = /^\\([a-zA-Z]+)(-?\d+)? ?/.exec(rtf.substr(i, 32));
+      if(m) {
+        var word = m[1], param = m[2] !== undefined ? parseInt(m[2], 10) : null;
+        i += m[0].length;
+        if(word === 'htmlrtf') { htmlrtf = (param === 0) ? 0 : 1; continue; }
+        if(word === 'htmltag') { tagDepth = depth; tagBuf = ''; continue; }
+        if(skipWords[word]) { skipDepth = depth; continue; }
+        if(htmlrtf) continue;
+        if(word === 'par' || word === 'line' || word === 'row') { flushHex(); out.push('\n'); continue; }
+        if(word === 'tab' || word === 'cell') { flushHex(); out.push('\t'); continue; }
+        if(word === 'uc') { ucSkip = param || 0; continue; }
+        if(word === 'u' && param !== null) { flushHex(); out.push(String.fromCharCode(param < 0 ? param + 65536 : param)); pendingSkip = ucSkip; continue; }
+        if(word === 'emdash') { out.push('—'); continue; }
+        if(word === 'endash') { out.push('–'); continue; }
+        if(word === 'lquote' || word === 'rquote') { out.push("'"); continue; }
+        if(word === 'ldblquote' || word === 'rdblquote') { out.push('"'); continue; }
+        if(word === 'bullet') { out.push('•'); continue; }
+        continue;
+      }
+      if(rtf[i + 1] === "'") {
+        var hx = rtf.substr(i + 2, 2); i += 4;
+        if(pendingSkip > 0) { pendingSkip--; continue; }
+        if(!htmlrtf) hexBuf.push(parseInt(hx, 16) || 32);
+        continue;
+      }
+      if(rtf[i + 1] === '*') { if(/^\\\*\\htmltag/.test(rtf.substr(i, 12))) { i += 2; continue; } skipDepth = depth; i += 2; continue; }
+      if(rtf[i + 1] === '\\' || rtf[i + 1] === '{' || rtf[i + 1] === '}') { if(!htmlrtf) out.push(rtf[i + 1]); i += 2; continue; }
+      if(rtf[i + 1] === '~') { out.push(' '); i += 2; continue; }
+      i += 2; continue;
+    }
+    if(ch === '\r' || ch === '\n') { i++; continue; }
+    if(pendingSkip > 0) { pendingSkip--; i++; continue; }
+    if(!htmlrtf) { flushHex(); out.push(ch); }
+    i++;
+  }
+  flushHex();
+  var txt = out.join('');
+  // If the RTF carried HTML, markup tags came through as text — strip them.
+  if(/\\fromhtml/.test(rtf.substr(0, 400)) || /<\/?(p|div|br|span|table|td|tr|html|body)\b/i.test(txt)) {
+    txt = txt.replace(/<style[\s\S]*?<\/style>/gi, '').replace(/<br\s*\/?>/gi, '\n').replace(/<\/(p|div|tr|li|h\d)>/gi, '\n').replace(/<[^>]+>/g, '')
+      .replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"');
+  }
+  return txt.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
+}
+
+function msgParse(bytes, depth) {
+  depth = depth || 0;
+  var cfb = cfbOpen(bytes);
+  return _msgParseStorage(cfb, cfb.root, depth);
+}
+function _msgParseStorage(cfb, storage, depth) {
+  var kids = cfb.children(storage);
+  var byName = {}; kids.forEach(function(k){ byName[k.name] = k; });
+  // Fixed-size properties (dates, codepage, attach method) from __properties_version1.0
+  var props = {};
+  var pe = byName['__properties_version1.0'];
+  if(pe) {
+    var pb = cfb.read(pe), pdv = new DataView(pb.buffer, pb.byteOffset, pb.byteLength);
+    var hdr = depth === 0 ? 32 : 24; // embedded messages have a 24-byte header
+    [hdr, 24, 8].forEach(function(h){
+      for(var o = h; o + 16 <= pb.length; o += 16) {
+        var t = pdv.getUint32(o, true), id = t >>> 16, ty = t & 0xFFFF;
+        if(ty === 0x0040) { var lo = pdv.getUint32(o + 8, true), hi = pdv.getUint32(o + 12, true); var ms = (hi * 4294967296 + lo) / 10000 - 11644473600000; if(ms > 0 && ms < 4e12 && !props['d' + id]) props['d' + id] = new Date(ms); }
+        else if(ty === 0x0003 && !('i' + id in props)) props['i' + id] = pdv.getInt32(o + 8, true);
+      }
+    });
+  }
+  var cpMap = {1252:'windows-1252', 1253:'windows-1253', 1251:'windows-1251', 1250:'windows-1250', 1254:'windows-1254', 1256:'windows-1256', 28597:'iso-8859-7', 28591:'iso-8859-1', 65001:'utf-8', 20127:'ascii'};
+  var codepage = cpMap[props['i' + 0x3FDE]] || cpMap[props['i' + 0x3FFD]] || 'windows-1252';
+
+  function str(tag) { // tag like '0037' → prefers unicode 001F, falls back to 001E
+    var e = byName['__substg1.0_' + tag + '001F'];
+    if(e) { var b = cfb.read(e); return new TextDecoder('utf-16le').decode(b).replace(/\0+$/, ''); }
+    e = byName['__substg1.0_' + tag + '001E'];
+    if(e) { var b2 = cfb.read(e); try { return new TextDecoder(codepage).decode(b2).replace(/\0+$/, ''); } catch(err) { return String.fromCharCode.apply(null, b2); } }
+    return '';
+  }
+  function bin(tag) { var e = byName['__substg1.0_' + tag + '0102']; return e ? cfb.read(e) : null; }
+  var msg = {
+    subject: str('0037'), from: str('0C1A') || str('0042'), fromEmail: str('5D01') || str('0C1F') || str('0065'),
+    to: str('0E04'), cc: str('0E03'), date: props['d' + 0x0039] || props['d' + 0x0E06] || props['d' + 0x3007] || null,
+    bodyText: '', attachments: [], recipients: []
+  };
+  // Body: plain text, else HTML bytes, else compressed RTF
+  var plain = str('1000');
+  if(plain && plain.trim().length > 5) msg.bodyText = plain;
+  else {
+    var htmlB = bin('1013');
+    if(htmlB && htmlB.length > 10) {
+      var html = ''; try { html = new TextDecoder('utf-8', {fatal:true}).decode(htmlB); } catch(e) { try { html = new TextDecoder(codepage).decode(htmlB); } catch(e2) { html = String.fromCharCode.apply(null, htmlB); } }
+      msg.bodyText = html.replace(/<style[\s\S]*?<\/style>/gi,'').replace(/<br\s*\/?>/gi,'\n').replace(/<\/(p|div|tr|li|h\d)>/gi,'\n').replace(/<[^>]+>/g,'')
+        .replace(/&nbsp;/g,' ').replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&quot;/g,'"').replace(/\n{3,}/g,'\n\n').trim();
+    } else {
+      var rtfB = bin('1009');
+      if(rtfB && rtfB.length > 16) msg.bodyText = rtfToText(rtfDecompress(rtfB), codepage);
+    }
+  }
+  // Recipients
+  kids.filter(function(k){ return k.type === 1 && /^__recip_version1\.0_/.test(k.name); }).forEach(function(r){
+    var rk = {}; cfb.children(r).forEach(function(c){ rk[c.name] = c; });
+    var rs = function(tag){ var e = rk['__substg1.0_' + tag + '001F']; return e ? new TextDecoder('utf-16le').decode(cfb.read(e)).replace(/\0+$/, '') : ''; };
+    msg.recipients.push({ name: rs('3001'), email: rs('39FE') || rs('3003') });
+  });
+  if(!msg.to && msg.recipients.length) msg.to = msg.recipients.map(function(r){ return r.name + (r.email ? ' <' + r.email + '>' : ''); }).join('; ');
+  // Attachments
+  kids.filter(function(k){ return k.type === 1 && /^__attach_version1\.0_/.test(k.name); }).forEach(function(a){
+    var ak = {}; cfb.children(a).forEach(function(c){ ak[c.name] = c; });
+    var as = function(tag){ var e = ak['__substg1.0_' + tag + '001F']; return e ? new TextDecoder('utf-16le').decode(cfb.read(e)).replace(/\0+$/, '') : ''; };
+    var name = as('3707') || as('3001') || as('3704') || 'attachment';
+    var emb = ak['__substg1.0_3701000D'];
+    if(emb && emb.type === 1) {
+      // Attached Outlook item — parse it as a message of its own
+      try { msg.attachments.push({ name: name || 'Attached message', embedded: _msgParseStorage(cfb, emb, depth + 1) }); }
+      catch(e) { msg.attachments.push({ name: name, error: 'embedded message unreadable: ' + e.message }); }
+      return;
+    }
+    var dataE = ak['__substg1.0_37010102'];
+    if(dataE) msg.attachments.push({ name: name, mime: as('370E'), bytes: cfb.read(dataE) });
+  });
+  return msg;
+}
+
+
+// Turns a parsed Outlook message into API content blocks: header + body text,
+// then each attachment through the reader that fits it (PDF as a document
+// block, pictures through prepareImageForAI, Word/Excel/text/email through
+// readFileForAI, an attached Outlook item recursively as its own message).
+function _bytesToB64(u8) {
+  var CH = 8192, parts = [];
+  for(var i = 0; i < u8.length; i += CH) parts.push(String.fromCharCode.apply(null, u8.subarray(i, Math.min(i + CH, u8.length))));
+  return btoa(parts.join(''));
+}
+async function _msgToBlocks(m, fileLabel, depth) {
+  var out = [];
+  var attNames = m.attachments.map(function(a){ return a.name + (a.embedded ? ' (attached email)' : ''); });
+  var hdr = (depth ? '[ATTACHED EMAIL inside ' + fileLabel + ']' : '[OUTLOOK EMAIL: ' + fileLabel + ']') + '\n'
+    + (m.from ? 'From: ' + m.from + (m.fromEmail ? ' <' + m.fromEmail + '>' : '') + identifyEmailRole(m.from + ' ' + m.fromEmail) + '\n' : '')
+    + (m.to ? 'To: ' + m.to + '\n' : '') + (m.cc ? 'Cc: ' + m.cc + '\n' : '')
+    + (m.date ? 'Date: ' + m.date.toUTCString() + '\n' : '')
+    + (m.subject ? 'Subject: ' + m.subject + '\n' : '')
+    + (attNames.length ? 'Attachments (' + attNames.length + '): ' + attNames.join(', ') + '\n' : '');
+  var bodyTxt = (m.bodyText || '').trim();
+  out.push({type:'text', text: hdr + (bodyTxt ? '\n' + parseEmailThread(bodyTxt).substring(0, 80000) : '\n(no text body)')});
+  for(var i = 0; i < m.attachments.length; i++) {
+    var a = m.attachments[i];
+    if(a.embedded) {
+      if(depth < 3) { var sub = await _msgToBlocks(a.embedded, a.name || (fileLabel + ' › attached email'), depth + 1); sub.forEach(function(b){ out.push(b); }); }
+      continue;
+    }
+    if(a.error || !a.bytes || !a.bytes.length) { out.push({type:'text', text:'[ATTACHMENT ' + a.name + ' — ' + (a.error || 'empty') + ']'}); continue; }
+    var aext = fxt(a.name || ''), b64 = _bytesToB64(a.bytes);
+    try {
+      if(aext === 'pdf' || /pdf/i.test(a.mime || '')) {
+        if(b64.length > 40 * 1024 * 1024) out.push({type:'text', text:'[ATTACHMENT ' + a.name + ' — PDF too large to send]'});
+        else out.push({type:'document', source:{type:'base64', media_type:'application/pdf', data:b64}, title:'[EMAIL ATTACHMENT] ' + a.name});
+      } else if(aext === 'img' || aext === 'heic' || /^image\//i.test(a.mime || '')) {
+        var mimeGuess = /png/i.test(a.name + a.mime) ? 'image/png' : /gif/i.test(a.name + a.mime) ? 'image/gif' : /webp/i.test(a.name + a.mime) ? 'image/webp' : 'image/jpeg';
+        var prep = await prepareImageForAI('data:' + mimeGuess + ';base64,' + b64);
+        if(prep && prep.b64) { out.push({type:'text', text:'[EMAIL ATTACHMENT (image): ' + a.name + ']'}); out.push({type:'image', source:{type:'base64', media_type: prep.mime, data: prep.b64}}); }
+        else out.push({type:'text', text:'[ATTACHMENT ' + a.name + ' — image could not be decoded]'});
+      } else if(['doc','xls','txt','rtf','html','eml','msg'].indexOf(aext) !== -1 && depth < 3) {
+        var subBlocks = await readFileForAI({name: a.name, ext: aext, data: 'data:application/octet-stream;base64,' + b64, size: a.bytes.length});
+        (subBlocks || []).forEach(function(b){ out.push(b); });
+      } else {
+        out.push({type:'text', text:'[ATTACHMENT ' + a.name + ' (' + Math.round(a.bytes.length/1024) + 'KB) — format not readable here; see original file]'});
+      }
+    } catch(attErr) { out.push({type:'text', text:'[ATTACHMENT ' + a.name + ' — could not be read: ' + attErr.message + ']'}); }
+  }
+  return out;
+}
+
+// Last-resort .msg reader: the pre-parser byte scan. Only used when the
+// compound-file parser above throws (corrupt or truncated file).
+async function _msgHeuristicBlocks(fd, data) {
+    try {
+      var msgData = readTextFromDataUrl(data) || '';
+      var rawBin = '';
+      try {
+        var rawB64 = data.indexOf(',')!==-1 ? data.split(',')[1] : data;
+        rawBin = atob(rawB64.replace(/[\s\r\n]/g,''));
+      } catch(e) {}
+
+      // Try UTF-16LE extraction (MAPI stores strings as UTF-16LE)
+      var utf16Parts = [];
+      for(var u=0; u<Math.min(rawBin.length-1,1200000); u+=2) {
+        var lo=rawBin.charCodeAt(u)&0xff, hi=rawBin.charCodeAt(u+1)&0xff;
+        if(hi===0 && lo>=32 && lo<127) utf16Parts.push(String.fromCharCode(lo));
+        else if(lo===0x0a||(lo===0x0d&&hi===0)) utf16Parts.push('\n');
+      }
+      var utf16Text = utf16Parts.join('').replace(/\n{4,}/g,'\n\n').trim();
+
+      // Also scan ASCII bytes
+      var asciiParts = [];
+      for(var mi=0; mi<Math.min(msgData.length,800000); mi++) {
+        var cc=msgData.charCodeAt(mi);
+        if(cc>=32&&cc<127) asciiParts.push(msgData[mi]);
+        else if(cc===10||cc===13) asciiParts.push('\n');
+      }
+      var asciiText = asciiParts.join('').replace(/\n{4,}/g,'\n\n').trim();
+
+      // Try to find HTML body embedded in MSG (Outlook stores HTML body as a stream)
+      var htmlBodyText = '';
+      var htmlIdx = rawBin.toLowerCase().indexOf('<html');
+      if(htmlIdx === -1) htmlIdx = rawBin.toLowerCase().indexOf('<body');
+      if(htmlIdx !== -1) {
+        // Find the closing html tag or take up to 200KB
+        var htmlEnd = rawBin.toLowerCase().indexOf('</html>', htmlIdx);
+        if(htmlEnd === -1) htmlEnd = rawBin.toLowerCase().indexOf('</body>', htmlIdx);
+        var htmlSlice = rawBin.substring(htmlIdx, htmlEnd !== -1 ? htmlEnd + 7 : Math.min(htmlIdx + 200000, rawBin.length));
+        try {
+          // Try to decode as UTF-8
+          var htmlDecoded = '';
+          try { htmlDecoded = decodeURIComponent(escape(htmlSlice)); } catch(e) { htmlDecoded = htmlSlice; }
+          htmlBodyText = htmlDecoded
+            .replace(/<style[\s\S]*?<\/style>/gi,'').replace(/<script[\s\S]*?<\/script>/gi,'')
+            .replace(/<br\s*\/?>/gi,'\n').replace(/<\/p>/gi,'\n\n').replace(/<p[^>]*>/gi,'\n')
+            .replace(/<\/div>/gi,'\n').replace(/<div[^>]*>/gi,'')
+            .replace(/<\/tr>/gi,'\n').replace(/<tr[^>]*>/gi,'')
+            .replace(/<td[^>]*>/gi,' ').replace(/<\/li>/gi,'\n').replace(/<li[^>]*>/gi,'• ')
+            .replace(/<[^>]+>/g,'')
+            .replace(/&nbsp;/g,' ').replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&quot;/g,'"')
+            .replace(/\s{4,}/g,' ').replace(/\n{4,}/g,'\n\n').trim();
+        } catch(htmlEx) {}
+      }
+
+      // Try to find RTF body ({\rtf1 ... })
+      var rtfBodyText = '';
+      var rtfIdx = rawBin.indexOf('{\\rtf1');
+      if(rtfIdx !== -1) {
+        var rtfSlice = rawBin.substring(rtfIdx, Math.min(rtfIdx + 150000, rawBin.length));
+        rtfBodyText = rtfSlice
+          .replace(/\\[a-z]+[-]?\d* ?/gi,' ').replace(/\{[^{}]{0,100}\}/g,' ')
+          .replace(/[{}\\]/g,'').replace(/\s{2,}/g,' ').trim();
+      }
+
+      // Use whichever yielded more useful content
+      var candidates = [utf16Text, asciiText, htmlBodyText, rtfBodyText];
+      var bestText = candidates.reduce(function(a,b){ return b.length > a.length ? b : a; }, '');
+      var combined = asciiText + '\n' + utf16Text + '\n' + htmlBodyText;
+
+      // Extract structured headers
+      var fSubject = (combined.match(/^Subject:[ \t]*(.{2,200}?)[ \t]*$/im)||['',''])[1].trim();
+      var fFrom    = (combined.match(/^From:[ \t]*(.{2,200}?)[ \t]*$/im)||['',''])[1].trim();
+      var fTo      = (combined.match(/^To:[ \t]*(.{2,200}?)[ \t]*$/im)||['',''])[1].trim();
+      var fCc      = (combined.match(/^Cc:[ \t]*(.{2,200}?)[ \t]*$/im)||['',''])[1].trim();
+      var fDate    = (combined.match(/^Date:[ \t]*(.{2,80}?)[ \t]*$/im)||['',''])[1].trim()
+        || (combined.match(/(Mon|Tue|Wed|Thu|Fri|Sat|Sun)[^,\n]*,?\s*\d{1,2}\s+\w+\s+\d{4}/i)||[''])[0];
+
+      // Clean content lines (filter base64 blobs and junk)
+      var msgLines = bestText.split('\n').filter(function(l){
+        var t=l.trim();
+        return t.length>5 && /[a-zA-Z]{3,}/.test(t) && !/^[A-Za-z0-9+/]{50,}=*$/.test(t);
+      });
+      var msgClean = msgLines.join('\n').replace(/\n{4,}/g,'\n\n').trim();
+
+      // Scan binary for attachment filenames (look for .pdf .jpg .docx etc. in both ASCII and UTF-16)
+      var attachMentions = [];
+      var fnRe = /[\w\- ()]+\.(pdf|docx?|xlsx?|jpg|jpeg|png|tiff?|gif|rtf|txt|eml)/gi;
+      var fnMatches = combined.match(fnRe) || [];
+      fnMatches.forEach(function(fn){
+        fn = fn.trim();
+        if(fn.length > 4 && fn.length < 120 && attachMentions.indexOf(fn)===-1)
+          attachMentions.push(fn);
+      });
+
+      // Also scan binary for embedded PDF signatures — find %PDF- occurrences
+      var msgBlocks = [];
+      if(rawBin) try {
+        var pdfIdx = 0;
+        var pdfCount = 0;
+        while((pdfIdx = rawBin.indexOf('%PDF-', pdfIdx)) !== -1 && pdfCount < 5) {
+          // Find %%EOF
+          var eofIdx = rawBin.indexOf('%%EOF', pdfIdx);
+          if(eofIdx !== -1 && eofIdx - pdfIdx > 100 && eofIdx - pdfIdx < 8000000) {
+            var pdfSlice = rawBin.substring(pdfIdx, eofIdx+5);
+            try {
+              var pdfB64 = '';
+              var CHUNK2 = 8192;
+              for(var ci=0; ci<pdfSlice.length; ci+=CHUNK2)
+                pdfB64 += btoa(pdfSlice.substring(ci, ci+CHUNK2));
+              pdfB64 = pdfB64.replace(/[^A-Za-z0-9+/=]/g,'');
+              while(pdfB64.length%4!==0) pdfB64+='=';
+              if(pdfB64.length > 500) {
+                var pdfName = (attachMentions[pdfCount]||('attachment_'+(pdfCount+1)+'.pdf'));
+                if(!/\.pdf$/i.test(pdfName)) pdfName += '.pdf';
+                msgBlocks.push({type:'document', source:{type:'base64',media_type:'application/pdf',data:pdfB64},
+                  title:'[MSG ATTACHMENT] '+pdfName});
+                pdfCount++;
+              }
+            } catch(pdfEx){}
+          }
+          pdfIdx += 5;
+        }
+      } catch(binEx){}
+
+      if(msgClean.length > 15 || msgBlocks.length > 0) {
+        var msgHdr = '[OUTLOOK EMAIL: '+fd.name+']\n'
+          +(fFrom?'From: '+fFrom+identifyEmailRole(fFrom)+'\n':'')
+          +(fTo?'To: '+fTo+identifyEmailRole(fTo)+'\n':'')
+          +(fCc?'Cc: '+fCc+'\n':'')
+          +(fDate?'Date: '+fDate+'\n':'')
+          +(fSubject?'Subject: '+fSubject+'\n':'')
+          +(attachMentions.length?'Attachments mentioned: '+attachMentions.join(', ')+'\n':'');
+        var threadParsed = parseEmailThread(msgClean);
+        var resultBlocks = [{type:'text', text:msgHdr+(msgClean.length>50?'\n'+threadParsed.substring(0,80000):'')}];
+        return resultBlocks.concat(msgBlocks);
+      }
+    } catch(msgErr) { console.warn('[readFileForAI] MSG parse failed:', msgErr.message); }
+    return [{type:'text', text:'[OUTLOOK EMAIL: '+fd.name+' — binary format; file saved in case for manual review]'}];
+  
+}
+
 async function readFileForAI(fd) {
   var ext = fd.ext || fxt(fd.name||'');
   var data = fd.data||'';
@@ -11891,226 +12451,25 @@ async function readFileForAI(fd) {
   // EMAIL PARSING HELPERS (shared by .msg and .eml handlers)
   // ═══════════════════════════════════════════════════════════
 
-  // Strip HTML to readable text while preserving table/list structure
-  function htmlEmailToText(html) {
-    return html
-      .replace(/<style[\s\S]*?<\/style>/gi,'')
-      .replace(/<script[\s\S]*?<\/script>/gi,'')
-      .replace(/<br\s*\/?>/gi,'\n')
-      .replace(/<\/p>/gi,'\n\n').replace(/<p[^>]*>/gi,'\n')
-      .replace(/<\/div>/gi,'\n').replace(/<div[^>]*>/gi,'')
-      .replace(/<\/tr>/gi,'\n').replace(/<tr[^>]*>/gi,'')
-      .replace(/<td[^>]*>/gi,'  ').replace(/<th[^>]*>/gi,'  ')
-      .replace(/<\/li>/gi,'\n').replace(/<li[^>]*>/gi,'• ')
-      .replace(/<h[1-6][^>]*>/gi,'\n\n').replace(/<\/h[1-6]>/gi,'\n')
-      .replace(/<hr[^>]*>/gi,'\n────────────────────\n')
-      .replace(/<[^>]+>/g,'')
-      .replace(/&nbsp;/g,' ').replace(/&amp;/g,'&').replace(/&lt;/g,'<')
-      .replace(/&gt;/g,'>').replace(/&quot;/g,'"').replace(/&#(\d+);/g,function(m,n){return String.fromCharCode(parseInt(n));})
-      .replace(/\t{3,}/g,'  ').replace(/ {4,}/g,'   ')
-      .replace(/\n{4,}/g,'\n\n').trim();
-  }
+  // (htmlEmailToText / parseEmailThread / identifyEmailRole are top-level now — see above readFileForAI)
 
-  // Split an email body with quoted/forwarded chains into labeled sections
-  function parseEmailThread(body) {
-    var SPLITS = [
-      /^-{3,}\s*(?:Original Message|Original E-?mail|Forwarded message|Begin forwarded message)\s*-{3,}/im,
-      /^On .{10,200}wrote:\s*$/im,
-      /^From:[ \t]+\S.*\r?\nSent:[ \t]+/im,
-      /^-{2,}[ \t]*Forwarded/im,
-      /^={5,}$/m,
-      /^_{5,}$/m,
-    ];
-    var bestSplit = null, bestIdx = Infinity;
-    SPLITS.forEach(function(re){
-      var m = re.exec(body);
-      if(m && m.index < bestIdx){ bestSplit = m; bestIdx = m.index; }
-    });
-
-    if(!bestSplit) {
-      // Line-quoted thread (> prefix)
-      var lines = body.split('\n');
-      var direct = [], quoted = [];
-      lines.forEach(function(l){ (/^\s*>/.test(l) ? quoted : direct).push(l.replace(/^\s*>+\s?/,'')); });
-      if(quoted.length > 5 && direct.length > 1) {
-        return '=== CURRENT MESSAGE ===\n'+direct.join('\n').trim()
-          +'\n\n=== QUOTED PRIOR CORRESPONDENCE ===\n'+quoted.join('\n').trim();
-      }
-      return body;
-    }
-
-    // Split at each detected boundary
-    var segments = [], cursor = 0, pass = body, n = 0;
-    while(n < 8) {
-      var firstSplit = null, firstIdx2 = Infinity;
-      SPLITS.forEach(function(re){
-        var m2 = re.exec(pass.substring(cursor));
-        if(m2 && (cursor + m2.index) < firstIdx2){ firstSplit = m2; firstIdx2 = cursor + m2.index; }
-      });
-      if(!firstSplit) break;
-      var seg = pass.substring(cursor, firstIdx2).trim();
-      if(seg.length > 20) segments.push(seg);
-      cursor = firstIdx2 + firstSplit[0].length;
-      n++;
-    }
-    var tail = pass.substring(cursor).trim();
-    if(tail.length > 20) segments.push(tail);
-
-    if(segments.length < 2) return body;
-    return segments.map(function(s,i){
-      return '=== EMAIL CHAIN — '+(i===0?'LATEST':'PRIOR #'+i)+' ===\n'+s;
-    }).join('\n\n');
-  }
-
-  // Identify sender role from email/name string
-  function identifyEmailRole(str) {
-    if(!str) return '';
-    var s = str.toLowerCase();
-    if(/hospital|clinic|medical cent|health cent|medic|nhs|spital/i.test(s)) return ' [HOSPITAL/CLINIC]';
-    if(/\bdr\.?\b|doctor|physician|specialist|surgeon|prof\./i.test(s)) return ' [DOCTOR]';
-    if(/insurance|insur(?:er|ance)|\btpa\b|assist|aon|aig|allianz|axa|zurich|cigna|bupa|generali|globelink|mapfre|medlink/i.test(s)) return ' [INSURER/TPA]';
-    if(/pharmac/i.test(s)) return ' [PHARMACY]';
-    if(/@(?:gmail|hotmail|yahoo|outlook|live|proton|icloud|me\.com)/i.test(s)) return ' [PATIENT/INDIVIDUAL]';
-    return '';
-  }
-
-  // ── Outlook .msg — MAPI binary format, enhanced extraction ──
+  // ── Outlook .msg — proper compound-file + MAPI parse ──
   if(ext==='msg') {
+    var msgBytes = null;
     try {
-      var msgData = readTextFromDataUrl(data) || '';
-      var rawBin = '';
+      var rawB64m = data.indexOf(',')!==-1 ? data.split(',')[1] : data;
+      msgBytes = new Uint8Array(b64AB(rawB64m));
+    } catch(e) { msgBytes = null; }
+    if(msgBytes && msgBytes.length > 512) {
       try {
-        var rawB64 = data.indexOf(',')!==-1 ? data.split(',')[1] : data;
-        rawBin = atob(rawB64.replace(/[\s\r\n]/g,''));
-      } catch(e) {}
-
-      // Try UTF-16LE extraction (MAPI stores strings as UTF-16LE)
-      var utf16Parts = [];
-      for(var u=0; u<Math.min(rawBin.length-1,1200000); u+=2) {
-        var lo=rawBin.charCodeAt(u)&0xff, hi=rawBin.charCodeAt(u+1)&0xff;
-        if(hi===0 && lo>=32 && lo<127) utf16Parts.push(String.fromCharCode(lo));
-        else if(lo===0x0a||(lo===0x0d&&hi===0)) utf16Parts.push('\n');
+        var parsedMsg = msgParse(msgBytes);
+        var blocksOut = await _msgToBlocks(parsedMsg, fd.name, 0);
+        if(blocksOut.length) return blocksOut;
+      } catch(msgParseErr) {
+        console.warn('[readFileForAI] MSG structured parse failed, falling back to byte scan:', fd.name, msgParseErr.message);
       }
-      var utf16Text = utf16Parts.join('').replace(/\n{4,}/g,'\n\n').trim();
-
-      // Also scan ASCII bytes
-      var asciiParts = [];
-      for(var mi=0; mi<Math.min(msgData.length,800000); mi++) {
-        var cc=msgData.charCodeAt(mi);
-        if(cc>=32&&cc<127) asciiParts.push(msgData[mi]);
-        else if(cc===10||cc===13) asciiParts.push('\n');
-      }
-      var asciiText = asciiParts.join('').replace(/\n{4,}/g,'\n\n').trim();
-
-      // Try to find HTML body embedded in MSG (Outlook stores HTML body as a stream)
-      var htmlBodyText = '';
-      var htmlIdx = rawBin.toLowerCase().indexOf('<html');
-      if(htmlIdx === -1) htmlIdx = rawBin.toLowerCase().indexOf('<body');
-      if(htmlIdx !== -1) {
-        // Find the closing html tag or take up to 200KB
-        var htmlEnd = rawBin.toLowerCase().indexOf('</html>', htmlIdx);
-        if(htmlEnd === -1) htmlEnd = rawBin.toLowerCase().indexOf('</body>', htmlIdx);
-        var htmlSlice = rawBin.substring(htmlIdx, htmlEnd !== -1 ? htmlEnd + 7 : Math.min(htmlIdx + 200000, rawBin.length));
-        try {
-          // Try to decode as UTF-8
-          var htmlDecoded = '';
-          try { htmlDecoded = decodeURIComponent(escape(htmlSlice)); } catch(e) { htmlDecoded = htmlSlice; }
-          htmlBodyText = htmlDecoded
-            .replace(/<style[\s\S]*?<\/style>/gi,'').replace(/<script[\s\S]*?<\/script>/gi,'')
-            .replace(/<br\s*\/?>/gi,'\n').replace(/<\/p>/gi,'\n\n').replace(/<p[^>]*>/gi,'\n')
-            .replace(/<\/div>/gi,'\n').replace(/<div[^>]*>/gi,'')
-            .replace(/<\/tr>/gi,'\n').replace(/<tr[^>]*>/gi,'')
-            .replace(/<td[^>]*>/gi,' ').replace(/<\/li>/gi,'\n').replace(/<li[^>]*>/gi,'• ')
-            .replace(/<[^>]+>/g,'')
-            .replace(/&nbsp;/g,' ').replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&quot;/g,'"')
-            .replace(/\s{4,}/g,' ').replace(/\n{4,}/g,'\n\n').trim();
-        } catch(htmlEx) {}
-      }
-
-      // Try to find RTF body ({\rtf1 ... })
-      var rtfBodyText = '';
-      var rtfIdx = rawBin.indexOf('{\\rtf1');
-      if(rtfIdx !== -1) {
-        var rtfSlice = rawBin.substring(rtfIdx, Math.min(rtfIdx + 150000, rawBin.length));
-        rtfBodyText = rtfSlice
-          .replace(/\\[a-z]+[-]?\d* ?/gi,' ').replace(/\{[^{}]{0,100}\}/g,' ')
-          .replace(/[{}\\]/g,'').replace(/\s{2,}/g,' ').trim();
-      }
-
-      // Use whichever yielded more useful content
-      var candidates = [utf16Text, asciiText, htmlBodyText, rtfBodyText];
-      var bestText = candidates.reduce(function(a,b){ return b.length > a.length ? b : a; }, '');
-      var combined = asciiText + '\n' + utf16Text + '\n' + htmlBodyText;
-
-      // Extract structured headers
-      var fSubject = (combined.match(/^Subject:[ \t]*(.{2,200}?)[ \t]*$/im)||['',''])[1].trim();
-      var fFrom    = (combined.match(/^From:[ \t]*(.{2,200}?)[ \t]*$/im)||['',''])[1].trim();
-      var fTo      = (combined.match(/^To:[ \t]*(.{2,200}?)[ \t]*$/im)||['',''])[1].trim();
-      var fCc      = (combined.match(/^Cc:[ \t]*(.{2,200}?)[ \t]*$/im)||['',''])[1].trim();
-      var fDate    = (combined.match(/^Date:[ \t]*(.{2,80}?)[ \t]*$/im)||['',''])[1].trim()
-        || (combined.match(/(Mon|Tue|Wed|Thu|Fri|Sat|Sun)[^,\n]*,?\s*\d{1,2}\s+\w+\s+\d{4}/i)||[''])[0];
-
-      // Clean content lines (filter base64 blobs and junk)
-      var msgLines = bestText.split('\n').filter(function(l){
-        var t=l.trim();
-        return t.length>5 && /[a-zA-Z]{3,}/.test(t) && !/^[A-Za-z0-9+/]{50,}=*$/.test(t);
-      });
-      var msgClean = msgLines.join('\n').replace(/\n{4,}/g,'\n\n').trim();
-
-      // Scan binary for attachment filenames (look for .pdf .jpg .docx etc. in both ASCII and UTF-16)
-      var attachMentions = [];
-      var fnRe = /[\w\- ()]+\.(pdf|docx?|xlsx?|jpg|jpeg|png|tiff?|gif|rtf|txt|eml)/gi;
-      var fnMatches = combined.match(fnRe) || [];
-      fnMatches.forEach(function(fn){
-        fn = fn.trim();
-        if(fn.length > 4 && fn.length < 120 && attachMentions.indexOf(fn)===-1)
-          attachMentions.push(fn);
-      });
-
-      // Also scan binary for embedded PDF signatures — find %PDF- occurrences
-      var msgBlocks = [];
-      if(rawBin) try {
-        var pdfIdx = 0;
-        var pdfCount = 0;
-        while((pdfIdx = rawBin.indexOf('%PDF-', pdfIdx)) !== -1 && pdfCount < 5) {
-          // Find %%EOF
-          var eofIdx = rawBin.indexOf('%%EOF', pdfIdx);
-          if(eofIdx !== -1 && eofIdx - pdfIdx > 100 && eofIdx - pdfIdx < 8000000) {
-            var pdfSlice = rawBin.substring(pdfIdx, eofIdx+5);
-            try {
-              var pdfB64 = '';
-              var CHUNK2 = 8192;
-              for(var ci=0; ci<pdfSlice.length; ci+=CHUNK2)
-                pdfB64 += btoa(pdfSlice.substring(ci, ci+CHUNK2));
-              pdfB64 = pdfB64.replace(/[^A-Za-z0-9+/=]/g,'');
-              while(pdfB64.length%4!==0) pdfB64+='=';
-              if(pdfB64.length > 500) {
-                var pdfName = (attachMentions[pdfCount]||('attachment_'+(pdfCount+1)+'.pdf'));
-                if(!/\.pdf$/i.test(pdfName)) pdfName += '.pdf';
-                msgBlocks.push({type:'document', source:{type:'base64',media_type:'application/pdf',data:pdfB64},
-                  title:'[MSG ATTACHMENT] '+pdfName});
-                pdfCount++;
-              }
-            } catch(pdfEx){}
-          }
-          pdfIdx += 5;
-        }
-      } catch(binEx){}
-
-      if(msgClean.length > 15 || msgBlocks.length > 0) {
-        var msgHdr = '[OUTLOOK EMAIL: '+fd.name+']\n'
-          +(fFrom?'From: '+fFrom+identifyEmailRole(fFrom)+'\n':'')
-          +(fTo?'To: '+fTo+identifyEmailRole(fTo)+'\n':'')
-          +(fCc?'Cc: '+fCc+'\n':'')
-          +(fDate?'Date: '+fDate+'\n':'')
-          +(fSubject?'Subject: '+fSubject+'\n':'')
-          +(attachMentions.length?'Attachments mentioned: '+attachMentions.join(', ')+'\n':'');
-        var threadParsed = parseEmailThread(msgClean);
-        var resultBlocks = [{type:'text', text:msgHdr+(msgClean.length>50?'\n'+threadParsed.substring(0,80000):'')}];
-        return resultBlocks.concat(msgBlocks);
-      }
-    } catch(msgErr) { console.warn('[readFileForAI] MSG parse failed:', msgErr.message); }
-    return [{type:'text', text:'[OUTLOOK EMAIL: '+fd.name+' — binary format; file saved in case for manual review]'}];
+    }
+    return await _msgHeuristicBlocks(fd, data);
   }
 
   // ── .eml — full MIME parser with thread splitting + attachment extraction ──
