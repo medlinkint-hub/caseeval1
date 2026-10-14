@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
-<meta name="version" content="1780590000">
+<meta name="version" content="1780620000">
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
@@ -7030,13 +7030,16 @@ async function extractInvoiceData(fd) {
     mc.push({type:'document', source:{type:'base64', media_type:'application/pdf', data:b64}, title:fd.name});
 
   } else if(fd.ext === 'doc') {
-    // Word documents (doc/docx) - extract text via mammoth
+    // Word documents (doc/docx) — same reader as the evaluation, so tables
+    // are kept and embedded pictures (a pasted invoice screenshot) are sent
+    // as images instead of the file being treated as empty.
     try {
-      const ab = b64AB(fd.data.split(',')[1]);
-      const r = await mammoth.extractRawText({arrayBuffer:ab});
-      const txt = r.value ? r.value.trim() : '';
-      if(!txt) { console.warn('Empty Word doc:', fd.name); return null; }
-      mc.push({type:'text', text:'[WORD DOCUMENT: '+fd.name+']\n\n'+txt});
+      const docBlocks = await readFileForAI(fd);
+      const usable = (docBlocks||[]).filter(function(b){
+        return b.type === 'image' || (b.type === 'text' && !/contains no extractable text/.test(b.text||''));
+      });
+      if(!usable.length) { console.warn('Empty Word doc:', fd.name); return null; }
+      usable.forEach(function(b){ mc.push(b); });
     } catch(e) {
       console.error('Word doc error:', fd.name, e);
       return null;
@@ -8575,7 +8578,7 @@ function buildAmountString(caseObj) {
 // ══════════════════════════════════════════════════════════════
 
 // ── App version — update on every significant deployment ──
-var APP_BUILD = 1780590000; // epoch-style build number (matches <meta name="version">)
+var APP_BUILD = 1780620000; // epoch-style build number (matches <meta name="version">)
 
 var FB_APP = null;
 var FB_DB = null;
@@ -11680,9 +11683,34 @@ async function readFileForAI(fd) {
 
     if(!b64wRaw) return [{type:'text', text:'[Word document: '+fd.name+' — no data]'}];
 
+    // Sniff the real format — users (and Outlook "Save as") produce files whose
+    // extension says .docx but whose bytes are RTF, an Outlook .msg, or a
+    // legacy binary .doc. Routing those to the right reader beats letting the
+    // ZIP-based strategies below fail on them.
+    try {
+      var _head = atob(b64wRaw.substring(0, 64));
+      if(_head.indexOf('{\\rtf') === 0) {
+        console.log('[readFileForAI] .doc(x) is actually RTF:', fd.name);
+        return await readFileForAI(Object.assign({}, fd, {ext:'rtf'}));
+      }
+      if(_head.charCodeAt(0) === 0xD0 && _head.charCodeAt(1) === 0xCF) {
+        // Compound File Binary: either an old .doc or an Outlook .msg
+        var _probe = atob(b64wRaw.substring(0, Math.min(b64wRaw.length, 400000)));
+        if(/__substg1\.0_|__properties_version1\.0|_\x00_\x00s\x00u\x00b\x00s\x00t\x00g/.test(_probe)) {
+          console.log('[readFileForAI] .doc(x) is actually an Outlook .msg:', fd.name);
+          return await readFileForAI(Object.assign({}, fd, {ext:'msg'}));
+        }
+      }
+    } catch(_sniffErr) {}
+
     // Strategy 1: Mammoth (best quality — preserves tables via htmlToMdWithTables)
     // Uses convertToHtml (not extractRawText) so that policy benefit schedules,
     // billing tables, and diagnosis grids are converted to pipe-table Markdown.
+    // Embedded pictures are extracted too: a Word file that is just a pasted
+    // screenshot of an email or a scanned page has NO text for any strategy
+    // to find, and used to come out as "text extraction failed" — the AI then
+    // reported the document as unreadable. mammoth inlines pictures as
+    // data-URI <img> tags, so they are collected and sent as image blocks.
     if(typeof mammoth !== 'undefined') {
       try {
         var ab = b64AB(b64wRaw);
@@ -11693,22 +11721,43 @@ async function readFileForAI(fd) {
         } catch(htmlErr) {
           console.warn('[readFileForAI] mammoth.convertToHtml failed, falling back to extractRawText:', htmlErr.message);
         }
+        var docImageBlocks = [];
+        if(htmlResult && htmlResult.value) {
+          var imgSrcs = [];
+          htmlResult.value.replace(/<img[^>]+src="(data:image\/[^"]+)"/gi, function(m, src){ if(imgSrcs.length < 8) imgSrcs.push(src); return m; });
+          for(var ii = 0; ii < imgSrcs.length; ii++) {
+            try {
+              var prepImg = await prepareImageForAI(imgSrcs[ii], {enhance: true});
+              if(prepImg && prepImg.b64 && prepImg.width >= 120 && prepImg.height >= 120) { // skip logos/icons
+                docImageBlocks.push({type:'image', source:{type:'base64', media_type: prepImg.mime, data: prepImg.b64}});
+              }
+            } catch(imgErr) { console.warn('[readFileForAI] embedded image skipped:', imgErr.message); }
+          }
+        }
+        var docTextOut = '';
         if(htmlResult && htmlResult.value && htmlResult.value.length > 10) {
           var mdText = htmlToMdWithTables(htmlResult.value);
           if(mdText && mdText.length > 10) {
-            var truncated = mdText.length > 40000 ? mdText.substring(0, 40000) + '\n[... document truncated at 40 000 chars ...]' : mdText;
-            console.log('[readFileForAI] Mammoth (HTML→MD):', fd.name, truncated.length, 'chars');
-            return [{type:'text', text:'[WORD DOC: '+fd.name+']\n\n'+truncated}];
+            docTextOut = mdText.length > 40000 ? mdText.substring(0, 40000) + '\n[... document truncated at 40 000 chars ...]' : mdText;
+            console.log('[readFileForAI] Mammoth (HTML→MD):', fd.name, docTextOut.length, 'chars,', docImageBlocks.length, 'image(s)');
           }
         }
-        // Fallback within Strategy 1: extractRawText (no table structure)
-        var rawRes = await mammoth.extractRawText({arrayBuffer: b64AB(b64wRaw)});
-        var rawTxt = (rawRes.value||'').trim();
-        if(rawTxt && rawTxt.length > 10) {
-          console.log('[readFileForAI] Mammoth (rawText fallback):', fd.name, rawTxt.length, 'chars');
-          return [{type:'text', text:'[WORD DOC: '+fd.name+']\n\n'+rawTxt.substring(0, 20000)}];
+        if(!docTextOut) {
+          // Fallback within Strategy 1: extractRawText (no table structure)
+          var rawRes = await mammoth.extractRawText({arrayBuffer: b64AB(b64wRaw)});
+          var rawTxt = (rawRes.value||'').trim();
+          if(rawTxt && rawTxt.length > 10) {
+            docTextOut = rawTxt.substring(0, 20000);
+            console.log('[readFileForAI] Mammoth (rawText fallback):', fd.name, rawTxt.length, 'chars,', docImageBlocks.length, 'image(s)');
+          }
         }
-        // Mammoth returned empty — fall through to Strategy 2
+        if(docTextOut || docImageBlocks.length) {
+          var header = '[WORD DOC: '+fd.name+']'
+            + (docImageBlocks.length ? '\n(This document contains '+docImageBlocks.length+' embedded picture(s) — e.g. a pasted email, screenshot or scanned page — shown as the image(s) that follow. Read them in full.)' : '')
+            + (docTextOut ? '\n\n'+docTextOut : (docImageBlocks.length ? '\n\n(No typed text in this document — all content is in the picture(s).)' : ''));
+          return [{type:'text', text: header}].concat(docImageBlocks);
+        }
+        // Mammoth returned nothing — fall through to Strategy 2
       } catch(mammothErr) {
         console.warn('[readFileForAI] Mammoth failed for', fd.name, ':', mammothErr.message);
       }
@@ -11780,7 +11829,7 @@ async function readFileForAI(fd) {
     }
 
     // Strategy 4: Absolute fallback — tell Claude file exists with size info
-    return [{type:'text', text:'[WORD DOCUMENT: '+fd.name+' ('+Math.round(b64wRaw.length*0.75/1024)+'KB) — text extraction failed. File is saved. Evaluate based on all other documents and case details provided.'}];
+    return [{type:'text', text:'[WORD DOCUMENT: '+fd.name+' ('+Math.round(b64wRaw.length*0.75/1024)+'KB) — contains no extractable text or pictures (possibly empty, password-protected, or not a real Word file). Evaluate based on all other documents and case details provided, and list this file under missing/unreadable evidence.'}];
   } // end if(ext==='doc')
 
   // ── Excel xls/xlsx/ods ───────────────────────────────────────
