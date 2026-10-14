@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
-<meta name="version" content="1780650000">
+<meta name="version" content="1780680000">
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
@@ -8578,7 +8578,7 @@ function buildAmountString(caseObj) {
 // ══════════════════════════════════════════════════════════════
 
 // ── App version — update on every significant deployment ──
-var APP_BUILD = 1780650000; // epoch-style build number (matches <meta name="version">)
+var APP_BUILD = 1780680000; // epoch-style build number (matches <meta name="version">)
 
 var FB_APP = null;
 var FB_DB = null;
@@ -12472,22 +12472,60 @@ async function readFileForAI(fd) {
     return await _msgHeuristicBlocks(fd, data);
   }
 
-  // ── .eml — full MIME parser with thread splitting + attachment extraction ──
+  // ── .eml — full MIME parser: charset-aware, async attachment routing ──
   if(ext==='eml') {
-    var emlRaw = readTextFromDataUrl(data);
+    // Work on the RAW bytes (as a binary string). Decoding the whole file as
+    // UTF-8 up front — the previous approach — garbled every message whose
+    // parts declare another charset (ISO-8859-7 / windows-1253 Greek mail is
+    // common here) and could not decode quoted-printable UTF-8 at all.
+    var emlRaw = '';
+    try {
+      if(data.indexOf(';base64,') !== -1) emlRaw = atob(data.split(';base64,')[1].replace(/\s/g,''));
+      else if(data.indexOf(',') !== -1) emlRaw = decodeURIComponent(data.split(',').slice(1).join(','));
+      else emlRaw = data;
+    } catch(e) { emlRaw = readTextFromDataUrl(data) || ''; }
     if(!emlRaw || emlRaw.length < 10) return [{type:'text', text:'[Email: '+fd.name+' — could not decode]'}];
 
-    // Safe binary → base64 (chunked to avoid stack overflow)
-    function binToB64(bin) {
-      var CHUNK=8192, parts=[];
-      for(var bi=0;bi<bin.length;bi+=CHUNK) {
-        parts.push(String.fromCharCode.apply(null,
-          Array.prototype.slice.call(new Uint8Array(
-            Array.from({length:Math.min(CHUNK,bin.length-bi)},function(_,j){return bin.charCodeAt(bi+j)&0xff;})
-          ))
-        ));
+    // Binary string → base64 (chunked)
+    function binToB64(bin) { return btoa(bin); }
+    // Binary string → text using a MIME charset (TextDecoder labels), with
+    // UTF-8 auto-detection when the charset is missing or wrong.
+    function bytesToText(bin, charset) {
+      var u8 = new Uint8Array(bin.length);
+      for(var i=0;i<bin.length;i++) u8[i] = bin.charCodeAt(i) & 0xFF;
+      var cs = (charset||'').toLowerCase().replace(/["']/g,'').trim();
+      if(/^(utf-?8|us-ascii|ascii)$/.test(cs) || !cs) {
+        try { return new TextDecoder('utf-8', {fatal:true}).decode(u8); } catch(e) {}
+        if(!cs) { try { return new TextDecoder('windows-1252').decode(u8); } catch(e2) { return bin; } }
       }
-      return btoa(parts.join(''));
+      try { return new TextDecoder(cs).decode(u8); } catch(e3) {}
+      try { return new TextDecoder('utf-8').decode(u8); } catch(e4) { return bin; }
+    }
+    function qpToBin(str) {
+      return str.replace(/=\r?\n/g,'').replace(/=([0-9A-Fa-f]{2})/g, function(m,h){ return String.fromCharCode(parseInt(h,16)); });
+    }
+    // RFC 2047 encoded words in headers: =?charset?B|Q?....?=
+    function decodeMimeWords(str) {
+      if(!str || str.indexOf('=?') === -1) return str || '';
+      return str.replace(/\?=\s+=\?/g, '?==?').replace(/=\?([^?]+)\?([BbQq])\?([^?]*)\?=/g, function(m, cs, enc, txt) {
+        try {
+          var bin = /b/i.test(enc) ? atob(txt.replace(/\s/g,'')) : qpToBin(txt.replace(/_/g,' '));
+          return bytesToText(bin, cs);
+        } catch(e) { return m; }
+      });
+    }
+    function headerParam(hdr, name) {
+      // RFC 2231 (filename*=utf-8''..., filename*0*=..., filename*1=...) and plain quoted values
+      if(!hdr) return '';
+      var cont = [], re = new RegExp(name + '\\*(\\d+)\\*?=\\s*("[^"]*"|[^;\\r\\n]+)', 'gi'), m;
+      while((m = re.exec(hdr)) !== null) cont[parseInt(m[1],10)] = m[2].replace(/^"|"$/g,'');
+      var val = cont.length ? cont.join('') : '';
+      if(!val) { var m2 = new RegExp(name + '\\*=\\s*("[^"]*"|[^;\\r\\n]+)', 'i').exec(hdr); if(m2) val = m2[1].replace(/^"|"$/g,''); }
+      if(!val) { var m3 = new RegExp(name + '=\\s*("[^"]*"|[^;\\r\\n]+)', 'i').exec(hdr); if(m3) return decodeMimeWords(m3[1].replace(/^"|"$/g,'').trim()); }
+      if(!val) return '';
+      var csM = /^([^']*)'[^']*'(.*)$/.exec(val);
+      var cs = csM ? csM[1] : 'utf-8'; if(csM) val = csM[2];
+      try { return bytesToText(val.replace(/%([0-9A-Fa-f]{2})/g, function(mm,h){ return String.fromCharCode(parseInt(h,16)); }), cs); } catch(e) { return val; }
     }
 
     function splitHeaderBody(raw) {
@@ -12496,35 +12534,20 @@ async function readFileForAI(fd) {
       var nlLen=raw[idx]==='\r'?2:1;
       return {hdr:raw.substring(0,idx), body:raw.substring(idx+nlLen*2)};
     }
-
     function parseHeaders(hdrStr) {
       var hdrs={}, lines=hdrStr.replace(/\r\n/g,'\n').split('\n'), cur='';
-      lines.forEach(function(l){
-        if(/^[\t ]/.test(l)){cur+=' '+l.trim();return;}
-        if(cur){var ci=cur.indexOf(':'); if(ci>0) hdrs[cur.substring(0,ci).toLowerCase().trim()]=cur.substring(ci+1).trim();}
-        cur=l;
-      });
-      if(cur){var ci=cur.indexOf(':'); if(ci>0) hdrs[cur.substring(0,ci).toLowerCase().trim()]=cur.substring(ci+1).trim();}
+      var commit=function(){ if(cur){ var ci=cur.indexOf(':'); if(ci>0) hdrs[cur.substring(0,ci).toLowerCase().trim()]=cur.substring(ci+1).trim(); } };
+      lines.forEach(function(l){ if(/^[\t ]/.test(l)){cur+=' '+l.trim();return;} commit(); cur=l; });
+      commit();
       return hdrs;
     }
-
-    function decodeBody(bodyStr, enc) {
-      try {
-        if(enc==='base64') {
-          var bin=atob(bodyStr.replace(/[\s\r\n]/g,''));
-          // Try UTF-8 decode for text parts (common for non-ASCII emails — Arabic, Greek, etc.)
-          // Skip for large binary content (>200KB) to avoid performance hit
-          if(bin.length < 200000) {
-            try { return decodeURIComponent(escape(bin)); } catch(e){}
-          }
-          return bin;
-        }
-        if(enc==='quoted-printable') return bodyStr.replace(/=\r?\n/g,'').replace(/=([0-9A-Fa-f]{2})/g,function(m,h){return String.fromCharCode(parseInt(h,16));});
-      } catch(e) {}
-      // Try UTF-8 decode for 8bit / 7bit
-      try { return decodeURIComponent(escape(bodyStr)); } catch(e2) {}
-      return bodyStr;
+    // Returns the part's raw bytes as a binary string (transfer-decoding applied)
+    function partBin(part) {
+      if(part.enc==='base64') { try { return atob(part.rawBody.replace(/[^A-Za-z0-9+/=]/g,'')); } catch(e) { return ''; } }
+      if(part.enc==='quoted-printable') return qpToBin(part.rawBody);
+      return part.rawBody;
     }
+    function partText(part) { return bytesToText(partBin(part), part.charset); }
 
     function parseMIMEParts(raw) {
       var sb=splitHeaderBody(raw);
@@ -12532,259 +12555,177 @@ async function readFileForAI(fd) {
       var ct=hdrs['content-type']||'text/plain';
       var enc=(hdrs['content-transfer-encoding']||'').toLowerCase().trim();
       var disp=hdrs['content-disposition']||'';
-      var fnM=disp.match(/filename\*?(?:=|\*0\*=)["'\s]?([^"';\r\n]+)/i)||ct.match(/name=["'\s]?([^"'\s;]+)/i);
-      var fname2=fnM?fnM[1].replace(/^utf-8''/i,'').replace(/["']/g,'').trim():'';
-      // Handle RFC 2231 encoded filenames
-      if(fname2) fname2=fname2.replace(/%([0-9A-Fa-f]{2})/g,function(m,h){return String.fromCharCode(parseInt(h,16));});
-      var bndM=ct.match(/boundary=["\']?([^"\';\s\r\n]+)["\']?/i);
-      if(bndM) {
-        var bnd='--'+bndM[1];
+      var fname2 = headerParam(disp,'filename') || headerParam(ct,'name') || '';
+      var csM = /charset=\s*"?([^";\s]+)/i.exec(ct);
+      var charset = csM ? csM[1] : '';
+      var cidM = /^<?([^>]+)>?$/.exec((hdrs['content-id']||'').trim());
+      var bndM=ct.match(/boundary=\s*"([^"]+)"|boundary=\s*([^;\s\r\n]+)/i);
+      var bndVal = bndM ? (bndM[1]||bndM[2]) : '';
+      if(bndVal && /multipart\//i.test(ct)) {
+        var bnd='--'+bndVal;
         var bodyNorm=sb.body.replace(/\r\n/g,'\n');
-        var sections=[]; var cur2=[];
+        var sections=[], cur2=[], started=false;
         bodyNorm.split('\n').forEach(function(l){
-          var s=l.trim();
-          if(s===bnd||s===bnd+'--'){if(cur2.length) sections.push(cur2.join('\n')); cur2=[];}
-          else cur2.push(l);
+          var s2=l.replace(/\s+$/,'');
+          if(s2===bnd||s2===bnd+'--'){ if(started && cur2.length) sections.push(cur2.join('\n')); cur2=[]; started=true; }
+          else if(started) cur2.push(l);
         });
-        if(cur2.length) sections.push(cur2.join('\n'));
-        return {hdrs:hdrs,enc:enc,ct:ct,disp:disp,fname:fname2,body:'',rawB64:'',
-          children:sections.filter(function(s){return s.trim();}).map(parseMIMEParts)};
+        return {hdrs:hdrs,enc:enc,ct:ct,disp:disp,fname:fname2,charset:charset,cid:cidM?cidM[1]:'',rawBody:'',
+          children:sections.filter(function(s3){return s3.trim();}).map(parseMIMEParts)};
       }
-      // rawB64: preserve original base64 string before binary decoding, so attachment handlers
-      // can use it directly. part.body (from decodeBody) is binary for base64 parts.
-      var rawB64 = enc==='base64' ? sb.body.replace(/[\s\r\n]/g,'') : '';
-      return {hdrs:hdrs,enc:enc,ct:ct,disp:disp,fname:fname2,rawB64:rawB64,body:decodeBody(sb.body,enc),children:[]};
+      return {hdrs:hdrs,enc:enc,ct:ct,disp:disp,fname:fname2,charset:charset,cid:cidM?cidM[1]:'',rawBody:sb.body,children:[]};
     }
 
     var blocks=[], attachmentNames=[];
+    var _imgCount = 0;
 
-    // walk: traverse MIME tree and build content blocks
+    // One router for every file-like attachment: PDF → document block,
+    // picture → prepared image (logos/icons skipped), everything else that
+    // readFileForAI knows (Word, Excel, text, RTF, HTML, .eml, Outlook .msg)
+    // → that reader, recursively. Returns a promise; walk() awaits it, which
+    // is what the old reader did not do — its Word extraction finished after
+    // the email had already been returned, so Word attachments never arrived.
+    async function attachToBlocks(name, ctL, bin, isInline) {
+      var ext2 = fxt(name||'');
+      if(!ext2 || ext2==='other') {
+        if(/pdf/.test(ctL)) ext2='pdf';
+        else if(/^image\//.test(ctL)) ext2='img';
+        else if(/vnd\.ms-outlook|x-msg/.test(ctL)) ext2='msg';
+        else if(/rfc822/.test(ctL)) ext2='eml';
+        else if(/wordprocessingml|msword/.test(ctL)) ext2='doc';
+        else if(/spreadsheetml|ms-excel|oasis\.opendocument\.spreadsheet/.test(ctL)) ext2='xls';
+        else if(/^text\/(plain|csv)/.test(ctL)) ext2='txt';
+        else if(/rtf/.test(ctL)) ext2='rtf';
+        else if(/text\/html/.test(ctL)) ext2='html';
+      }
+      if(!bin || bin.length < 20) return;
+      var label = name || ('attachment.' + (ext2==='img'?'jpg':ext2));
+      if(ext2==='pdf') {
+        var b64p = binToB64(bin);
+        attachmentNames.push(label+' [PDF]');
+        if(b64p.length > 28*1024*1024) blocks.push({type:'text',text:'[EMAIL ATTACHMENT PDF TOO LARGE TO SEND: '+label+' — '+Math.round(b64p.length*0.75/1024/1024)+'MB. File is saved in the case for manual review.]'});
+        else blocks.push({type:'document',source:{type:'base64',media_type:'application/pdf',data:b64p},title:'[EMAIL ATTACHMENT] '+label});
+        return;
+      }
+      if(ext2==='img' || ext2==='heic') {
+        var mimeG = /png/i.test(ctL+name)?'image/png':/gif/i.test(ctL+name)?'image/gif':/webp/i.test(ctL+name)?'image/webp':/bmp/i.test(ctL+name)?'image/bmp':'image/jpeg';
+        if(/tiff?/i.test(ctL+name)) { attachmentNames.push(label); blocks.push({type:'text',text:'[IMAGE ATTACHMENT: '+label+' — TIFF format; see original file.]'}); return; }
+        var prep = null;
+        try { prep = await prepareImageForAI('data:'+mimeG+';base64,'+binToB64(bin)); } catch(e) {}
+        if(!prep || !prep.b64) { attachmentNames.push(label); blocks.push({type:'text',text:'[IMAGE ATTACHMENT: '+label+' — could not be decoded; see original file.]'}); return; }
+        // Inline pictures smaller than ~150 px are signature logos, icons or
+        // tracking pixels — not evidence. Named attachments are always kept.
+        if(isInline && !name && (prep.width < 150 || prep.height < 150)) return;
+        if(_imgCount >= 20) { blocks.push({type:'text',text:'[IMAGE ATTACHMENT: '+label+' — not sent (image limit reached)]'}); return; }
+        _imgCount++;
+        attachmentNames.push(label);
+        blocks.push({type:'text',text:'[EMAIL ATTACHMENT (image): '+label+']'});
+        blocks.push({type:'image',source:{type:'base64',media_type:prep.mime,data:prep.b64}});
+        return;
+      }
+      if(['doc','xls','txt','rtf','html','msg','eml'].indexOf(ext2) !== -1) {
+        if(depthGuard.v >= 4) return;
+        attachmentNames.push(label);
+        depthGuard.v++;
+        try {
+          var sub = await readFileForAI({name: label, ext: ext2, data: 'data:application/octet-stream;base64,'+binToB64(bin), size: bin.length});
+          (sub||[]).forEach(function(b){ if(b.type==='text') b.text = '[EMAIL ATTACHMENT] ' + b.text; blocks.push(b); });
+        } catch(subErr) { blocks.push({type:'text',text:'[EMAIL ATTACHMENT '+label+' — could not be read: '+subErr.message+']'}); }
+        depthGuard.v--;
+        return;
+      }
+      attachmentNames.push(label);
+      blocks.push({type:'text',text:'[EMAIL ATTACHMENT: '+label+' ('+Math.round(bin.length/1024)+'KB, '+(ctL||'unknown type')+') — format not readable here; see original file.]'});
+    }
+    var depthGuard = {v:0};
+
+    // walk: traverse the MIME tree (async so attachment readers are awaited)
     // altUsed: {v:false} — set true when a text body is captured within a multipart/alternative group
-    //          pass null when entering a new email context (nested/forwarded) to reset text-body tracking
-    function walk(part, depth, altUsed) {
+    async function walk(part, depth, altUsed) {
       depth = depth||0;
-
       if(part.children.length>0) {
         var isAlt=/multipart\/alternative/i.test(part.ct);
         if(isAlt) {
-          // In alternative groups, prefer text/plain over text/html to avoid duplicate content.
-          // Walk non-text children (attachments, images) regardless.
           var localAlt={v:false};
-          // Pass 1: text/plain inline parts
-          part.children.forEach(function(p){
-            var cl=(p.ct||'').toLowerCase();
-            if(/text\/plain/i.test(cl)&&!/attachment/i.test(p.disp||'')&&!p.fname)
-              walk(p,depth+1,localAlt);
-          });
-          // Pass 2: text/html only if no plain text was captured
-          part.children.forEach(function(p){
-            var cl=(p.ct||'').toLowerCase();
-            if(/text\/html/i.test(cl)&&!/attachment/i.test(p.disp||'')&&!p.fname)
-              walk(p,depth+1,localAlt);
-          });
-          // Pass 3: everything else (PDFs, images, nested emails, other attachments)
-          part.children.forEach(function(p){
-            var cl=(p.ct||'').toLowerCase();
-            if(!/^text\//i.test(cl)) walk(p,depth+1,null);
-          });
+          var kidsPlain = part.children.filter(function(p){ return /text\/plain/i.test(p.ct||'') && !/attachment/i.test(p.disp||'') && !p.fname; });
+          var kidsHtml  = part.children.filter(function(p){ return /text\/html/i.test(p.ct||'') && !/attachment/i.test(p.disp||'') && !p.fname; });
+          var kidsRest  = part.children.filter(function(p){ return !/^text\//i.test(p.ct||''); });
+          // Prefer HTML when it carries a table (claim details are often tabular); else plain text
+          var htmlHasTable = kidsHtml.some(function(p){ return /<table/i.test(partText(p)); });
+          var order = htmlHasTable ? kidsHtml.concat(kidsPlain) : kidsPlain.concat(kidsHtml);
+          for(var i=0;i<order.length;i++) await walk(order[i],depth+1,localAlt);
+          for(var j=0;j<kidsRest.length;j++) await walk(kidsRest[j],depth+1,null);
         } else {
-          part.children.forEach(function(p){walk(p,depth+1,null);});
+          for(var k=0;k<part.children.length;k++) await walk(part.children[k],depth+1,null);
         }
         return;
       }
 
-      var ctL=part.ct.toLowerCase();
+      var ctL=(part.ct||'').toLowerCase();
       var isAttach=/attachment/i.test(part.disp||'') ||
         (part.fname && !/^text\//.test(ctL) && !/^image\//.test(ctL) && !/application\/pdf/.test(ctL));
       var textBlocks=blocks.filter(function(b){return b.type==='text';}).length;
 
       // ── Plain text body ──
-      if(/text\/plain/i.test(ctL) && !isAttach) {
-        if(altUsed && altUsed.v) return; // already captured a body in this alt group
-        var txt=part.body.replace(/\r\n/g,'\n').replace(/\n{4,}/g,'\n\n').trim();
+      if(/text\/plain/i.test(ctL) && !isAttach && !part.fname) {
+        if(altUsed && altUsed.v) return;
+        var txt=partText(part).replace(/\r\n/g,'\n').replace(/\n{4,}/g,'\n\n').trim();
         if(txt.length>10 && textBlocks<10) {
           blocks.push({type:'text', text:'[EMAIL BODY]\n\n'+parseEmailThread(txt).substring(0,80000)});
           if(altUsed) altUsed.v=true;
         }
         return;
       }
-
-      // ── HTML body — convert preserving table/list structure ──
-      if(/text\/html/i.test(ctL) && !isAttach) {
-        if(altUsed && altUsed.v) return; // already captured a body in this alt group
-        var htmlTxt=htmlEmailToText(part.body);
+      // ── HTML body — tables become pipe tables, the rest readable text ──
+      if(/text\/html/i.test(ctL) && !isAttach && !part.fname) {
+        if(altUsed && altUsed.v) return;
+        var htmlSrc = partText(part);
+        var htmlTxt = /<table/i.test(htmlSrc) ? htmlToMdWithTables(htmlSrc) : htmlEmailToText(htmlSrc);
         if(htmlTxt.length>10 && textBlocks<10) {
-          blocks.push({type:'text', text:'[EMAIL BODY]\n\n'+parseEmailThread(htmlTxt).substring(0,60000)});
+          blocks.push({type:'text', text:'[EMAIL BODY]\n\n'+parseEmailThread(htmlTxt).substring(0,80000)});
           if(altUsed) altUsed.v=true;
         }
         return;
       }
-
       // ── Forwarded/attached email as MIME message (message/rfc822) ──
-      // This is the standard MIME type for forwarded emails — previously unhandled
-      if(/message\/rfc822/i.test(ctL)) {
+      if(/message\/rfc822/i.test(ctL) || (part.fname && /\.eml$/i.test(part.fname))) {
         try {
-          var rfcRaw=part.rawB64?atob(part.rawB64):part.body;
-          var rfcParsed=parseMIMEParts(rfcRaw);
-          var rfcSubj=rfcParsed.hdrs['subject']||'';
-          var rfcFrom=rfcParsed.hdrs['from']||'';
+          var rfcParsed=parseMIMEParts(partBin(part));
+          var rfcSubj=decodeMimeWords(rfcParsed.hdrs['subject']||'');
+          var rfcFrom=decodeMimeWords(rfcParsed.hdrs['from']||'');
+          var rfcTo=decodeMimeWords(rfcParsed.hdrs['to']||'');
           var rfcDate=rfcParsed.hdrs['date']||'';
-          attachmentNames.push('Forwarded: '+(rfcSubj||rfcFrom||'email'));
-          blocks.push({type:'text',text:'[FORWARDED EMAIL]\n'
+          attachmentNames.push((part.fname?part.fname+' ':'')+'[Forwarded: '+(rfcSubj||rfcFrom||'email')+']');
+          blocks.push({type:'text',text:'[FORWARDED / ATTACHED EMAIL'+(part.fname?': '+part.fname:'')+']\n'
             +(rfcFrom?'From: '+rfcFrom+identifyEmailRole(rfcFrom)+'\n':'')
+            +(rfcTo?'To: '+rfcTo+'\n':'')
             +(rfcDate?'Date: '+rfcDate+'\n':'')
             +(rfcSubj?'Subject: '+rfcSubj+'\n':'')});
-          walk(rfcParsed,depth+1,null); // fresh context — new email's body should always be captured
+          await walk(rfcParsed,depth+1,null); // fresh context — the inner email's body must be captured
         } catch(rfcErr){console.warn('[EML] RFC822:',rfcErr.message);}
         return;
       }
-
-      // ── PDF attachment ──
-      if(/\.pdf$/i.test(part.fname||'')||/application\/pdf/i.test(ctL)) {
-        try {
-          // rawB64 is the original base64 before decodeBody converted it to binary
-          var b64p=part.rawB64||binToB64(part.body);
-          b64p=b64p.replace(/[^A-Za-z0-9+/=]/g,'');
-          while(b64p.length%4!==0) b64p+='=';
-          // 28MB base64 ≈ 21MB raw — Anthropic API PDF limit is 32MB
-          var pdfTooBig = b64p.length > 28*1024*1024;
-          if(b64p.length>500) {
-            attachmentNames.push((part.fname||'attachment.pdf')+' [PDF]');
-            if(pdfTooBig) {
-              blocks.push({type:'text',text:'[EMAIL ATTACHMENT PDF TOO LARGE TO SEND: '+(part.fname||'attachment.pdf')+' — '+Math.round(b64p.length*0.75/1024/1024)+'MB. File is saved in the case for manual review.]'});
-            } else {
-              blocks.push({type:'document',source:{type:'base64',media_type:'application/pdf',data:b64p},
-                title:'[EMAIL ATTACHMENT] '+(part.fname||'attachment.pdf')});
-            }
-          }
-        } catch(e2){console.warn('[EML] PDF:',e2.message);}
-        return;
-      }
-
-      // ── Image attachment (JPEG, PNG, GIF, WEBP, BMP, TIFF) ──
-      if(/image\//.test(ctL)||(part.fname&&/\.(jpg|jpeg|png|gif|webp|bmp|tiff?|heic|heif)$/i.test(part.fname))) {
-        try {
-          var mime2=/png/i.test(ctL)||/\.png$/i.test(part.fname||'')?'image/png'
-            :/gif/i.test(ctL)?'image/gif'
-            :/webp/i.test(ctL)?'image/webp'
-            :/tiff?/i.test(ctL)||/\.tiff?$/i.test(part.fname||'')?'image/tiff'
-            :'image/jpeg';
-          var b64i=part.rawB64||binToB64(part.body);
-          b64i=b64i.replace(/[^A-Za-z0-9+/=]/g,'');
-          while(b64i.length%4!==0) b64i+='=';
-          // 6.5MB base64 ≈ 5MB raw — Anthropic image API limit
-          if(b64i.length>200) {
-            attachmentNames.push(part.fname||'image');
-            if(/tiff?/i.test(mime2)) {
-              blocks.push({type:'text',text:'[IMAGE ATTACHMENT: '+(part.fname||'image')+' — TIFF format. Contains visual medical data; see original file.]'});
-            } else {
-              // Every embedded image is normalised after the (synchronous)
-              // MIME walk — white-backed, size-capped JPEG — so a 6 MB phone
-              // photo attached to an email is downscaled rather than dropped.
-              blocks.push({type:'image',source:{type:'base64',media_type:mime2,data:b64i},_emlFname:(part.fname||'image')});
-            }
-          }
-        } catch(e3){console.warn('[EML] Image:',e3.message);}
-        return;
-      }
-
-      // ── Word (.docx) attachment ──
-      if(part.fname&&/\.docx?$/i.test(part.fname)) {
-        try {
-          var b64doc=part.rawB64||'';
-          if(b64doc&&typeof mammoth!=='undefined') {
-            attachmentNames.push(part.fname+' [Word]');
-            mammoth.extractRawText({arrayBuffer:b64AB(b64doc)}).then(function(res){
-              if(res.value&&res.value.trim().length>10)
-                blocks.push({type:'text',text:'[EMAIL ATTACHMENT — '+part.fname+']\n\n'+res.value.trim().substring(0,25000)});
-            }).catch(function(){});
-          }
-        } catch(e4){console.warn('[EML] DOCX:',e4.message);}
-        return;
-      }
-
-      // ── Excel (.xlsx/.xls) attachment ──
-      if(part.fname&&/\.xlsx?$/i.test(part.fname)) {
-        try {
-          var b64xl=part.rawB64||'';
-          if(b64xl&&typeof XLSX!=='undefined') {
-            attachmentNames.push(part.fname+' [Excel]');
-            try {
-              var wb=XLSX.read(b64xl,{type:'base64'});
-              var xlText='';
-              wb.SheetNames.forEach(function(sn){
-                var csv=XLSX.utils.sheet_to_csv(wb.Sheets[sn],{blankrows:false});
-                if(csv.trim().length>5) xlText+='\n[Sheet: '+sn+']\n'+csv;
-              });
-              if(xlText.length>10)
-                blocks.push({type:'text',text:'[EMAIL ATTACHMENT — '+part.fname+']\n'+xlText.substring(0,25000)});
-            } catch(xlErr){}
-          }
-        } catch(e5){console.warn('[EML] XLS:',e5.message);}
-        return;
-      }
-
-      // ── Nested .eml attachment (forwarded email as file attachment) ──
-      if(part.fname&&/\.eml$/i.test(part.fname)) {
-        try {
-          var nestedRaw=part.rawB64?atob(part.rawB64):part.body;
-          var nestedParsed=parseMIMEParts(nestedRaw);
-          var nestedSubj=nestedParsed.hdrs['subject']||'';
-          var nestedFrom=nestedParsed.hdrs['from']||'';
-          attachmentNames.push((part.fname||'forwarded.eml')+' [Email]');
-          blocks.push({type:'text',text:'[ATTACHED EMAIL: '+(part.fname||'forwarded.eml')+']\n'
-            +(nestedFrom?'From: '+nestedFrom+identifyEmailRole(nestedFrom)+'\n':'')
-            +(nestedSubj?'Subject: '+nestedSubj+'\n':'')});
-          walk(nestedParsed,depth+1,null); // fresh context
-        } catch(eNestedErr){console.warn('[EML] Nested eml:',eNestedErr.message);}
-        return;
-      }
-
-      // ── Text / CSV / RTF attachment ──
-      if(part.fname&&/\.(txt|csv|tsv|rtf)$/i.test(part.fname)) {
-        try {
-          var txDecoded=part.body.trim();
-          if(txDecoded.length>20) {
-            attachmentNames.push(part.fname);
-            blocks.push({type:'text',text:'[EMAIL ATTACHMENT — '+part.fname+']\n\n'+txDecoded.substring(0,20000)});
-          }
-        } catch(e6){console.warn('[EML] Text attach:',e6.message);}
-        return;
-      }
+      // ── Everything else with content: route by type ──
+      await attachToBlocks(part.fname||'', ctL, partBin(part), !part.fname && (/inline/i.test(part.disp||'') || !!part.cid));
     }
 
+    var subj='', from='', to='', cc='', date='', replyTo='', importance='';
     try {
       var parsed=parseMIMEParts(emlRaw);
-      var subj=parsed.hdrs['subject']||'';
-      var from=parsed.hdrs['from']||'';
-      var to=parsed.hdrs['to']||'';
-      var cc=parsed.hdrs['cc']||'';
-      var date=parsed.hdrs['date']||'';
-      var replyTo=parsed.hdrs['reply-to']||'';
-      var importance=parsed.hdrs['importance']||parsed.hdrs['x-priority']||'';
-      walk(parsed,0,null);
+      subj=decodeMimeWords(parsed.hdrs['subject']||'');
+      from=decodeMimeWords(parsed.hdrs['from']||'');
+      to=decodeMimeWords(parsed.hdrs['to']||'');
+      cc=decodeMimeWords(parsed.hdrs['cc']||'');
+      date=parsed.hdrs['date']||'';
+      replyTo=decodeMimeWords(parsed.hdrs['reply-to']||'');
+      importance=parsed.hdrs['importance']||parsed.hdrs['x-priority']||'';
+      await walk(parsed,0,null);
     } catch(emlErr) {
       console.error('[EML] Parser error:', emlErr.message);
-      return [{type:'text', text:'[EMAIL: '+fd.name+']\n\n'+emlRaw.substring(0,80000)}];
+      return [{type:'text', text:'[EMAIL: '+fd.name+']\n\n'+bytesToText(emlRaw,'').substring(0,80000)}];
     }
 
-    // Normalise embedded images (async, so it cannot live inside walk()):
-    // white-backed, size-capped JPEG via prepareImageForAI. One that still
-    // cannot be prepared and is over the API limit becomes a text note.
-    for(var _bi=0; _bi<blocks.length; _bi++) {
-      var _blk=blocks[_bi];
-      if(_blk.type!=='image' || !_blk.source) continue;
-      var _fname=_blk._emlFname||'image'; delete _blk._emlFname;
-      try {
-        var _prep=await prepareImageForAI('data:'+_blk.source.media_type+';base64,'+_blk.source.data);
-        if(_prep&&_prep.b64) { _blk.source={type:'base64',media_type:_prep.mime,data:_prep.b64}; continue; }
-      } catch(e){}
-      if(_blk.source.data.length > IMG_MAX_B64) {
-        blocks[_bi]={type:'text',text:'[IMAGE ATTACHMENT: '+_fname+' (too large: '+Math.round(_blk.source.data.length*0.75/1024/1024)+'MB). Contains visual medical data; see original file.]'};
-      }
-    }
-
-    // Build rich header summary
+    // Header summary first
     var hdrSummary='[EMAIL: '+fd.name+']\n'
       +(from?'From: '+from+identifyEmailRole(from)+'\n':'')
       +(to?'To: '+to+identifyEmailRole(to)+'\n':'')
@@ -12798,13 +12739,12 @@ async function readFileForAI(fd) {
 
     // Fallback if no body was extracted
     if(blocks.length===1) {
-      var cleanEml=emlRaw
+      var cleanEml=bytesToText(emlRaw,'')
         .replace(/Content-Transfer-Encoding:\s*base64[\s\S]*?(?=\n--|\n\nContent-)/gi,'[base64 data]')
         .replace(/^[A-Za-z0-9+/]{60,}=*\s*$/gm,'')
         .replace(/--[^\n]{5,}\n/g,'')
         .replace(/\n{4,}/g,'\n\n').substring(0,80000);
-      var fallbackThreaded=parseEmailThread(cleanEml);
-      blocks.push({type:'text',text:'[EMAIL BODY]\n\n'+fallbackThreaded});
+      blocks.push({type:'text',text:'[EMAIL BODY]\n\n'+parseEmailThread(cleanEml)});
     }
 
     console.log('[EML] Parsed:', fd.name, '→', blocks.length, 'blocks,', attachmentNames.length, 'attachments');
