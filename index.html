@@ -3604,7 +3604,7 @@ async function _apiCallQA(messages, systemPrompt, maxTokens) {
   var mod = getMod();
   var body = {
     model: mod, max_tokens: maxTokens||2000,
-    messages: messages, system: systemPrompt,
+    messages: messages, system: buildSystemParam(systemPrompt),
     tools: [{ type: 'web_search_20250305', name: 'web_search' }]
   };
   var res = await fetch('https://api.anthropic.com/v1/messages', {
@@ -3636,7 +3636,7 @@ async function _apiCallQA(messages, systemPrompt, maxTokens) {
 async function _apiCallQAPlain(messages, systemPrompt, maxTokens) {
   var key = getKey(); if(!key) throw new Error('No API key configured');
   var mod = getMod();
-  var body = { model: mod, max_tokens: maxTokens||2000, messages: messages, system: systemPrompt };
+  var body = { model: mod, max_tokens: maxTokens||2000, messages: messages, system: buildSystemParam(systemPrompt) };
   var res = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST', mode: 'cors', credentials: 'omit',
     headers: { 'Content-Type': 'application/json', 'x-api-key': key, 'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' },
@@ -4010,7 +4010,7 @@ async function sendCaseChat(presetText, caseId) {
   var isPV = _isProviderVerificationIntent(question);
   var activeSystemPrompt = systemPrompt;
   if(isPV) {
-    activeSystemPrompt = systemPrompt +
+    var pvExtra =
       '\n\n=== PROVIDER VERIFICATION REQUEST ===\n' +
       'Use web search to verify this provider. Research:\n' +
       '1. Is the provider a real, registered hospital/clinic/facility?\n' +
@@ -4027,6 +4027,13 @@ async function sendCaseChat(presetText, caseId) {
       'Then add a brief paragraph with key findings and action required.\n\n' +
       '=== PROVIDER DETAILS TO VERIFY ===\n' +
       _buildProviderContext(c);
+    // Keep the case context as its own cached block and send the provider
+    // request as a separate, uncached block after it, so a provider check
+    // still reads the case context from cache instead of re-billing it.
+    var _pvBase = buildSystemParam(systemPrompt);
+    activeSystemPrompt = Array.isArray(_pvBase)
+      ? _pvBase.concat([{ type: 'text', text: pvExtra }])
+      : systemPrompt + pvExtra;
   }
 
   // ── Update loading bubble to reflect web search in progress ──
