@@ -2215,13 +2215,17 @@ async function runEval(caseId) {
   // one or two documents (e.g. added on another screen, or loaded before a
   // later upload finished) was evaluated without them and nothing said so.
   var c0 = getC(caseId);
+  // Saved evaluation reports (Evaluation_*.html) are not case evidence and are
+  // never sent; their data exists only on the device that ran the evaluation,
+  // so they must not count as missing documents on a teammate's PC.
+  var _isEvalReportMeta = function(f){ return !!(f && (f._isEvalReport || /^Evaluation_.*\.html$/i.test(f.name||''))); };
   var _memHasData = function(name){
     return _filesForCaseId === caseId && FILES.some(function(f){ return f.name === name && f.data && f.data.length > 100; });
   };
   var needsIDBLoad = c0 && c0.filesData && c0.filesData.length > 0 &&
     (_filesForCaseId !== caseId ||
      FILES.length === 0 ||
-     c0.filesData.some(function(meta){ return meta && meta.name && !_memHasData(meta.name); }));
+     c0.filesData.some(function(meta){ return meta && meta.name && !_isEvalReportMeta(meta) && !_memHasData(meta.name); }));
 
   if(needsIDBLoad) {
     setEvSt('run', '⏳ Loading documents from storage...');
@@ -2292,8 +2296,8 @@ async function runEval(caseId) {
   }
 
   // Re-check after IDB load attempt
-  var filesWithData = FILES.filter(function(f){ return f.data && f.data.length > 100; });
-  var filesMetaOnly = FILES.filter(function(f){ return !f.data || f.data.length <= 100; });
+  var filesWithData = FILES.filter(function(f){ return f.data && f.data.length > 100 && !_isEvalReportMeta(f); });
+  var filesMetaOnly = FILES.filter(function(f){ return (!f.data || f.data.length <= 100) && !_isEvalReportMeta(f); });
   var hasUploadedFiles = c0 && c0.filesData && c0.filesData.length > 0;
 
   if(hasUploadedFiles && filesWithData.length === 0) {
@@ -2707,7 +2711,12 @@ async function runEval(caseId) {
   // was made without part of the file.
   var _docsNotRead = [];   // "name (reason)"
   var _docsTruncated = []; // names whose text was cut
-  filesMetaOnly.forEach(function(f){ if(f && f.name) _docsNotRead.push(f.name + ' (not available on this device)'); });
+  var _unreadNames = [];   // files the AI receives NOTHING usable from (excluded from the manifest)
+  function _markUnread(name, reason, whole) {
+    _docsNotRead.push(name + ' (' + reason + ')');
+    if(whole && _unreadNames.indexOf(name) === -1) _unreadNames.push(name);
+  }
+  filesMetaOnly.forEach(function(f){ if(f && f.name) _markUnread(f.name, 'not available on this device', true); });
 
   // Build content blocks for all file types — PARALLEL reading for speed
   // IMPORTANT: Only attach files that belong to THIS case. If FILES were loaded
@@ -2762,12 +2771,16 @@ async function runEval(caseId) {
       console.warn('[runEval] Document text over budget (' + _textTotal + ' chars) — trimmed longest documents to', _ceil);
     }
   }
-  var _UNREADABLE_RX = /^\[(?:PDF|Image|HEIC|Word|WORD DOCUMENT|Spreadsheet|RTF|IMAGE ATTACHMENT)[^\n]*?(?:no data|too large|could not|unreadable|not sent|appears empty|no extractable)/i;
+  // Placeholders readFileForAI writes instead of content, e.g.
+  // "[PDF: x — file too large …]", "[ATTACHMENT x — could not be read …]",
+  // "[OUTLOOK EMAIL: x — binary format; …]". Matched anywhere in a block:
+  // emails emit one per unreadable attachment alongside their readable body.
+  var _UNREADABLE_RX = /\[[A-Z][A-Za-z ]{1,40}(?::| )[^\]\n]{0,200}?— [^\]\n]{0,200}?(?:no data|too large|TOO LARGE|could not|unreadable|not sent|not readable|appears empty|no extractable|not fully supported|binary format|no text content|TIFF format|image-only)[^\]\n]{0,200}\]/g;
   var _TRUNC_RX = /\[\.\.\. ?(?:document )?truncated|\[\.\.\. TRUNCATED/i;
   _readResults.forEach(function(r) {
     if(r.error) {
       skippedFiles.push(r.f.name + ' (read error: ' + r.error + ')');
-      _docsNotRead.push(r.f.name + ' (could not be read: ' + r.error + ')');
+      _markUnread(r.f.name, 'could not be read: ' + r.error, true);
       return;
     }
     var blocks = r.blocks;
@@ -2775,15 +2788,22 @@ async function runEval(caseId) {
       // Keep any extracted text; drop only the binary parts that do not fit
       blocks = blocks.filter(function(b){ return !_binSize(b); });
       skippedFiles.push(r.f.name + ' (total size limit reached)');
-      _docsNotRead.push(r.f.name + (blocks.length ? ' (scanned pages/images not sent — total upload limit reached)' : ' (not sent — total upload limit reached)'));
+      _markUnread(r.f.name, blocks.length ? 'scanned pages/images not sent — total upload limit reached' : 'not sent — total upload limit reached', !blocks.length);
     }
+    var _usable = false;
     blocks.forEach(function(blk){
       msgContent.push(blk);
       if(blk.type === 'text' && blk.text) {
-        if(_UNREADABLE_RX.test(blk.text)) _docsNotRead.push(r.f.name + ' (' + blk.text.replace(/^\[|\]$/g,'').substring(0, 140) + ')');
+        var _marks = blk.text.match(_UNREADABLE_RX) || [];
+        _marks.forEach(function(m){ _markUnread(r.f.name, m.replace(/^\[|\]$/g,'').substring(0, 160), false); });
+        // Usable if anything is left once placeholders and [headers] are removed
+        if(blk.text.replace(_UNREADABLE_RX, '').replace(/\[[^\]\n]*\]/g, '').trim().length > 20) _usable = true;
         if(_TRUNC_RX.test(blk.text) && _docsTruncated.indexOf(r.f.name) === -1) _docsTruncated.push(r.f.name);
+      } else if(_binSize(blk)) {
+        _usable = true;
       }
     });
+    if(!_usable && _unreadNames.indexOf(r.f.name) === -1) _unreadNames.push(r.f.name);
     totalSize += r.bin;
   });
 
@@ -2837,7 +2857,7 @@ async function runEval(caseId) {
       + 'APPROVE or DECLINE on a point that depends on them — use PENDING INFORMATION for that point instead.\n';
     console.log('[runEval] Not read in full:', _docsNotRead, _docsTruncated);
     toast('⚠ ' + (_docsNotRead.length + _docsTruncated.length) + ' document(s) will NOT be read in full: '
-      + _docsNotRead.concat(_docsTruncated).map(function(f){ return f.split(' (')[0]; }).join(', ')
+      + _unreadNames.concat(_docsTruncated).concat(_docsNotRead.length > _unreadNames.length ? ['parts of other files'] : []).join(', ')
       + ' — the evaluation will be marked incomplete.', 12000);
   }
   // Persisted at the top of the saved evaluation (all save paths below)
@@ -2854,7 +2874,7 @@ async function runEval(caseId) {
   // skipNote — this used to list every filename on the case as "already
   // provided", including ones that could not be loaded or were too large,
   // which told the AI it had reviewed documents it never saw.
-  var _notReadNames = _docsNotRead.map(function(f){ return f.split(' (')[0]; });
+  var _notReadNames = _unreadNames;
   var _manifestNames = [];
   _readResults.forEach(function(r) {
     if(r.f && r.f.name && !r.error && _notReadNames.indexOf(r.f.name) === -1 && _manifestNames.indexOf(r.f.name) === -1) _manifestNames.push(r.f.name);
@@ -2863,7 +2883,7 @@ async function runEval(caseId) {
   if(_manifestNames.length > 0) {
     docManifest = '\nDOCUMENTS SUBMITTED AND PROVIDED TO YOU (' + _manifestNames.length + '):\n'
       + _manifestNames.map(function(n){ return '  • ' + n; }).join('\n')
-      + '\nRULE: Every document listed above is attached to this message. Read EVERY one of them in full — every page, '
+      + '\nRULE: Every document listed above is attached to this message (except any parts named under DOCUMENTS NOT AVAILABLE IN FULL). Read EVERY one of them in full — every page, '
       + 'every image, every email and attachment — before deciding, and base your findings on all of them. '
       + 'Do NOT request resubmission of any listed document. '
       + 'If additional information is needed, specify the exact document type required and the reason it is needed.\n\n';
@@ -3429,7 +3449,8 @@ async function runEval(caseId) {
       // outcome — until a second reviewer confirms the citation and signs off (see
       // confirmVerificationSignoff()). A wrong auto-finalized decline is worse than
       // one extra click. pendingStatus below records what it will become on sign-off.
-      status: _verificationFlag ? 'reviewing' : finalStatus,
+      // Likewise held when the AI did not see every document in full.
+      status: (_verificationFlag || _docsNotRead.length) ? 'reviewing' : finalStatus,
       lastDecision: savedDecision, evalHistory: evalHist,
       lastEvalAt: new Date().toISOString(),
       pseudoMap: pseudoMapSnapshot || {}
@@ -3440,7 +3461,7 @@ async function runEval(caseId) {
     // Same reasoning for pendingStatus: a clean re-evaluation must clear any earlier
     // hold so it can't leak forward and gate a decision that no longer needs review.
     _evalSave.verificationFlag = _verificationFlag || '';
-    _evalSave.pendingStatus = _verificationFlag ? finalStatus : '';
+    _evalSave.pendingStatus = (_verificationFlag || _docsNotRead.length) ? finalStatus : '';
     if(_approvedFromEval) _evalSave.amountApproved = _approvedFromEval;
     if(_fieldCorrections) {
       // Apply only recognised safe fields — never overwrite case ID or patient name
@@ -8830,9 +8851,8 @@ function startFirebaseSync() {
     var changed = false;
     snapshot.docChanges().forEach(function(change) {
       var remoteCase = change.doc.data();
-      var localIdx = CASES.findIndex(function(c){ return c.id === remoteCase.id; });
-
       if(!remoteCase.id) remoteCase.id = change.doc.id;
+      var localIdx = CASES.findIndex(function(c){ return c.id === remoteCase.id; });
 
       if(change.type === 'removed') {
         // Hard-deleted elsewhere (pre-tombstone versions): remember it so this
@@ -8849,7 +8869,7 @@ function startFirebaseSync() {
           return;
         }
         // Skip any case that was deleted on this device — Firebase may lag behind
-        if(isDeletedId(remoteCase.id)) { deleteCaseFromFirestore(remoteCase.id); return; }
+        if(isDeletedId(remoteCase.id)) { deleteCaseFromFirestore(remoteCase.id, change.doc.id); return; }
         var remoteTime = new Date(remoteCase.updatedAt || remoteCase.created || 0).getTime();
         if(localIdx === -1) {
           // New case from a teammate — add it
@@ -9029,6 +9049,7 @@ function _applyRemoteDeletion(id) {
 function deleteCaseFromFirestore(caseId, docId) {
   if(!FB_READY || !FB_DB || !caseId) return;
   ensureFBKeys();
+  if(!FB_COLLECTION) return;
   var docRef = FB_DB.collection(FB_COLLECTION).doc(docId || caseId);
 
   // Delete subcollections first (Firestore does not cascade-delete subcollections)
@@ -9305,6 +9326,7 @@ function pullAllFromFirebase() {
       var d = doc.data();
       if(!d) return;
       if(!d.id) d.id = doc.id;
+      d._fsDocId = doc.id;
       // Deleted by someone — drop any local copy, never re-add
       if(_isCaseTombstone(d)) { _applyRemoteDeletion(d.id); return; }
       remoteCases.push(d);
@@ -9315,9 +9337,10 @@ function pullAllFromFirebase() {
     remoteCases.forEach(function(rc){
       if(_fbDelSet.has(rc.id)) {
         // Case was deleted locally — also delete from Firebase if not done yet
-        deleteCaseFromFirestore(rc.id);
+        deleteCaseFromFirestore(rc.id, rc._fsDocId);
         return;
       }
+      delete rc._fsDocId;
       var li = CASES.findIndex(function(c){ return c.id===rc.id; });
       var rt = new Date(rc.updatedAt||rc.created||0).getTime();
       if(li === -1) {
@@ -11598,7 +11621,9 @@ function b64AB(b64) {
 // Also normalises GIF/WebP/BMP to JPEG (BMP is not accepted by the API) and
 // upscales small images a little for OCR. opts: {enhance:bool, rotate:deg}.
 // Resolves to {dataUrl, b64, mime:'image/jpeg', width, height} or null.
-var IMG_MAX_EDGE = 2400, IMG_MIN_EDGE = 1200, IMG_MAX_B64 = 4.8 * 1024 * 1024;
+// 2000, not 2400: the API rejects any image over 2000px per side once a
+// request carries more than 20 images, and a multi-document case can.
+var IMG_MAX_EDGE = 2000, IMG_MIN_EDGE = 1200, IMG_MAX_B64 = 4.8 * 1024 * 1024;
 function prepareImageForAI(dataUrl, opts) {
   opts = opts || {};
   return new Promise(function(resolve) {
