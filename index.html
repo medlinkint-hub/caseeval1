@@ -2209,12 +2209,19 @@ async function runEval(caseId) {
   const btn = G('bRun'); if(btn) btn.disabled = true;
   
   // ── Auto-load files from IndexedDB if not in memory ──
-  // Fires when: FILES belongs to a different case, is empty, or all entries are metadata-only
+  // Fires when FILES belongs to a different case, or when ANY file listed on
+  // the case has no data in memory. This used to fire only when FILES was
+  // empty or had no data at all, so a case whose in-memory list was missing
+  // one or two documents (e.g. added on another screen, or loaded before a
+  // later upload finished) was evaluated without them and nothing said so.
   var c0 = getC(caseId);
+  var _memHasData = function(name){
+    return _filesForCaseId === caseId && FILES.some(function(f){ return f.name === name && f.data && f.data.length > 100; });
+  };
   var needsIDBLoad = c0 && c0.filesData && c0.filesData.length > 0 &&
     (_filesForCaseId !== caseId ||
      FILES.length === 0 ||
-     FILES.every(function(f){ return !f.data || f.data.length <= 100; }));
+     c0.filesData.some(function(meta){ return meta && meta.name && !_memHasData(meta.name); }));
 
   if(needsIDBLoad) {
     setEvSt('run', '⏳ Loading documents from storage...');
@@ -2246,8 +2253,19 @@ async function runEval(caseId) {
       } catch(e0) { console.warn('[runEval] IDB key failed:', _idbKeys[_ki], e0.message); }
     }
 
+    // Data already in memory for this case wins — it may not be persisted yet
+    var memByName0 = {};
+    var memOnly0 = [];
+    if(_filesForCaseId === caseId) {
+      var _listed0 = new Set(c0.filesData.map(function(m){ return m && m.name; }));
+      FILES.forEach(function(f){
+        if(f && f.name && f.data && f.data.length > 100) memByName0[f.name] = f.data;
+        if(f && f.name && !_listed0.has(f.name)) memOnly0.push(f); // just added, not yet in filesData
+      });
+    }
     var _rebuilt0 = await Promise.all(c0.filesData.map(function(meta) {
       var fd = Object.assign({}, meta, {ext: (meta.ext && meta.ext.length <= 4 && ['pdf','doc','img','xls','rtf','eml','txt','html','heic','other'].indexOf(meta.ext)!==-1) ? meta.ext : fxt(meta.name||'')});
+      if(memByName0[meta.name]) { fd.data = memByName0[meta.name]; return fd; }
       if(combinedByName0[meta.name]) { fd.data = combinedByName0[meta.name]; return fd; }
       if(!meta._key) return fd;
       return idbGet(meta._key).then(function(data){
@@ -2261,7 +2279,7 @@ async function runEval(caseId) {
     }));
     // Guard: abort if user switched cases during the per-file IDB load
     if(window._currentCaseId !== caseId) { console.warn('[runEval] Case switched during per-file IDB load — aborting'); return; }
-    FILES = dedupeFiles(_rebuilt0);
+    FILES = dedupeFiles(_rebuilt0.concat(memOnly0));
     _filesForCaseId = caseId; // mark these files as belonging to caseId
     var loaded = FILES.some(function(f){ return f.data && f.data.length > 100; });
     console.log('[runEval] Loaded', FILES.filter(function(f){return f.data && f.data.length>100;}).length, '/', FILES.length, 'file(s) with data for case', caseId);
@@ -2287,7 +2305,16 @@ async function runEval(caseId) {
     }
     toast('Evaluating without documents — case information only', 4000);
   } else if(filesMetaOnly.length > 0 && filesWithData.length > 0) {
-    toast('⚠ ' + filesMetaOnly.length + ' file(s) not loaded. Evaluating with ' + filesWithData.length + ' available.', 4000);
+    // Some documents exist only as names here (e.g. uploaded on another PC —
+    // file contents stay on the device that uploaded them). Evaluating without
+    // them must be a deliberate choice, not a 4-second toast.
+    if(!confirm('⚠ ' + filesMetaOnly.length + ' of ' + FILES.length + ' document(s) could not be loaded on this device and would NOT be read:\n\n'
+        + filesMetaOnly.map(function(f){ return '  • ' + f.name; }).join('\n')
+        + '\n\nThey were probably uploaded on another PC or browser. Re-upload them here for a complete evaluation.\n\nClick OK to evaluate WITHOUT them (the evaluation will be marked incomplete), or Cancel to stop.')) {
+      setEvSt('err', 'Cancelled — re-upload the missing documents in the Files tab');
+      if(btn) btn.disabled = false;
+      return;
+    }
   }
   const liveVals = {
     patient: G('f_p') ? G('f_p').value.trim() : '',
@@ -2669,38 +2696,29 @@ async function runEval(caseId) {
 
   const msgContent = [];
   var skippedFiles = [];
-  var MAX_FILE_B64 = 5 * 1024 * 1024; // 5MB per regular file
-  var MAX_EML_B64  = 20 * 1024 * 1024; // 20MB for .eml/.msg (may contain large PDF attachments)
+  var MAX_FILE_B64 = 5 * 1024 * 1024; // cap for the optional original policy PDF cross-check
   var totalSize = 0;
-  var MAX_TOTAL = 20 * 1024 * 1024; // 20MB total limit
+  // Budget for document/image attachments, measured on what is actually sent
+  // (after images are resized), not on the raw upload. The API rejects
+  // requests over 32MB, so this leaves room for the text and JSON overhead.
+  var MAX_TOTAL = 24 * 1024 * 1024;
+  // Per-file record of anything the AI will not see in full — written into the
+  // saved evaluation (not just a toast) so nobody relies on a decision that
+  // was made without part of the file.
+  var _docsNotRead = [];   // "name (reason)"
+  var _docsTruncated = []; // names whose text was cut
+  filesMetaOnly.forEach(function(f){ if(f && f.name) _docsNotRead.push(f.name + ' (not available on this device)'); });
 
   // Build content blocks for all file types — PARALLEL reading for speed
   // IMPORTANT: Only attach files that belong to THIS case. If FILES were loaded
   // for a different case in a previous session, do not attach them here.
   setEvSt('run', 'Preparing documents...');
-  var _filesToRead = [];
-  var _runningTotal = 0;
   var _evalFiles = (_filesForCaseId === caseId) ? FILES.filter(function(f){ return !f._isEvalReport && !/^Evaluation_.*\.html$/i.test(f.name||''); }) : [];
-  for(var _fi = 0; _fi < _evalFiles.length; _fi++) {
-    var _ff = _evalFiles[_fi];
-    if(!_ff.data) continue;
-    var _ds = _ff.data.length;
-    var _isEmailFile = (_ff.ext === 'eml' || _ff.ext === 'msg');
-    var _sizeLimit = _isEmailFile ? MAX_EML_B64 : MAX_FILE_B64;
-    if(_ds > _sizeLimit) {
-      if(_isEmailFile) { _filesToRead.push(_ff); continue; } // never skip emails
-      skippedFiles.push(_ff.name + ' (too large: ' + Math.round(_ds/1024/1024*10)/10 + 'MB)');
-      console.warn('[runEval] Skipping large file:', _ff.name);
-      continue;
-    }
-    if(_runningTotal + _ds > MAX_TOTAL) {
-      skippedFiles.push(_ff.name + ' (total size limit reached)');
-      continue;
-    }
-    _runningTotal += _ds;
-    _filesToRead.push(_ff);
-  }
-  // Read all files in parallel — much faster than sequential await
+  var _filesToRead = _evalFiles.filter(function(f){ return f.data; });
+  // Read all files in parallel — much faster than sequential await.
+  // Size is checked AFTER reading: photos are resized to well under 5MB by
+  // readFileForAI, so the old check on the raw upload size wrongly dropped
+  // ordinary phone photos and scans that would have fitted easily.
   var _readResults = await Promise.all(_filesToRead.map(function(f) {
     return readFileForAI(f).then(function(blocks) {
       console.log('[runEval] Ready:', f.name, '(', f.ext, ') -', (blocks||[]).length, 'block(s)');
@@ -2710,13 +2728,63 @@ async function runEval(caseId) {
       return { f: f, blocks: [], error: err.message };
     });
   }));
+  function _binSize(blk) { return (blk && (blk.type==='document' || blk.type==='image') && blk.source && blk.source.data) ? blk.source.data.length : 0; }
+  _readResults.forEach(function(r) {
+    r.bin = r.blocks.reduce(function(n, b){ return n + _binSize(b); }, 0);
+  });
+  // Fit as many documents as possible: admit the smallest first, then emit in
+  // the original upload order.
+  var _runningTotal = 0;
+  _readResults.slice().sort(function(a, b){ return a.bin - b.bin; }).forEach(function(r) {
+    if(r.error || !r.bin) return;
+    if(_runningTotal + r.bin > MAX_TOTAL) { r.overBudget = true; return; }
+    _runningTotal += r.bin;
+  });
+  // Shared text budget across all documents (~110k tokens) so a case with
+  // many long documents still fits the model's context window. When over,
+  // the longest texts are trimmed first (each to the same ceiling) and marked
+  // as truncated, which is reported below — never a silent cut.
+  var DOC_TEXT_BUDGET = 400000;
+  var _textBlocks = [];
+  _readResults.forEach(function(r){ r.blocks.forEach(function(b){ if(b.type === 'text' && b.text) _textBlocks.push(b); }); });
+  var _textTotal = _textBlocks.reduce(function(n, b){ return n + b.text.length; }, 0);
+  if(_textTotal > DOC_TEXT_BUDGET) {
+    var _lens = _textBlocks.map(function(b){ return b.text.length; }).sort(function(a, b){ return a - b; });
+    var _ceil = 0, _used = 0;
+    for(var _li = 0; _li < _lens.length; _li++) {
+      var _left = _lens.length - _li;
+      var _share = Math.floor((DOC_TEXT_BUDGET - _used) / _left);
+      if(_lens[_li] <= _share) { _used += _lens[_li]; continue; }
+      _ceil = _share; break;
+    }
+    if(_ceil > 0) {
+      _textBlocks.forEach(function(b){ if(b.text.length > _ceil) b.text = _capDocText(b.text, _ceil); });
+      console.warn('[runEval] Document text over budget (' + _textTotal + ' chars) — trimmed longest documents to', _ceil);
+    }
+  }
+  var _UNREADABLE_RX = /^\[(?:PDF|Image|HEIC|Word|WORD DOCUMENT|Spreadsheet|RTF|IMAGE ATTACHMENT)[^\n]*?(?:no data|too large|could not|unreadable|not sent|appears empty|no extractable)/i;
+  var _TRUNC_RX = /\[\.\.\. ?(?:document )?truncated|\[\.\.\. TRUNCATED/i;
   _readResults.forEach(function(r) {
     if(r.error) {
       skippedFiles.push(r.f.name + ' (read error: ' + r.error + ')');
-    } else {
-      r.blocks.forEach(function(blk){ msgContent.push(blk); });
-      totalSize += r.f.data.length;
+      _docsNotRead.push(r.f.name + ' (could not be read: ' + r.error + ')');
+      return;
     }
+    var blocks = r.blocks;
+    if(r.overBudget) {
+      // Keep any extracted text; drop only the binary parts that do not fit
+      blocks = blocks.filter(function(b){ return !_binSize(b); });
+      skippedFiles.push(r.f.name + ' (total size limit reached)');
+      _docsNotRead.push(r.f.name + (blocks.length ? ' (scanned pages/images not sent — total upload limit reached)' : ' (not sent — total upload limit reached)'));
+    }
+    blocks.forEach(function(blk){
+      msgContent.push(blk);
+      if(blk.type === 'text' && blk.text) {
+        if(_UNREADABLE_RX.test(blk.text)) _docsNotRead.push(r.f.name + ' (' + blk.text.replace(/^\[|\]$/g,'').substring(0, 140) + ')');
+        if(_TRUNC_RX.test(blk.text) && _docsTruncated.indexOf(r.f.name) === -1) _docsTruncated.push(r.f.name);
+      }
+    });
+    totalSize += r.bin;
   });
 
   // ── Attach the original policy PDF, if one was stored when it was uploaded ──
@@ -2741,60 +2809,62 @@ async function runEval(caseId) {
     try {
       var _polPdf = await idbGet('policy_pdf_' + _matchedLibraryPolicy.id);
       if(_polPdf && _polPdf.data) {
-        if(_polPdf.data.length > MAX_FILE_B64) {
+        if(_polPdf.data.length > MAX_FILE_B64 || _runningTotal + _polPdf.data.length > MAX_TOTAL) {
           var _polPdfMB = Math.round(_polPdf.data.length/1024/1024*10)/10;
           console.warn('[runEval] Skipping oversized original policy PDF:', _polPdf.name, _polPdfMB+'MB');
           toast('⚠ The original PDF for policy "'+(_matchedLibraryPolicy.name||'')+'" is '+_polPdfMB+'MB — too large to attach. Using the extracted policy wording only for this evaluation.', 10000);
         } else {
           msgContent.push({type:'text', text:'NOTE: The following PDF is the original source document for policy "'+(_matchedLibraryPolicy.name||'')+'", whose extracted wording appears later in this message. Use it to verify exact amounts, tables and clause text if anything in the extracted wording is unclear or ambiguous.'});
           msgContent.push({type:'document', source:{type:'base64', media_type:'application/pdf', data:_polPdf.data}, title:_polPdf.name||(_matchedLibraryPolicy.name+' (original policy PDF)')});
+          _runningTotal += _polPdf.data.length;
           console.log('[runEval] Attached original policy PDF:', _polPdf.name);
         }
       }
     } catch(_polPdfErr) { console.warn('[runEval] Could not load stored policy PDF:', _polPdfErr.message); }
   }
 
-  // Add note about skipped files to the prompt
+  // Tell the AI exactly which documents it has NOT seen in full, so it lists
+  // them as unreviewed evidence instead of evaluating as if the file were
+  // complete.
   var skipNote = '';
-  if(skippedFiles.length > 0) {
-    skipNote = '\nNOTE: The following files were too large to attach directly. ' +
-      'Please note them as submitted documents in your evaluation:\n' +
-      skippedFiles.map(function(f){ return '  - ' + f; }).join('\n') + '\n';
-    console.log('[runEval] Skipped files:', skippedFiles);
-    // This used to only be logged to the browser console — invisible to the
-    // operator actually running the evaluation. A skipped file was NOT read by
-    // the AI at all (only its filename gets mentioned to it), so silently
-    // leaving this to the console meant a document could be excluded from the
-    // evaluation with no visible sign of it. Surface it clearly instead.
-    toast('⚠ ' + skippedFiles.length + ' document(s) too large to include — the evaluation will NOT have read: ' + skippedFiles.map(function(f){ return f.split(' (')[0]; }).join(', '), 12000);
+  if(_docsNotRead.length || _docsTruncated.length) {
+    skipNote = '\n=== DOCUMENTS NOT AVAILABLE IN FULL ===\n'
+      + (_docsNotRead.length ? 'The following submitted documents were NOT provided to you (or only partly):\n'
+          + _docsNotRead.map(function(f){ return '  - ' + f; }).join('\n') + '\n' : '')
+      + (_docsTruncated.length ? 'The text of these documents was cut short (see the TRUNCATED marker inside each):\n'
+          + _docsTruncated.map(function(f){ return '  - ' + f; }).join('\n') + '\n' : '')
+      + 'RULE: Do not assume what these documents say. List them under missing/unreviewed evidence, and do not '
+      + 'APPROVE or DECLINE on a point that depends on them — use PENDING INFORMATION for that point instead.\n';
+    console.log('[runEval] Not read in full:', _docsNotRead, _docsTruncated);
+    toast('⚠ ' + (_docsNotRead.length + _docsTruncated.length) + ' document(s) will NOT be read in full: '
+      + _docsNotRead.concat(_docsTruncated).map(function(f){ return f.split(' (')[0]; }).join(', ')
+      + ' — the evaluation will be marked incomplete.', 12000);
   }
+  // Persisted at the top of the saved evaluation (all save paths below)
+  var _incompleteBanner = (_docsNotRead.length || _docsTruncated.length)
+    ? '⚠ INCOMPLETE DOCUMENT REVIEW — the AI did not read every document in full:\n'
+      + _docsNotRead.map(function(f){ return '  • ' + f; }).join('\n') + (_docsNotRead.length ? '\n' : '')
+      + _docsTruncated.map(function(f){ return '  • ' + f + ' (text truncated)'; }).join('\n') + (_docsTruncated.length ? '\n' : '')
+      + 'Re-upload / fix these documents and re-run before relying on this decision.\n\n'
+    : '';
 
   // ── DOCUMENTS SUBMITTED manifest ────────────────────────────────────────
-  // Lists every filename provided in this evaluation so Claude cannot ask for
-  // re-submission of documents already uploaded. Hard rule injected into prompt.
+  // Lists the files actually provided so Claude does not ask for documents it
+  // already has. Files that were NOT provided are listed separately in
+  // skipNote — this used to list every filename on the case as "already
+  // provided", including ones that could not be loaded or were too large,
+  // which told the AI it had reviewed documents it never saw.
+  var _notReadNames = _docsNotRead.map(function(f){ return f.split(' (')[0]; });
   var _manifestNames = [];
-  // Layer 1: files actually read and attached in this eval (highest confidence)
   _readResults.forEach(function(r) {
-    if(r.f && r.f.name) _manifestNames.push(r.f.name);
+    if(r.f && r.f.name && !r.error && _notReadNames.indexOf(r.f.name) === -1 && _manifestNames.indexOf(r.f.name) === -1) _manifestNames.push(r.f.name);
   });
-  // Layer 2: files that were skipped (too large) but were still submitted
-  skippedFiles.forEach(function(s) {
-    var nm = s.split(' (')[0]; // strip the "(too large: ...)" suffix
-    if(nm && _manifestNames.indexOf(nm) === -1) _manifestNames.push(nm);
-  });
-  // Layer 3: case metadata — filenames ever uploaded to this case (covers re-opened sessions)
-  var c0fm = getC(caseId);
-  if(c0fm && c0fm.filesData && c0fm.filesData.length > 0) {
-    c0fm.filesData.forEach(function(fd) {
-      var nm = fd.name || fd.filename || '';
-      if(nm && _manifestNames.indexOf(nm) === -1) _manifestNames.push(nm);
-    });
-  }
   var docManifest = '';
   if(_manifestNames.length > 0) {
-    docManifest = '\nDOCUMENTS SUBMITTED:\n'
+    docManifest = '\nDOCUMENTS SUBMITTED AND PROVIDED TO YOU (' + _manifestNames.length + '):\n'
       + _manifestNames.map(function(n){ return '  • ' + n; }).join('\n')
-      + '\nRULE: Every document listed above is already provided in this evaluation. '
+      + '\nRULE: Every document listed above is attached to this message. Read EVERY one of them in full — every page, '
+      + 'every image, every email and attachment — before deciding, and base your findings on all of them. '
       + 'Do NOT request resubmission of any listed document. '
       + 'If additional information is needed, specify the exact document type required and the reason it is needed.\n\n';
     console.log('[runEval] Document manifest: ' + _manifestNames.length + ' file(s) listed');
@@ -2900,8 +2970,29 @@ async function runEval(caseId) {
     // included) straight to the API, bypassing GDPR pseudonymisation
     // entirely, since it was built from `txt` directly instead of the
     // already-pseudonymised `txtPseudo`.
-    var textOnlyPseudo = pseudonymise(txt, [c.patient, c.policyHolder].filter(Boolean)) + '\n\nNOTE: Document attachments were removed due to a technical issue sending them. Please evaluate based on the case information above.';
-    var textOnlyContent = [{type:'text', text: textOnlyPseudo}];
+    // Keep every document's extracted TEXT (Word, Excel, emails, RTF, …) —
+    // only the binary PDF/image parts are dropped. This retry used to send no
+    // document content at all, so the saved decision rested on the case
+    // header alone.
+    var _droppedBinary = [];
+    var textOnlyContent = [];
+    _readResults.forEach(function(r){
+      if(r.error) return;
+      var hadBin = false;
+      r.blocks.forEach(function(b){
+        if(_binSize(b)) { hadBin = true; return; }
+        if(b.type === 'text') textOnlyContent.push(b);
+      });
+      if(hadBin && !r.overBudget) _droppedBinary.push(r.f.name);
+    });
+    var textOnlyPseudo = pseudonymise(_dupContext + _supplementaryContext + docManifest + txt, [c.patient, c.policyHolder].filter(Boolean))
+      + skipNote
+      + (_droppedBinary.length
+          ? '\n\nNOTE: Because of a technical issue, the PDF pages / images of these documents could NOT be sent and you have NOT seen them: '
+            + _droppedBinary.join(', ') + '. Treat them as unreviewed evidence. Any extracted text that was available is included above.'
+          : '')
+      + mandatoryEnd;
+    textOnlyContent.push({type:'text', text: textOnlyPseudo});
     var retryResult = '';
     // Pass opts so apiCallStream can report back WHY this attempt produced
     // nothing (stop_reason) — this call has no attachments and no thinking,
@@ -2924,7 +3015,14 @@ async function runEval(caseId) {
     if(retryPseudoMap && Object.keys(retryPseudoMap).length && typeof reidentify === 'function') {
       retryResult = reidentify(retryResult, retryPseudoMap);
     }
-    var retryHeader = '=== EVALUATION (text-only retry) ===\n'
+    var _retryNotRead = _droppedBinary.map(function(n){ return '  • ' + n + ' (PDF pages / images not sent — technical error)'; }).join('\n');
+    var retryHeader = (_incompleteBanner || _retryNotRead
+        ? '⚠ INCOMPLETE DOCUMENT REVIEW — the AI did not read every document in full:\n'
+          + _docsNotRead.map(function(f){ return '  • ' + f; }).concat(_docsTruncated.map(function(f){ return '  • ' + f + ' (text truncated)'; })).join('\n')
+          + (_retryNotRead ? (_docsNotRead.length || _docsTruncated.length ? '\n' : '') + _retryNotRead : '')
+          + '\nRe-run the evaluation before relying on this decision.\n\n'
+        : '')
+      + '=== EVALUATION (text-only retry) ===\n'
       + 'Date: '+new Date().toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'})+'\n'
       + 'Time: '+new Date().toLocaleTimeString('en',{hour:'2-digit',minute:'2-digit'})+'\n'
       + 'Evaluator: '+(typeof S==='function'?S().name||'Team Member':'Team Member')+'\n'
@@ -2932,13 +3030,18 @@ async function runEval(caseId) {
     var textOnlyFinal = retryResult;
     var retryDecMatches = [...textOnlyFinal.matchAll(/^\s*DECISION\s*:\s*(DECLINED|APPROVED|PARTIALLY APPROVED|PENDING INFORMATION)\b/gim)];
     var retryDecision = retryDecMatches.length ? retryDecMatches[retryDecMatches.length-1][1].trim() : 'UNKNOWN';
-    var retryStatus = /^DECLIN/.test(retryDecision) ? 'declined' : /^APPROV/.test(retryDecision) ? 'approved' : /^PARTIAL/.test(retryDecision) ? 'partial' : 'reviewing';
+    // Documents were not all read — leave the case under review rather than
+    // closing it as approved/declined on incomplete evidence.
+    var retryStatus = (_droppedBinary.length || _docsNotRead.length) ? 'reviewing'
+      : /^DECLIN/.test(retryDecision) ? 'declined' : /^APPROV/.test(retryDecision) ? 'approved' : /^PARTIAL/.test(retryDecision) ? 'partial' : 'reviewing';
     updC(caseId, {eval: retryHeader + textOnlyFinal, status: retryStatus, lastDecision: retryDecision, lastEvalAt: new Date().toISOString()});
     if(window._currentCaseId === caseId) {
-      if(erDiv) erDiv.innerHTML = renderEvalTxt(textOnlyFinal);
+      if(erDiv) erDiv.innerHTML = renderEvalTxt(retryHeader + textOnlyFinal);
       setEvSt('done', 'Done (text-only) — '+new Date().toLocaleTimeString('en',{hour:'2-digit',minute:'2-digit'}));
     }
-    toast('✓ Evaluation completed WITHOUT document attachments — please verify manually against the original documents', 9000);
+    toast(_droppedBinary.length
+      ? '⚠ Evaluation completed WITHOUT the PDF/image pages of ' + _droppedBinary.length + ' document(s) — marked incomplete; re-run before relying on it'
+      : '✓ Evaluation completed (retry) — all document text was included', 10000);
   }
 
   try {
@@ -3176,6 +3279,7 @@ async function runEval(caseId) {
       _usageLine = 'Tokens Used: '+_totalIn.toLocaleString()+' in'+_cacheNote+' / '+(_evalUsage.output_tokens||0).toLocaleString()+' out — Est. Cost: $'+_estCost.toFixed(3)+' ('+getMod()+(_thinkOn?', thinking on':'')+')\n';
     }
     var evalHeader = policyAbsentBanner
+      + _incompleteBanner
       + '=== EVALUATION ===\n'
       + 'Date: '+new Date().toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'})+'\n'
       + 'Time: '+new Date().toLocaleTimeString('en',{hour:'2-digit',minute:'2-digit'})+'\n'
@@ -3450,7 +3554,7 @@ async function runEval(caseId) {
         if(pseudoMapSnapshot && Object.keys(pseudoMapSnapshot).length && typeof reidentify === 'function') {
           finalResult = reidentify(finalResult, pseudoMapSnapshot);
         }
-        var recoverHeader = '=== EVALUATION (recovered after connection error) ===\n'
+        var recoverHeader = _incompleteBanner + '=== EVALUATION (recovered after connection error) ===\n'
           + 'Date: '+new Date().toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'})+'\n'
           + 'Time: '+new Date().toLocaleTimeString('en',{hour:'2-digit',minute:'2-digit'})+'\n'
           + 'Evaluator: '+(typeof S==='function'?S().name||'Team Member':'Team Member')+'\n'
@@ -12055,7 +12159,7 @@ async function _msgToBlocks(m, fileLabel, depth) {
     + (m.subject ? 'Subject: ' + m.subject + '\n' : '')
     + (attNames.length ? 'Attachments (' + attNames.length + '): ' + attNames.join(', ') + '\n' : '');
   var bodyTxt = (m.bodyText || '').trim();
-  out.push({type:'text', text: hdr + (bodyTxt ? '\n' + parseEmailThread(bodyTxt).substring(0, 80000) : '\n(no text body)')});
+  out.push({type:'text', text: hdr + (bodyTxt ? '\n' + _capDocText(parseEmailThread(bodyTxt)) : '\n(no text body)')});
   for(var i = 0; i < m.attachments.length; i++) {
     var a = m.attachments[i];
     if(a.embedded) {
@@ -12217,7 +12321,7 @@ async function _msgHeuristicBlocks(fd, data) {
           +(fSubject?'Subject: '+fSubject+'\n':'')
           +(attachMentions.length?'Attachments mentioned: '+attachMentions.join(', ')+'\n':'');
         var threadParsed = parseEmailThread(msgClean);
-        var resultBlocks = [{type:'text', text:msgHdr+(msgClean.length>50?'\n'+threadParsed.substring(0,80000):'')}];
+        var resultBlocks = [{type:'text', text:msgHdr+(msgClean.length>50?'\n'+_capDocText(threadParsed):'')}];
         return resultBlocks.concat(msgBlocks);
       }
     } catch(msgErr) { console.warn('[readFileForAI] MSG parse failed:', msgErr.message); }
@@ -12225,6 +12329,17 @@ async function _msgHeuristicBlocks(fd, data) {
   
 }
 
+// Long documents used to be cut at 15–40k characters with no marker, so the
+// AI evaluated (say) the first third of a long hospital report as if it were
+// the whole thing. The cap is now far higher and every cut is marked, which
+// runEval detects and reports as an incompletely read document.
+var DOC_TEXT_CAP = 150000;
+function _capDocText(txt, cap) {
+  txt = String(txt || '');
+  cap = cap || DOC_TEXT_CAP;
+  if(txt.length <= cap) return txt;
+  return txt.substring(0, cap) + '\n[... TRUNCATED — ' + (txt.length - cap).toLocaleString() + ' further characters of this document were not included ...]';
+}
 async function readFileForAI(fd) {
   var ext = fd.ext || fxt(fd.name||'');
   var data = fd.data||'';
@@ -12348,7 +12463,7 @@ async function readFileForAI(fd) {
         var docImageBlocks = [];
         if(htmlResult && htmlResult.value) {
           var imgSrcs = [];
-          htmlResult.value.replace(/<img[^>]+src="(data:image\/[^"]+)"/gi, function(m, src){ if(imgSrcs.length < 8) imgSrcs.push(src); return m; });
+          htmlResult.value.replace(/<img[^>]+src="(data:image\/[^"]+)"/gi, function(m, src){ if(imgSrcs.length < 20) imgSrcs.push(src); return m; });
           for(var ii = 0; ii < imgSrcs.length; ii++) {
             try {
               var prepImg = await prepareImageForAI(imgSrcs[ii], {enhance: true});
@@ -12362,7 +12477,7 @@ async function readFileForAI(fd) {
         if(htmlResult && htmlResult.value && htmlResult.value.length > 10) {
           var mdText = htmlToMdWithTables(htmlResult.value);
           if(mdText && mdText.length > 10) {
-            docTextOut = mdText.length > 40000 ? mdText.substring(0, 40000) + '\n[... document truncated at 40 000 chars ...]' : mdText;
+            docTextOut = _capDocText(mdText);
             console.log('[readFileForAI] Mammoth (HTML→MD):', fd.name, docTextOut.length, 'chars,', docImageBlocks.length, 'image(s)');
           }
         }
@@ -12371,7 +12486,7 @@ async function readFileForAI(fd) {
           var rawRes = await mammoth.extractRawText({arrayBuffer: b64AB(b64wRaw)});
           var rawTxt = (rawRes.value||'').trim();
           if(rawTxt && rawTxt.length > 10) {
-            docTextOut = rawTxt.substring(0, 20000);
+            docTextOut = _capDocText(rawTxt);
             console.log('[readFileForAI] Mammoth (rawText fallback):', fd.name, rawTxt.length, 'chars,', docImageBlocks.length, 'image(s)');
           }
         }
@@ -12416,7 +12531,7 @@ async function readFileForAI(fd) {
         });
       }
       if(xmlText.trim().length > 20) {
-        return [{type:'text', text:'[WORD DOC (ZIP extracted): '+fd.name+']\n\n'+xmlText.trim().replace(/\s{3,}/g,' ').substring(0,20000)}];
+        return [{type:'text', text:'[WORD DOC (ZIP extracted): '+fd.name+']\n\n'+_capDocText(xmlText.trim().replace(/\s{3,}/g,' '))}];
       }
     } catch(zipErr) {
       console.warn('[readFileForAI] ZIP extraction failed for', fd.name, ':', zipErr.message);
@@ -12446,7 +12561,7 @@ async function readFileForAI(fd) {
       var docText = words.join(' ').replace(/\s{3,}/g,' ').trim();
       if(docText.length > 100) {
         console.log('[readFileForAI] Strategy 3 (binary scan) extracted', docText.length, 'chars from', fd.name);
-        return [{type:'text', text:'[WORD DOC (binary extracted): '+fd.name+']\n\n'+docText.substring(0,15000)}];
+        return [{type:'text', text:'[WORD DOC (binary extracted): '+fd.name+']\n\n'+_capDocText(docText)}];
       }
     } catch(s3Err) {
       console.warn('[readFileForAI] Strategy 3 failed for', fd.name, ':', s3Err.message);
@@ -12492,7 +12607,7 @@ async function readFileForAI(fd) {
         out += '\n';
       });
       if(!out.trim()) throw new Error('spreadsheet appears empty');
-      return [{type:'text', text:'[SPREADSHEET: '+fd.name+']\n\n'+out.substring(0,30000)}];
+      return [{type:'text', text:'[SPREADSHEET: '+fd.name+']\n\n'+_capDocText(out)}];
     } catch(e){
       return [{type:'text', text:'[Spreadsheet — could not read '+fd.name+': '+e.message+']'}];
     }
@@ -12508,7 +12623,7 @@ async function readFileForAI(fd) {
       .replace(/[{}\\]/g,'')
       .replace(/\s{2,}/g,' ').trim();
     if(!rtfClean) return [{type:'text', text:'[RTF document: '+fd.name+' — appears empty or image-only]'}];
-    return [{type:'text', text:'[RTF: '+fd.name+']\n\n'+rtfClean.substring(0,20000)}];
+    return [{type:'text', text:'[RTF: '+fd.name+']\n\n'+_capDocText(rtfClean)}];
   }
 
   // ═══════════════════════════════════════════════════════════
@@ -12735,7 +12850,7 @@ async function readFileForAI(fd) {
         if(altUsed && altUsed.v) return;
         var txt=partText(part).replace(/\r\n/g,'\n').replace(/\n{4,}/g,'\n\n').trim();
         if(txt.length>10 && textBlocks<10) {
-          blocks.push({type:'text', text:'[EMAIL BODY]\n\n'+parseEmailThread(txt).substring(0,80000)});
+          blocks.push({type:'text', text:'[EMAIL BODY]\n\n'+_capDocText(parseEmailThread(txt))});
           if(altUsed) altUsed.v=true;
         }
         return;
@@ -12746,7 +12861,7 @@ async function readFileForAI(fd) {
         var htmlSrc = partText(part);
         var htmlTxt = /<table/i.test(htmlSrc) ? htmlToMdWithTables(htmlSrc) : htmlEmailToText(htmlSrc);
         if(htmlTxt.length>10 && textBlocks<10) {
-          blocks.push({type:'text', text:'[EMAIL BODY]\n\n'+parseEmailThread(htmlTxt).substring(0,80000)});
+          blocks.push({type:'text', text:'[EMAIL BODY]\n\n'+_capDocText(parseEmailThread(htmlTxt))});
           if(altUsed) altUsed.v=true;
         }
         return;
@@ -12786,7 +12901,7 @@ async function readFileForAI(fd) {
       await walk(parsed,0,null);
     } catch(emlErr) {
       console.error('[EML] Parser error:', emlErr.message);
-      return [{type:'text', text:'[EMAIL: '+fd.name+']\n\n'+bytesToText(emlRaw,'').substring(0,80000)}];
+      return [{type:'text', text:'[EMAIL: '+fd.name+']\n\n'+_capDocText(bytesToText(emlRaw,""))}];
     }
 
     // Header summary first
@@ -12807,8 +12922,8 @@ async function readFileForAI(fd) {
         .replace(/Content-Transfer-Encoding:\s*base64[\s\S]*?(?=\n--|\n\nContent-)/gi,'[base64 data]')
         .replace(/^[A-Za-z0-9+/]{60,}=*\s*$/gm,'')
         .replace(/--[^\n]{5,}\n/g,'')
-        .replace(/\n{4,}/g,'\n\n').substring(0,80000);
-      blocks.push({type:'text',text:'[EMAIL BODY]\n\n'+parseEmailThread(cleanEml)});
+        .replace(/\n{4,}/g,'\n\n');
+      blocks.push({type:'text',text:'[EMAIL BODY]\n\n'+_capDocText(parseEmailThread(cleanEml))});
     }
 
     console.log('[EML] Parsed:', fd.name, '→', blocks.length, 'blocks,', attachmentNames.length, 'attachments');
@@ -12826,20 +12941,20 @@ async function readFileForAI(fd) {
       .replace(/&nbsp;/g,' ').replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>')
       .replace(/\s{2,}/g,' ').trim();
     if(!htmlClean) return [{type:'text', text:'[HTML document: '+fd.name+' — no text content found]'}];
-    return [{type:'text', text:'[HTML: '+fd.name+']\n\n'+htmlClean.substring(0,20000)}];
+    return [{type:'text', text:'[HTML: '+fd.name+']\n\n'+_capDocText(htmlClean)}];
   }
 
   // ── Plain text / CSV / TSV / ODT / LOG ──────────────────────
   if(ext==='txt' || ext==='other') {
     var txtRaw = readTextFromDataUrl(data);
     if(!txtRaw || !txtRaw.trim()) return [{type:'text', text:'[Document: '+fd.name+' — appears empty]'}];
-    return [{type:'text', text:'[DOCUMENT: '+fd.name+']\n\n'+txtRaw.substring(0,20000)}];
+    return [{type:'text', text:'[DOCUMENT: '+fd.name+']\n\n'+_capDocText(txtRaw)}];
   }
 
   // ── Unknown format — try to read as text anyway ──────────────
   var unknownTxt = readTextFromDataUrl(data);
   if(unknownTxt && unknownTxt.trim().length > 10) {
-    return [{type:'text', text:'[FILE: '+fd.name+' ('+ext+')]\n\n'+unknownTxt.trim().substring(0,20000)}];
+    return [{type:'text', text:'[FILE: '+fd.name+' ('+ext+')]\n\n'+_capDocText(unknownTxt.trim())}];
   }
   return [{type:'text', text:'[File: '+fd.name+' — format not fully supported but file is saved in the case]'}];
 }
