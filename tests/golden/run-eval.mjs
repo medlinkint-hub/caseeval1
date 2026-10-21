@@ -29,6 +29,7 @@ const DRY = flag('dry');
 const RECORD = flag('record');
 const MODEL = opt('model', 'claude-sonnet-5');
 const MAX_TOKENS = parseInt(opt('max-tokens', '8000'), 10);
+const THINKING = opt('thinking', 'disabled'); // disabled | adaptive | omit
 const ONLY = opt('case', null);
 
 const C = {
@@ -74,7 +75,8 @@ async function callAnthropic(system, userText) {
       // thinking field means thinking ON, and the hidden reasoning shares
       // max_tokens with the answer — at 8000 tokens that returned
       // stop_reason max_tokens with no text at all. Haiku rejects the field.
-      ...(MODEL.includes('haiku') ? {} : { thinking: { type: 'disabled' } }),
+      // --thinking=disabled|adaptive|omit overrides for models with other rules.
+      ...(THINKING === 'omit' || MODEL.includes('haiku') ? {} : { thinking: { type: THINKING } }),
       system,
       messages: [{ role: 'user', content: [{ type: 'text', text: userText }] }],
     }),
