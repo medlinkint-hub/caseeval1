@@ -37,6 +37,26 @@ function grabTemplateLiteral(src, constName) {
   return m[1];
 }
 
+// The scheme-notes table and the cancellation-section guard that runEval()
+// injects after the policy wording. Like the prompts, these are evaluated out
+// of index.html at run time — never copied — so the harness tests exactly what
+// the app ships.
+export async function extractRuntimeHelpers() {
+  const src = await readFile(INDEX_HTML, 'utf8');
+  const start = src.indexOf('const SCHEME_NOTES = [');
+  const end = src.indexOf('const SYS_EVAL = `');
+  if (start === -1 || end === -1 || end < start) {
+    throw new Error('Could not locate SCHEME_NOTES / getSchemeNotes / policyHasCancellationSection in index.html. Update lib/extract-prompt.mjs.');
+  }
+  const body = src.slice(start, end).replace('const SCHEME_NOTES', 'var SCHEME_NOTES');
+  // eslint-disable-next-line no-new-func
+  const helpers = new Function(body + '\nreturn { getSchemeNotes, policyHasCancellationSection, CANCELLATION_WRAPPER_CHECK };')();
+  if (typeof helpers.getSchemeNotes !== 'function' || typeof helpers.policyHasCancellationSection !== 'function') {
+    throw new Error('Extracted runtime helpers are not functions — extraction is wrong.');
+  }
+  return helpers;
+}
+
 export async function extractPrompts() {
   const src = await readFile(INDEX_HTML, 'utf8');
   const SECTION_0 = grabTemplateLiteral(src, 'SECTION_0');

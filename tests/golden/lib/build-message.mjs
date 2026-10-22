@@ -11,7 +11,7 @@
 // A drift between this builder and runEval() weakens the harness, so any
 // change to the wrapper in index.html should be reflected here.
 
-import { extractPrompts } from './extract-prompt.mjs';
+import { extractPrompts, extractRuntimeHelpers } from './extract-prompt.mjs';
 
 const NL = '\n';
 
@@ -40,8 +40,20 @@ export async function buildSystemPrompt(fixture) {
   let sys = SECTION_0 + '\n\n' + SYS_EVAL;
   sys = sys + '\n' + typeGuidance(fixture.case.type);
   if (fixture.policy && fixture.policy.wording) {
-    sys += '\n\n=== POLICY: ' + (fixture.policy.name || 'Policy') + ' ===\n'
-        +  fixture.policy.wording + '\n=== END POLICY ===\n';
+    // --- mirrors index.html runEval(): scheme notes + cancellation-section
+    //     wrapper check are placed directly after the policy block ---
+    const { getSchemeNotes, policyHasCancellationSection, CANCELLATION_WRAPPER_CHECK } = await extractRuntimeHelpers();
+    const name = fixture.policy.name || 'Policy';
+    const scheme = getSchemeNotes(name);
+    const c = fixture.case || {};
+    const isCancellation = /cancel/i.test((c.tripType || '') + ' ' + (c.desc || ''));
+    const wrapper = (isCancellation && !policyHasCancellationSection(fixture.policy.wording))
+      ? CANCELLATION_WRAPPER_CHECK
+      : '';
+    sys += '\n\n=== POLICY: ' + name + ' ===\n'
+        +  fixture.policy.wording + '\n=== END POLICY ===\n'
+        +  (scheme ? '\n' + scheme + '\n' : '')
+        +  (wrapper ? '\n' + wrapper + '\n' : '');
   }
   return sys;
 }

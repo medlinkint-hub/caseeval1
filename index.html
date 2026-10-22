@@ -1625,7 +1625,7 @@ function setExtractStatus(msg, state) {
 // ══════════════════════════════════════════════════════════════
 const SECTION_0 = `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 SECTION 0 — MANDATORY PRE-EVALUATION RULES (HIGHEST PRIORITY)
-These 4 rules take precedence over ALL other instructions in this prompt. No exception is permitted under any circumstance.
+Rules 0.1–0.7 take precedence over ALL other instructions in this prompt. No exception is permitted under any circumstance.
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 RULE 0.1 — POLICY REQUIRED FOR ANY FINANCIAL DECISION
@@ -1658,7 +1658,11 @@ If you are evaluating WITHOUT a valid policy document, you MUST structure your r
 RULE 0.5 — EXCLUSION CONFIRMED = DECLINED IMMEDIATELY (no PENDING escape)
 When ALL of the following are true, the DECISION MUST be DECLINED — PENDING INFORMATION is FORBIDDEN:
   (a) The medical documents confirm a specific diagnosis beyond reasonable doubt, AND
-  (b) The policy wording provided explicitly excludes that condition or category.
+  (b) The policy wording provided explicitly excludes that condition or category, AND
+  (c) The operative benefit section for this claim category is present in the policy text provided (Rule 0.7).
+Rule 0.5 covers EXCLUSIONS only. An event date that falls before the Period of Insurance start is NOT an
+"explicit exclusion" for a pre-departure cancellation claim — that is a timing question governed by Rule 0.6.
+Rule 0.5 can NEVER be used to decline a pre-departure cancellation on Period-of-Insurance timing.
 Examples where PENDING is FORBIDDEN and DECLINED is mandatory:
   • Diagnosis = any sexually transmitted disease (herpes/HSV-1/HSV-2, chlamydia, gonorrhoea, syphilis, HPV, Trichomonas, Mycoplasma genitalium, HIV/AIDS, Hepatitis B [sexually acquired], Hepatitis C [sexually acquired], LGV, chancroid, etc.)
     + policy clause excludes "sexually transmitted diseases" or "STIs" → DECLINED
@@ -1667,7 +1671,99 @@ Examples where PENDING is FORBIDDEN and DECLINED is mandatory:
   • Diagnosis = dental treatment + policy covers "emergency dental pain only" and treatment is routine → DECLINED
   • Pre-existing condition confirmed in moratorium period + policy applies moratorium → DECLINED
 Using PENDING to avoid a difficult decision when diagnosis + exclusion are both confirmed is a POLICY EVALUATION ERROR.
+
+RULE 0.6 — PRE-DEPARTURE CANCELLATION: TIMING TEST (overrides any Period-of-Insurance reading)
+Trip cancellation, by its nature, happens BEFORE the trip starts. On a single-trip policy the Period of Insurance
+is usually defined as the dates of the trip, so the cancellation trigger will almost always fall BEFORE the
+Period of Insurance starts. That is expected and is NOT a ground for decline.
+For any claim under a cancellation benefit (e.g. "Section A — Cancellation, Curtailment or Rearrangement"):
+  (a) DO NOT test the triggering event against the Period of Insurance start date.
+  (b) DO NOT cite an operative clause about events "in connection with each Trip commenced ... during the
+      Period of Insurance" as a decline reason — no trip was commenced; that clause governs in-trip events.
+  (c) The eligibility test is ALL THREE of:
+        1. Policy issue / purchase date is BEFORE the triggering event, AND
+        2. Trip booking date is BEFORE the triggering event, AND
+        3. Triggering event occurs BEFORE the scheduled departure.
+      All three met → timing eligibility PASSES. Go on to covered reasons, pre-existing conditions,
+      sum insured, excess and quantum.
+      Policy issued or trip booked ON or AFTER the triggering event → DECLINED (the risk was already known).
+  (d) Booking date or policy issue date NOT in the documents → PENDING INFORMATION (request the booking
+      confirmation / validation certificate). NEVER decline on a missing date.
+  (e) Quantum = irrecoverable unused costs ONLY (amount paid minus refunds, credits and airline tax refunds).
+      If the documents give conflicting figures for the net forfeited amount → PENDING INFORMATION for a
+      signed travel-agent / supplier statement of the net non-refundable amount.
+Curtailment and rearrangement happen DURING the trip and remain subject to the normal Period-of-Insurance test.
+If a "SCHEME NOTES" block is supplied after the policy wording, it records positions agreed with the insurer
+and is applied together with this rule.
+
+RULE 0.7 — OPERATIVE BENEFIT SECTION MUST BE PRESENT BEFORE A FINAL DECLINE
+Before issuing DECLINED, confirm that the benefit section governing this claim (e.g. Section A Cancellation for a
+cancellation claim) is actually present in the policy text provided — its scope of cover, covered reasons and
+exclusions. If only general conditions / definitions / introductory clauses are present and the operative benefit
+section is missing:
+  • You MUST NOT issue DECLINED on general or introductory clauses alone.
+  • DECISION: PENDING INFORMATION.
+  • PENDING ITEMS must name the missing section and the Table of Benefits / Schedule needed, from the insurer
+    or the policy library.
+  • State in Section 1 exactly which parts of the wording were provided and which were not.
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
+
+// ══════════════════════════════════════════════════════════════
+// SCHEME NOTES — positions agreed in writing with an insurer that the
+// policy wording on file does not (yet) reflect: typos in a Table of
+// Benefits, wording the insurer has accepted is defective, amendments
+// that are pending. Injected straight after the policy wording whenever
+// a matching policy is used, so the evaluator applies them on every run
+// instead of relying on the handler to remember.
+// Each entry records its source. Remove an entry once the amended wording
+// is loaded into the Policy Library.
+// ══════════════════════════════════════════════════════════════
+const SCHEME_NOTES = [
+  {
+    id: 'sompo-sft-2026-10',
+    match: /(^|\W)(sft|safetravel|safe\s*travel)(\W|$)/i,
+    text: [
+      'Scheme: Sompo International / SI Insurance (Europe) SA — Safetravel (SFT) travel products, wording 6.2025.',
+      'Source: e-mail thread "Table of benefits and wording misinterpretation", 8–9 Oct 2026, between HWA Head of Claims and Sompo (Kelly Wyatt; underwriter Ben Haden; wordings team Nicki O\'Brien). Amended wording and Table of Benefits are pending from Sompo.',
+      '',
+      '1. SECTION A — CANCELLATION TIMING. The Section A scope clause ("travel plans during the Period of Insurance must be cancelled, curtailed or rearranged") read with the single-trip Period of Insurance definition (= the trip dates) would exclude almost every pre-departure cancellation. Sompo agreed on 8 Oct 2026 that cancellation falls prior to the Period of Insurance, and on 9 Oct 2026 that the wording must be made clearer. Apply Rule 0.6: a cancellation is eligible on timing when the policy was issued AND the trip booked BEFORE the triggering event, and the event occurred BEFORE departure. The Period-of-Insurance start date is NOT a ground to decline a pre-departure cancellation on this scheme.',
+      '',
+      '2. TRAVEL DELAY — Travel Agent Leisure product. The Table of Benefits shows a EUR 100 excess on travel delay; this is a typo. Sompo instructed on 9 Oct 2026: do NOT apply an excess to travel delay. Excess = EUR 0.',
+      '',
+      '3. MISSED DEPARTURE — Travel Agent Leisure product. The Table of Benefits as printed shows the excess WAIVED. HWA\'s interim position is a EUR 100 excess (as on the other SFT products), but Sompo has NOT confirmed this in writing. Apply the Table of Benefits as printed (no excess) unless the case file holds Sompo\'s written confirmation, state both figures in Section 8, and flag the point in NEXT STEPS for the HWA Head of Claims.',
+      '',
+      'These notes govern only the points above. Every other term comes from the policy wording.'
+    ].join('\n')
+  }
+];
+
+// Returns the scheme-notes block for a policy name ('' when none apply).
+function getSchemeNotes(policyName) {
+  var n = String(policyName || '');
+  if (!n) return '';
+  var hits = SCHEME_NOTES.filter(function(s){ return s.match.test(n); });
+  if (!hits.length) return '';
+  return '=== SCHEME NOTES (agreed with insurer — apply together with the policy wording) ===\n'
+    + hits.map(function(s){ return s.text; }).join('\n\n')
+    + '\n=== END SCHEME NOTES ===';
+}
+
+// Does the policy text look like it contains an operative cancellation section?
+// Used to warn when a library wording was loaded without its benefit sections.
+// A heading alone is not enough: a Table of Contents lists "Section A — Cancellation"
+// even when the body of the section was never loaded. So require operative text
+// (the scope-of-cover sentence or the irrecoverable-costs promise), or the heading
+// appearing at least twice (contents entry + the section itself).
+function policyHasCancellationSection(wording) {
+  var w = String(wording || '');
+  if (/travel plans[\s\S]{0,200}must be cancell?ed/i.test(w)) return true;
+  if (/irrecoverable[\s\S]{0,300}(cancel|forfeit)|(cancel|forfeit)[\s\S]{0,300}irrecoverable/i.test(w)) return true;
+  var headings = w.match(/section\s*a\b[^\n]{0,160}cancel/gi) || [];
+  return headings.length >= 2;
+}
+
+// Injected by runEval() when policyHasCancellationSection() fails for a cancellation claim.
+var CANCELLATION_WRAPPER_CHECK = '[WRAPPER CHECK] This appears to be a cancellation claim, but the policy text above does NOT appear to contain the operative cancellation section (e.g. Section A — scope of cover, covered reasons, exclusions). Apply Rule 0.7: do not DECLINE on general or introductory clauses alone. If the attached documents do not supply the section, the decision is PENDING INFORMATION.';
 
 const SYS_EVAL = `You are Dr. Sami's senior AI claims evaluator at HealthWatch Assistance TPA, Thermi, Thessaloniki, Greece — one of Greece's leading international medical TPAs. You combine TWO expert roles in every evaluation:
 
@@ -1824,7 +1920,7 @@ For travel insurance claims, additionally assess:
 
 3. EHIC / RECIPROCAL HEALTHCARE: In EU/EEA countries, the insured must use EHIC (European Health Insurance Card) or equivalent state healthcare first. Private treatment is only covered at the rate that would have been charged under EHIC. Excess = insured's responsibility unless emergency.
 
-4. POLICY ACTIVATION: Single-trip policies activate on departure date. Claims for events before departure (e.g. pre-trip cancellation) require the policy to have been purchased BEFORE the event.
+4. POLICY ACTIVATION: Single-trip policies activate on departure date for in-trip benefits. Pre-departure cancellation is the exception: apply Rule 0.6 (policy issued AND trip booked BEFORE the triggering event, event BEFORE departure). An event that falls before the Period of Insurance start is NOT, by itself, a ground to decline a cancellation claim.
 
 5. ADVENTURE / SPORTS: Check if the activity was covered. Standard policies exclude: mountaineering >4,500m, motorsport, professional sport, bungee jumping, paragliding, scuba >30m. Many policies have optional sports add-ons.
 
@@ -1889,6 +1985,11 @@ that trigger this check: A50–A64 (infectious & STI), B17.1, B18.2 (Hep C),
 B16–B19 (viral hepatitis sexually acquired), B20–B24 (HIV), A60 (herpes), A56
 (chlamydia), A54 (gonorrhoea), A51–A53 (syphilis), B97.7 (HPV).
 ⚠ STI HARD RULE: When (1) medical documents confirm an STI diagnosis AND (2) the policy explicitly excludes "sexually transmitted diseases" or "STIs", the decision is DECLINED. Do NOT issue PENDING INFORMATION — the exclusion is established. There is no clinical ambiguity that justifies deferral.
+
+WAITING PERIOD GUIDANCE — do NOT echo this paragraph: the "Waiting period" label means a waiting-period clause
+actually present in the policy wording (e.g. maternity 10 months, cancer 3 months). Do NOT use it to record a
+Period-of-Insurance timing problem, and NEVER mark it [APPLIES] for a pre-departure cancellation — cancellation
+timing is decided by Rule 0.6 in Section 0 and belongs in Section 4 (Date of Loss and Timeline Analysis).
 
 Labels (echo the label text verbatim, then YOUR OWN colon, then your one-sentence
 reason — the labels below never contain a colon themselves, so anything before
@@ -2568,13 +2669,25 @@ async function runEval(caseId) {
     } else {
       _policyImportant = 'IMPORTANT: Quote specific clauses in your decision. Do not reference any other insurance product not mentioned in this policy.';
     }
-    sys='=== POLICY: '+policySource+' ==='+nl+pw+nl+'=== END POLICY ==='+nl+nl+_policyImportant+nl+nl+sys;setEvSt('run','📋 '+policySource+' policy loaded ('+Math.round(pw.length/1000)+'KB)'+(_hasUploadedPolicyFile?' + full PDF attached':'') +' — evaluating...');
+    // Scheme notes (insurer-agreed positions not yet in the wording) sit directly after the policy text.
+    var _schemeBlock = getSchemeNotes(policySource);
+    if(_schemeBlock) console.log('[runEval] Scheme notes applied for:', policySource);
+    // Guard: a cancellation claim evaluated against wording that has no operative cancellation section.
+    // This is how MAP-1608 was declined on general conditions alone — Rule 0.7 now forces PENDING instead.
+    var _isCancellationClaim = /cancel/i.test((c.tripType||'')+' '+(liveVals&&liveVals.desc||'')+' '+(c.desc||''));
+    var _wrapperCheck = '';
+    if(_isCancellationClaim && !policyHasCancellationSection(pw)) {
+      _wrapperCheck = CANCELLATION_WRAPPER_CHECK;
+      console.warn('[runEval] Cancellation claim but no cancellation section found in policy text:', policySource);
+      toast('⚠ "'+policySource.replace(/ ✓.*$/,'')+'" has no cancellation section in its library text. Re-upload the FULL wording in Settings → Policy Library.', 9000);
+    }
+    sys='=== POLICY: '+policySource+' ==='+nl+pw+nl+'=== END POLICY ==='+nl+nl+(_schemeBlock?_schemeBlock+nl+nl:'')+(_wrapperCheck?_wrapperCheck+nl+nl:'')+_policyImportant+nl+nl+sys;setEvSt('run','📋 '+policySource+' policy loaded ('+Math.round(pw.length/1000)+'KB)'+(_hasUploadedPolicyFile?' + full PDF attached':'') +' — evaluating...');
     console.log('[runEval] Policy matched:', policySource, pw.length, 'chars', _uploadedPolicyFile ? '(from uploaded file — exclusive mode)' : (_hasUploadedPolicyFile ? '(+ uploaded policy file)' : ''));
   } else if(inlinePolicyDetected || (_uploadedPolicyFile && !policyWording)) {
     // Inline policy file present — Claude will read it from msgContent attachments
     // This also covers image-based PDFs where text couldn't be extracted
     var _inlineSrc = policySource || ('Uploaded: ' + _uploadedPolicyFile);
-    sys = '=== POLICY: '+_inlineSrc+' ===\nThe FULL policy document is attached to this message (it may be an image-based PDF — use your visual reading capability to read ALL pages). Read ALL sections including General Exclusions and coverage limits carefully. Quote specific clauses in your decision. The attached file "'+(_uploadedPolicyFile||'policy document')+'" is the ONLY applicable policy — DO NOT reference, mention, or apply any other insurance policy, product name, or wording from your system instructions or training data (e.g. DCare, HCI YourLife, or any other library policy). Evaluate EXCLUSIVELY against this uploaded document.\n=== END POLICY ===\n\n' + sys;
+    sys = '=== POLICY: '+_inlineSrc+' ===\nThe FULL policy document is attached to this message (it may be an image-based PDF — use your visual reading capability to read ALL pages). Read ALL sections including General Exclusions and coverage limits carefully. Quote specific clauses in your decision. The attached file "'+(_uploadedPolicyFile||'policy document')+'" is the ONLY applicable policy — DO NOT reference, mention, or apply any other insurance policy, product name, or wording from your system instructions or training data (e.g. DCare, HCI YourLife, or any other library policy). Evaluate EXCLUSIVELY against this uploaded document.\n=== END POLICY ===\n\n' + (getSchemeNotes(_inlineSrc) ? getSchemeNotes(_inlineSrc) + '\n\n' : '') + sys;
     setEvSt('run', '📄 Uploaded policy attached — Claude will read it directly...');
     console.log('[runEval] Inline policy file mode:', _inlineSrc, _uploadedPolicyFile ? '(image PDF or unextractable)' : '');
   } else {
@@ -3233,6 +3346,7 @@ async function runEval(caseId) {
             + 'CITED POLICY CLAUSE: '+_citedClause+'\n'
             + 'STATED REASON: '+_citedReason+'\n\n'
             + '=== POLICY WORDING ===\n'+policyWording.trim().substring(0,60000)+'\n=== END POLICY WORDING ===\n\n'
+            + (getSchemeNotes(policySource) ? getSchemeNotes(policySource)+'\nThe scheme notes above are insurer-agreed positions and count as support alongside the wording.\n\n' : '')
             + 'Reply in EXACTLY this format, nothing else:\n'
             + 'SUPPORTED: yes OR no\n'
             + 'ISSUE: [one sentence describing the problem, or "none" if supported]';
@@ -3914,7 +4028,8 @@ async function sendCaseChat(presetText, caseId) {
     '',
     qaPolicyAbsent
       ? '=== [POLICY-ABSENT MODE — IPMI STANDARDS ONLY] ===\nNo policy wording is available for this case. You MUST answer using only Lloyd\'s NMA 464, IPMI Forum standards, InterQual/Milliman criteria, and standard market exclusions. Do NOT invent any policy clause, deductible, copay, limit, or exclusion. Stamp every answer with: "⚠ Policy-absent mode — IPMI standards only. Reconcile with actual policy when available."'
-      : ('=== POLICY WORDING: ' + policyName + ' ===\n' + policyWording.substring(0, 80000))
+      : ('=== POLICY WORDING: ' + policyName + ' ===\n' + policyWording.substring(0, 80000)),
+    qaPolicyAbsent ? '' : getSchemeNotes(policyName)
   ].filter(Boolean).join('\n');
 
   // ── Include extracted invoice/spreadsheet data in chat context ──

@@ -1,0 +1,66 @@
+{
+  "id": "004",
+  "name": "Pre-departure cancellation, policy and booking before injury — must not be declined on Period-of-Insurance timing",
+  "rationale": "Regression for MAP-1608 (22 Oct 2026), where the engine declined a genuine pre-departure cancellation because the injury fell before the single-trip Period of Insurance began. Tests SECTION_0 Rule 0.6 and the Sompo/SFT scheme notes: policy issued and trip booked before the injury, injury before departure, so timing passes; payable = net irrecoverable EUR 1,500 less the EUR 50 Section A excess.",
+  "synthetic": true,
+  "case": {
+    "caseNum": "GT-2026-0104",
+    "type": "nonmedclaim",
+    "tripType": "cancellation",
+    "patient": "Test Insured Delta",
+    "country": "Cyprus",
+    "countryOfResidence": "Cyprus",
+    "insurer": "SI Insurance (Europe) SA / Safetravel",
+    "policyNumber": "SFT-TEST-0104",
+    "policyStart": "2026-07-10",
+    "policyEnd": "2026-07-17",
+    "dol": "2026-07-01",
+    "amountClaimed": "1800.00",
+    "currency": "EUR",
+    "paNumber": "none",
+    "paStatus": "not set",
+    "desc": "Trip cancellation. Insured fell at home on 01/07/2026 and fractured his femur; surgery the same day. Trip Larnaca to Dublin, departure 10/07/2026, cancelled. Policy issued 10/05/2026, trip booked 12/05/2026. Claim for the forfeited package cost."
+  },
+  "policy": {
+    "name": "SFT Policy Wording (6.2025) — synthetic extract",
+    "wording": "TRAVEL INSURANCE POLICY WORDING - SINGLE-TRIP AND ANNUAL MULTI-TRIP INSURANCE (synthetic extract for testing)\nTABLE OF CONTENTS: Part 1 General Conditions; Part 2 Definitions; Part 5 Section A - Cancellation, Curtailment or Rearrangement Charges; Section B - Medical Expenses.\nPART 1 - GENERAL CONDITIONS. We will, subject to the terms of this policy, undertake the risk of compensation for each Insured Person against the events set forth in the coverage Sections and occurring in connection with each Trip commenced by the Insured Person(s) anywhere in the world, during the Period of Insurance or any subsequent period for which We agree to accept a payment of premium.\nPART 2 - DEFINITIONS. Period of Insurance: if the single-trip coverage has been purchased, extends to the duration of the Trip (including the date of departure and the date of arrival) and terminates upon its completion. In no case should it exceed the dates stated on the Validation Certificate.\nValidation Certificate: the document confirming the Insured Persons, the plan and the Period of Insurance.\nPART 5 - SECTION A - CANCELLATION, CURTAILMENT OR REARRANGEMENT CHARGES.\nScope of the Coverage: If an Insured Person's travel plans during the Period of Insurance must be cancelled, curtailed or rearranged as a direct result of any hereunder specified event beyond the Insured Person's control, We will pay the Insured Person up to an amount that does not exceed the insurance sum stated on the Schedule of Coverage for any irrecoverable unused travel and accommodation costs in form of advance payments, deposits and other pre-paid charges, which become forfeit and payable under contract.\nSpecified events: (a) death, bodily injury or illness of the Insured Person, a travelling companion or a close relative, certified by a registered medical practitioner as preventing the Trip.\nSection A exclusions: any condition known to the Insured Person at the time the policy was issued or the Trip was booked; voluntary cancellation; costs recoverable from the carrier or any other source.\nSCHEDULE OF COVERAGE - BASIC PLAN: Section A sum insured EUR 3,000 per Insured Person. Section A excess EUR 50 per claim.\n"
+  },
+  "documents": [
+    {
+      "name": "validation-certificate.pdf",
+      "text": "SAFETRAVEL - VALIDATION CERTIFICATE\nPolicy No: SFT-TEST-0104   Plan: Basic   Issue date: 10/05/2026\nInsured: Test Insured Delta\nPeriod of Insurance: 10/07/2026 - 17/07/2026   Type: Single trip   Destination: Ireland"
+    },
+    {
+      "name": "booking-confirmation.pdf",
+      "text": "TEST TRAVEL LTD - BOOKING CONFIRMATION\nBooking date: 12/05/2026   Passenger: Test Insured Delta\nFlights LCA-DUB 10/07/2026, DUB-LCA 17/07/2026; hotel Dublin 7 nights\nTotal paid: EUR 1,800.00"
+    },
+    {
+      "name": "hospital-certificate.pdf",
+      "text": "NICOSIA GENERAL HOSPITAL - MEDICAL CERTIFICATE\nPatient: Test Insured Delta. Admitted 01/07/2026 after a fall at home. Diagnosis: closed fracture of the right femoral shaft. Intramedullary nailing performed 01/07/2026. Unfit to travel until at least 31/08/2026."
+    },
+    {
+      "name": "agency-cancellation-statement.pdf",
+      "text": "TEST TRAVEL LTD - CANCELLATION STATEMENT\nBooking cancelled 02/07/2026 on medical grounds.\nTotal paid: EUR 1,800.00. Airline taxes refunded to client: EUR 300.00.\nNet non-refundable amount forfeited: EUR 1,500.00"
+    },
+    {
+      "name": "claim-form.pdf",
+      "text": "CLAIM FORM - Section A Cancellation. Fell at home 01/07/2026, broke leg, operated same day, could not travel on 10/07/2026. Amount claimed EUR 1,800. Signed 03/07/2026."
+    }
+  ],
+  "sourceFigures": [
+    1800,
+    300,
+    1500,
+    50,
+    3000
+  ],
+  "expected": {
+    "verdict": "APPROVED",
+    "approvedAmount": 1450,
+    "amountTolerance": 0.01,
+    "exclusionsApply": [],
+    "maxUnsourcedFigures": 0,
+    "note": "Rule 0.6: issue 10/05 and booking 12/05 both precede the injury 01/07, which precedes departure 10/07. Quantum is the net forfeited amount (1,800 - 300 refund = 1,500) less the EUR 50 excess. A DECLINED verdict citing the Part 1 'Trip commenced ... during the Period of Insurance' clause is the exact regression this case exists to catch.",
+    "maxUnsourcedFiguresNote": "Zero tolerance, as in the other cases."
+  }
+}
