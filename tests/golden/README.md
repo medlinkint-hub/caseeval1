@@ -95,6 +95,8 @@ This caught a real blind spot during development: a non-zero
 | 001 | Acute appendicitis, Greece — clean approval | Baseline. If this stops returning APPROVED, something broad broke. |
 | 002 | Confirmed gonorrhoea + express STI exclusion | The STI HARD RULE: confirmed STI + express exclusion must be DECLINED, never PENDING. Also the checklist-format canary. |
 | 003 | No policy document supplied | `SECTION_0` Rules 0.1 and 0.4 — the highest-priority guard rail. A regression means the app can approve money against policy terms it invented. |
+| 004 | Pre-departure cancellation, SFT wording, policy and booking before the injury | `SECTION_0` Rule 0.6 + SFT scheme notes. Regression for MAP-1608: a genuine cancellation must not be declined because the injury fell before the single-trip Period of Insurance. Expects APPROVED for the net irrecoverable amount less the Section A excess. **No recording yet** — run `npm run eval:record -- --case=004` with an API key. |
+| 005 | Cancellation claim, wording without the Section A body | `SECTION_0` Rule 0.7 + the cancellation-section wrapper check. A decline on general conditions alone must become PENDING INFORMATION. **No recording yet** — run `npm run eval:record -- --case=005`. |
 
 All three are **synthetic** (`"synthetic": true`) — invented patients, invented
 providers, invented policies. No real patient data is in this repository.
