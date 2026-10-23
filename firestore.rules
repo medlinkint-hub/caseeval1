@@ -40,7 +40,11 @@ service cloud.firestore {
     // ── Case files ────────────────────────────────────────────────────────
     // Patient medical records. GDPR Article 9 special-category data.
     match /cases/{caseId} {
-      allow read, create, delete: if isApprovedMember();
+      allow read, create: if isApprovedMember();
+      // Cases are never hard-deleted — deletion writes a tombstone (update).
+      // A browser still running an older version of the app would otherwise
+      // hard-delete the tombstone and let stale copies come back.
+      allow delete: if false;
       // A deleted case is kept as a tombstone ({id, _deleted:true, …}, no
       // patient data) so other devices learn about the deletion. Once
       // tombstoned it can never be written again — otherwise a PC that was
