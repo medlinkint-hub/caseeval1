@@ -1391,6 +1391,28 @@ function pseudoReset() {
   _pseudoCounters = { PT:0, DOB:0, POL:0, PASS:0, PHONE:0, EMAIL:0 };
 }
 
+// Words that are never part of a person's name but often sit next to one
+// (titles, roles, greetings, function words, prompt labels) — trimmed off
+// the ends of a candidate name.
+var _NAME_TRIM_RX = /^(Dear|Hi|Hello|Mr|Mrs|Ms|Miss|Dr|Prof|Sir|Madam|Patient|Insured|Policyholder|Claimant|Client|Member|Mother|Father|Wife|Husband|Son|Daughter|Brother|Sister|Spouse|Partner|Child|Doctor|Nurse|My|Our|Your|His|Her|Their|The|This|That|These|Those|A|An|And|Or|But|In|On|At|From|To|For|With|By|Of|Via|We|I|He|She|They|It|Re|Fw|Fwd|Subject|Name|Case|Reference|Ref|Claim|Mon|Monday|Tue|Tuesday|Wed|Wednesday|Thu|Thursday|Fri|Friday|Sat|Saturday|Sun|Sunday|January|February|March|April|June|July|August|September|October|November|December|Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)$/;
+// Place and organisation words — a phrase containing one is a country, city,
+// airline, insurer, hospital or company, not a person, and is kept visible
+// because territory, route and insurer often decide coverage.
+var _PLACE_ORG_RX = /^(United|Kingdom|States|America|American|Emirates|Arab|Republic|Federation|Islands?|Saudi|Arabia|South|North|East|West|Central|New|Zealand|York|Africa|Korea|Sri|Lanka|Costa|Rica|Puerto|Rico|Dominican|Czech|Hong|Kong|Las|Vegas|Los|Angeles|San|Santa|Rio|Buenos|Aires|Cape|Town|Abu|Dhabi|Kuala|Lumpur|Tel|Aviv|Greece|Hellas|Cyprus|Germany|France|Italy|Spain|Portugal|Netherlands|Belgium|Austria|Switzerland|Sweden|Norway|Denmark|Finland|Ireland|Scotland|England|Wales|Britain|Poland|Romania|Bulgaria|Serbia|Albania|Croatia|Slovenia|Hungary|Turkey|Türkiye|Egypt|Israel|Lebanon|Morocco|Tunisia|Canada|Mexico|Brazil|Argentina|Chile|Peru|Colombia|Australia|Japan|China|Thailand|Vietnam|Indonesia|Malaysia|Singapore|Philippines|Cambodia|Nepal|Pakistan|Bangladesh|Russia|Ukraine|Qatar|Kuwait|Oman|Bahrain|Iran|Iraq|Kenya|Tanzania|Nigeria|Ghana|Athens|Thessaloniki|Crete|Rhodes|Corfu|Mykonos|Santorini|London|Paris|Berlin|Munich|Frankfurt|Rome|Milan|Madrid|Barcelona|Lisbon|Amsterdam|Brussels|Vienna|Zurich|Geneva|Dubai|Doha|Istanbul|Cairo|Bangkok|Phuket|Bali|Tokyo|Beijing|Shanghai|Sydney|Melbourne|Toronto|Montreal|Vancouver|Boston|Chicago|Miami|Washington|Air|Airlines?|Airways|Aviation|Flights?|Cruises?|Ferries|Rail|Railways|Insurance|Assurance|Reassurance|Re|Care|Health|Healthcare|Medical|Assistance|Global|International|National|Group|Holdings|Company|Co|Ltd|Limited|Inc|Corp|Corporation|GmbH|SA|AG|NV|LLC|PLC|Bank|Centre|Center|Hospital|Clinic|Clinics|Infirmary|Polyclinic|University|Institute|Ministry|Embassy|Consulate|Department|Service|Services|Office|Airport|Station|Port|Hotel|Hotels|Resort|Villa|Street|Avenue|Road|Square|Park|Beach|Bay|Island|Mount|Lake|River|Saint|St|Agia|Agios|General|Private|Public|Foundation|Trust|Association|Society|Council|Authority|Agency|Team|Desk|Reference)$/;
+
+// Medical and claim vocabulary. Diagnoses and procedures are routinely
+// written in Title Case ("Acute Appendicitis", "Atrial Fibrillation",
+// "Laparoscopic Appendectomy") and every one of them used to be masked as a
+// person's name — the evaluator was deciding medical claims without seeing
+// the diagnosis. A phrase containing one of these words, or a word with a
+// medical suffix, is kept visible.
+var _MED_WORD_RX = /^(Acute|Chronic|Severe|Mild|Moderate|Recurrent|Primary|Secondary|Suspected|Confirmed|Final|Provisional|Differential|Chief|Complaint|History|Diagnosis|Impression|Findings|Pain|Ache|Infection|Inflammation|Fracture|Fractures|Sprain|Strain|Dislocation|Injury|Injuries|Wound|Burn|Burns|Bite|Disease|Syndrome|Disorder|Failure|Insufficiency|Stone|Stones|Poisoning|Pressure|Blood|Heart|Cardiac|Coronary|Kidney|Renal|Liver|Hepatic|Lung|Pulmonary|Brain|Cerebral|Spinal|Spine|Bone|Joint|Knee|Hip|Ankle|Wrist|Shoulder|Elbow|Back|Neck|Head|Eye|Ear|Nose|Throat|Skin|Upper|Lower|Left|Right|Bilateral|Respiratory|Urinary|Tract|Abdominal|Chest|Pelvic|Gastric|Intestinal|Bowel|Type|Diabetes|Diabetic|Cancer|Tumour|Tumor|Malignant|Benign|Stroke|Attack|Arrest|Fibrillation|Pneumonia|Fever|Flu|Influenza|Covid|Virus|Viral|Bacterial|Allergic|Reaction|Shock|Sepsis|Dehydration|Vomiting|Diarrhoea|Diarrhea|Nausea|Bleeding|Haemorrhage|Hemorrhage|Clot|Embolism|Thrombosis|Obstruction|Rupture|Torsion|Hernia|Ulcer|Cyst|Polyp|Mass|Lesion|Pregnancy|Labour|Labor|Delivery|Miscarriage|Caesarean|Cesarean|Section|Surgery|Surgical|Operation|Repair|Removal|Replacement|Transplant|Biopsy|Imaging|Ultrasound|Scan|Xray|Ray|Test|Tests|Panel|Count|Culture|Therapy|Treatment|Physiotherapy|Rehabilitation|Medication|Prescription|Dose|Admission|Discharge|Summary|Emergency|Outpatient|Inpatient|Intensive|Unit|Ward|Room|Trip|Travel|Cancellation|Curtailment|Interruption|Baggage|Luggage|Delay|Delayed|Missed|Departure|Loss|Lost|Theft|Stolen|Damage|Damaged|Liability|Repatriation|Evacuation|Transport|Ambulance|Benefit|Benefits|Limit|Limits|Exclusion|Exclusions|Excess|Waiting|Period|Notification|Authorisation|Authorization|Guarantee|Payment|Total|Net|Gross|Eligible|Approved|Declined|Pending|Partial|Information)$/;
+var _MED_SUFFIX_RX = /(itis|osis|ectomy|otomy|ostomy|plasty|scopy|graphy|aemia|emia|algia|pathy|plegia|ism|oma|iasis|ectasis|uria|rrhoea|rrhea|cele|penia|trophy|sclerosis)$/i;
+function _isMedWord(w) {
+  if(_MED_WORD_RX.test(w)) return true;
+  return w.length >= 7 && _MED_SUFFIX_RX.test(w);
+}
+
 function pseudonymise(text, knownNames) {
   if(!text) return text;
   var result = text;
@@ -1449,22 +1471,39 @@ function pseudonymise(text, knownNames) {
   //     (verified: widening the ranges alone still left a real Greek test name
   //     unmatched). Replaced with \p{L}/\p{N} lookaround, same fix as the
   //     known-name matcher above, with the same old-browser \b fallback.
-  var nameBody = '([A-Z\\u0386-\\u03AB][a-z\\u00C0-\\u024F\\u03AC-\\u03CE\\u0600-\\u06FF]+(?:\\s[A-Z\\u0386-\\u03AB][a-z\\u00C0-\\u024F\\u03AC-\\u03CE\\u0600-\\u06FF]+){1,2})';
+  // Up to 4 words so a leading "Dear"/"Dr"/"Mother" can be trimmed off and the
+  // name behind it still masked (see _trimNameWords below).
+  var nameBody = '([A-Z\\u0386-\\u03AB][a-z\\u00C0-\\u024F\\u03AC-\\u03CE\\u0600-\\u06FF]+(?:\\s[A-Z\\u0386-\\u03AB][a-z\\u00C0-\\u024F\\u03AC-\\u03CE\\u0600-\\u06FF]+){1,3})';
   var nameRe2;
   try {
     nameRe2 = new RegExp('(?<![\\p{L}\\p{N}])' + nameBody + '(?![\\p{L}\\p{N}])', 'gu');
   } catch(_reErr2) {
     nameRe2 = new RegExp('\\b' + nameBody + '\\b', 'g');
   }
+  // Any capitalised 2-word phrase used to be treated as a person: countries
+  // ("United Kingdom", "Saudi Arabia"), cities ("New York"), airlines ("Air
+  // Canada"), insurers ("Allianz Care"), and even prompt labels ("Case
+  // Reference") were hidden from the evaluator — the territory, route and
+  // insurer facts a decision depends on. Meanwhile "Dr Somchai Rattanakul"
+  // was left in clear text because the whole phrase was skipped for
+  // containing "Dr". Now leading/trailing titles, roles and ordinary words
+  // are trimmed off first, and a phrase containing a place or organisation
+  // word is left alone.
   result = result.replace(nameRe2, function(match) {
     var parts = match.split(/\s/);
-    if(parts.some(function(p){ return skipWords.test(p); })) return match;
-    if(match.length < 4) return match;
-    if(!_pseudoMap[match]) {
+    var a = 0, b = parts.length;
+    while(a < b && _NAME_TRIM_RX.test(parts[a])) a++;
+    while(b > a && _NAME_TRIM_RX.test(parts[b-1])) b--;
+    var core = parts.slice(a, b);
+    if(core.length < 2) return match;
+    if(core.some(function(p){ return skipWords.test(p) || _PLACE_ORG_RX.test(p) || _NAME_TRIM_RX.test(p) || _isMedWord(p); })) return match;
+    var name = core.join(' ');
+    if(name.length < 4) return match;
+    if(!_pseudoMap[name]) {
       _pseudoCounters.PT++;
-      _pseudoMap[match] = '[PT-' + String(_pseudoCounters.PT).padStart(3,'0') + ']';
+      _pseudoMap[name] = '[PT-' + String(_pseudoCounters.PT).padStart(3,'0') + ']';
     }
-    return _pseudoMap[match];
+    return parts.slice(0, a).concat([_pseudoMap[name]], parts.slice(b)).join(' ');
   });
 
   // 2. Dates are NOT masked — policy start/issue dates, trip dates and diagnosis
@@ -1501,10 +1540,18 @@ function pseudonymise(text, knownNames) {
     return _pseudoMap[match];
   });
 
-  // 5. Phone numbers — international and local formats
+  // 5. Phone numbers — international and local formats.
+  // Dates (17.10.2026, 2026-10-17, 17/10/2026) and amounts with dot
+  // thousands separators (1.234.567) used to match this too and were hidden
+  // as [PHONE-…] — contradicting step 2, which keeps dates on purpose.
   result = result.replace(/(\+?\d[\d\s\-\.\(\)]{7,}\d)/g, function(match) {
     var digits = match.replace(/\D/g,'');
     if(digits.length < 7 || digits.length > 15) return match;
+    var intl = /^(\+|00)/.test(match);
+    if(!intl && /^\d{4}-\d{1,2}-\d{1,2}$/.test(match.trim())) return match;                 // ISO date
+    if(!intl && /^\d{1,2}[.\-\s]\d{1,2}[.\-\s]\d{2,4}$/.test(match.trim())) return match;    // dd.mm.yyyy
+    if(!intl && /^\d{1,3}(\.\d{3})+$/.test(match.trim())) return match;                     // 1.234.567
+    if(!intl && digits.length < 9) return match;                                              // too short for a local number
     if(!_pseudoMap[match]) {
       _pseudoCounters.PHONE++;
       _pseudoMap[match] = '[PHONE-' + String(_pseudoCounters.PHONE).padStart(3,'0') + ']';
