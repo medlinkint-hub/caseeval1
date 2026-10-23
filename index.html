@@ -8255,21 +8255,47 @@ async function generatePatientReply1(id) {
   // things only had one of them answered.
 
   // A final-decision letter needs a finished evaluation to state and justify
-  if(responseType==='final_decision' && (c.pendingStatus || c.verificationFlag)){
-    toast('Final Decision is blocked: this case is held for review (unconfirmed policy clause or documents not fully read). Resolve that first.', 8000);
-    return;
-  }
-  if(responseType==='final_decision' && !(c.eval && /DECISION\s*:\s*(DECLINED|APPROVED|PARTIALLY APPROVED)/i.test(c.eval))){
-    toast('Final Decision needs a completed evaluation with an APPROVED / PARTIALLY APPROVED / DECLINED decision — run the evaluation first', 7000);
-    return;
+  // Decision as stored for the case. lastDecision is the verdict saved by the
+  // evaluation; _parseDecisionLine reads the final DECISION line of the text
+  // (markdown-tolerant) as a fallback for older cases.
+  var _storedDec = String(c.lastDecision || '').replace(/[*#_]+/g,'').trim().toUpperCase() || _parseDecisionLine(c.eval) || '';
+  var _isFinalDec = /^(APPROVED|PARTIALLY APPROVED|DECLINED)\b/.test(_storedDec);
+  var _handlerDecision = null; // {decision, amount, reason} when the claims handler confirms it
+  if(responseType==='final_decision' && (!_isFinalDec || c.pendingStatus || c.verificationFlag)){
+    // The AI evaluation is not a final verdict (e.g. PENDING INFORMATION), or
+    // the case is held for review. Instead of a dead end, let the claims
+    // handler confirm the final decision themselves — the letter then rests
+    // on a human decision, recorded on the case timeline.
+    var _why = !_isFinalDec
+      ? 'The latest AI evaluation' + (c.lastEvalAt ? ' (' + new Date(c.lastEvalAt).toLocaleDateString('en-GB') + ')' : '') + ' ended with: ' + (_storedDec || 'no decision') + '.'
+      : 'This case is held for review (' + (c.verificationFlag ? 'unconfirmed policy clause' : 'not every document was read in full') + ').';
+    // window.prompt/confirm explicitly: this function has its own local `prompt` variable
+    if(!window.confirm(_why + '\n\nA Final Decision letter needs a final decision. Do you, as claims handler, want to confirm the final decision yourself?\n\nOK = confirm it now · Cancel = re-run the evaluation instead')) return;
+    var _code = (window.prompt('Final decision — type:\n  A = Approved\n  P = Partially approved\n  D = Declined', /^PARTIAL/.test(_storedDec) ? 'P' : /^DECLIN/.test(_storedDec) ? 'D' : /^APPROV/.test(_storedDec) ? 'A' : '') || '').trim().toUpperCase();
+    var _hd = {A:'APPROVED', P:'PARTIALLY APPROVED', D:'DECLINED'}[_code.charAt(0)];
+    if(!_hd){ toast('No decision entered — Final Decision letter not generated'); return; }
+    var _amt = '0.00';
+    if(_hd !== 'DECLINED') {
+      _amt = normAmt(window.prompt('Approved amount in EUR:', c.amountApproved || '') || '');
+      if(!_amt){ toast('No approved amount entered — Final Decision letter not generated'); return; }
+    }
+    var _reason = (window.prompt('Reason for the decision, in one or two sentences (cite the policy clause/limit if you can) — it is used as the basis of the letter:', '') || '').trim();
+    if(_reason.length < 10){ toast('A short reason is needed for a Final Decision letter'); return; }
+    _handlerDecision = {decision:_hd, amount:_amt, reason:_reason};
+    addTL(id, 'Final decision confirmed by claims handler for client letter: ' + _hd + (_hd !== 'DECLINED' ? ' — EUR ' + _amt : '') + ' — ' + _reason.substring(0, 160));
   }
   if(statusEl){statusEl.style.display='flex';statusEl.className='evs evr';statusEl.innerHTML='<div class="spin"></div>&nbsp;Reading case and drafting reply&hellip;';}
   if(genBtn){genBtn.innerHTML='<div class="spin" style="width:14px;height:14px;border-color:rgba(255,255,255,.5);border-top-color:#fff;flex-shrink:0"></div>&nbsp;Drafting...';genBtn.disabled=true;}
   if(outputWrap)outputWrap.style.display='none';
 
   // Build full case context for AI
-  var dec=typeof parseDecision==='function'?parseDecision(c.eval):null;
-  var decText=dec?dec.status+' — EUR '+dec.amount:c.status?c.status.toUpperCase():'Pending evaluation';
+  // The decision text given to the AI. This called parseDecision(), which
+  // does not exist, so every reply type got only the case status
+  // ("PARTIAL", "REVIEWING") instead of the decision and approved amount.
+  var decText;
+  if(_handlerDecision) decText=_handlerDecision.decision+(_handlerDecision.decision!=='DECLINED'?' — EUR '+_handlerDecision.amount:'');
+  else if(_storedDec) decText=_storedDec+(/^(APPROVED|PARTIALLY)/.test(_storedDec) && parseFloat(c.amountApproved)>0 ? ' — EUR '+c.amountApproved : '');
+  else decText=c.eval?'Evaluated (no final decision line)':'Pending evaluation';
 
   // Type-specific instructions
   var typeInstruction='';
@@ -8287,7 +8313,9 @@ async function generatePatientReply1(id) {
     +'(e) in ONE short, neutral closing sentence, it notes that the client keeps any statutory right to refer the matter to the competent financial ombudsman or courts — this is a legal right the TPA cannot remove, so do not omit it, but do not encourage it either. '
     +'Do NOT offer an internal appeal, a further review, a reconsideration, or "we will look into this again". Do NOT invite the client to send more documents. Do NOT use apologetic language that implies the decision is uncertain. Stay courteous and respectful. '
     +'These rules OVERRIDE the general rules below wherever they conflict (next steps in rule 11 are only payment/administrative ones; placeholders under rule 6 must never promise a review of the decision). '
-    +'If the case evaluation does not contain a clear final DECISION and policy basis, do NOT write a final-decision letter: instead write a short internal note (addressed to the claims handler, not the client) saying the case is not ready for a final-decision letter and what is missing.';}
+    +(_handlerDecision
+      ? 'The final decision was CONFIRMED BY THE CLAIMS HANDLER (it overrides any different or pending outcome in the AI evaluation): '+decText+'. Handler\'s reason: '+_handlerDecision.reason+' — base the explanation on this reason, supported by the facts and policy wording in the evaluation; do not contradict it and do not mention that the AI evaluation said otherwise.'
+      : 'If the case evaluation does not contain a clear final DECISION and policy basis, do NOT write a final-decision letter: instead write a short internal note (addressed to the claims handler, not the client) saying the case is not ready for a final-decision letter and what is missing.');}
   else if(responseType==='approval_confirm'){typeInstruction='Confirm the approval positively and clearly: '+decText+'. Explain the payment process, expected timeline, and any conditions. Include bank details / reimbursement instructions if relevant. Be warm and reassuring.';}
   else if(responseType==='payment_query'){typeInstruction='Address the payment question directly. Provide clear information on the approved amount, payment timeline, method and any bank details or reference needed. If payment is pending, give the expected date only if it is in the case data; otherwise use [CONFIRM: payment date].';}
   else if(responseType==='urgent_case'){typeInstruction='This is an URGENT situation — respond immediately and with priority. Acknowledge the urgency explicitly in the first sentence. Provide any immediate assistance available and a specific named contact or escalation path. Confirm what is being done RIGHT NOW.';}
