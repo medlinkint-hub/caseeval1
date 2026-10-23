@@ -1391,6 +1391,28 @@ function pseudoReset() {
   _pseudoCounters = { PT:0, DOB:0, POL:0, PASS:0, PHONE:0, EMAIL:0 };
 }
 
+// Words that are never part of a person's name but often sit next to one
+// (titles, roles, greetings, function words, prompt labels) — trimmed off
+// the ends of a candidate name.
+var _NAME_TRIM_RX = /^(Dear|Hi|Hello|Mr|Mrs|Ms|Miss|Dr|Prof|Sir|Madam|Patient|Insured|Policyholder|Claimant|Client|Member|Mother|Father|Wife|Husband|Son|Daughter|Brother|Sister|Spouse|Partner|Child|Doctor|Nurse|My|Our|Your|His|Her|Their|The|This|That|These|Those|A|An|And|Or|But|In|On|At|From|To|For|With|By|Of|Via|We|I|He|She|They|It|Re|Fw|Fwd|Subject|Name|Case|Reference|Ref|Claim|Mon|Monday|Tue|Tuesday|Wed|Wednesday|Thu|Thursday|Fri|Friday|Sat|Saturday|Sun|Sunday|January|February|March|April|June|July|August|September|October|November|December|Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)$/;
+// Place and organisation words — a phrase containing one is a country, city,
+// airline, insurer, hospital or company, not a person, and is kept visible
+// because territory, route and insurer often decide coverage.
+var _PLACE_ORG_RX = /^(United|Kingdom|States|America|American|Emirates|Arab|Republic|Federation|Islands?|Saudi|Arabia|South|North|East|West|Central|New|Zealand|York|Africa|Korea|Sri|Lanka|Costa|Rica|Puerto|Rico|Dominican|Czech|Hong|Kong|Las|Vegas|Los|Angeles|San|Santa|Rio|Buenos|Aires|Cape|Town|Abu|Dhabi|Kuala|Lumpur|Tel|Aviv|Greece|Hellas|Cyprus|Germany|France|Italy|Spain|Portugal|Netherlands|Belgium|Austria|Switzerland|Sweden|Norway|Denmark|Finland|Ireland|Scotland|England|Wales|Britain|Poland|Romania|Bulgaria|Serbia|Albania|Croatia|Slovenia|Hungary|Turkey|Türkiye|Egypt|Israel|Lebanon|Morocco|Tunisia|Canada|Mexico|Brazil|Argentina|Chile|Peru|Colombia|Australia|Japan|China|Thailand|Vietnam|Indonesia|Malaysia|Singapore|Philippines|Cambodia|Nepal|Pakistan|Bangladesh|Russia|Ukraine|Qatar|Kuwait|Oman|Bahrain|Iran|Iraq|Kenya|Tanzania|Nigeria|Ghana|Athens|Thessaloniki|Crete|Rhodes|Corfu|Mykonos|Santorini|London|Paris|Berlin|Munich|Frankfurt|Rome|Milan|Madrid|Barcelona|Lisbon|Amsterdam|Brussels|Vienna|Zurich|Geneva|Dubai|Doha|Istanbul|Cairo|Bangkok|Phuket|Bali|Tokyo|Beijing|Shanghai|Sydney|Melbourne|Toronto|Montreal|Vancouver|Boston|Chicago|Miami|Washington|Air|Airlines?|Airways|Aviation|Flights?|Cruises?|Ferries|Rail|Railways|Insurance|Assurance|Reassurance|Re|Care|Health|Healthcare|Medical|Assistance|Global|International|National|Group|Holdings|Company|Co|Ltd|Limited|Inc|Corp|Corporation|GmbH|SA|AG|NV|LLC|PLC|Bank|Centre|Center|Hospital|Clinic|Clinics|Infirmary|Polyclinic|University|Institute|Ministry|Embassy|Consulate|Department|Service|Services|Office|Airport|Station|Port|Hotel|Hotels|Resort|Villa|Street|Avenue|Road|Square|Park|Beach|Bay|Island|Mount|Lake|River|Saint|St|Agia|Agios|General|Private|Public|Foundation|Trust|Association|Society|Council|Authority|Agency|Team|Desk|Reference)$/;
+
+// Medical and claim vocabulary. Diagnoses and procedures are routinely
+// written in Title Case ("Acute Appendicitis", "Atrial Fibrillation",
+// "Laparoscopic Appendectomy") and every one of them used to be masked as a
+// person's name — the evaluator was deciding medical claims without seeing
+// the diagnosis. A phrase containing one of these words, or a word with a
+// medical suffix, is kept visible.
+var _MED_WORD_RX = /^(Acute|Chronic|Severe|Mild|Moderate|Recurrent|Primary|Secondary|Suspected|Confirmed|Final|Provisional|Differential|Chief|Complaint|History|Diagnosis|Impression|Findings|Pain|Ache|Infection|Inflammation|Fracture|Fractures|Sprain|Strain|Dislocation|Injury|Injuries|Wound|Burn|Burns|Bite|Disease|Syndrome|Disorder|Failure|Insufficiency|Stone|Stones|Poisoning|Pressure|Blood|Heart|Cardiac|Coronary|Kidney|Renal|Liver|Hepatic|Lung|Pulmonary|Brain|Cerebral|Spinal|Spine|Bone|Joint|Knee|Hip|Ankle|Wrist|Shoulder|Elbow|Back|Neck|Head|Eye|Ear|Nose|Throat|Skin|Upper|Lower|Left|Right|Bilateral|Respiratory|Urinary|Tract|Abdominal|Chest|Pelvic|Gastric|Intestinal|Bowel|Type|Diabetes|Diabetic|Cancer|Tumour|Tumor|Malignant|Benign|Stroke|Attack|Arrest|Fibrillation|Pneumonia|Fever|Flu|Influenza|Covid|Virus|Viral|Bacterial|Allergic|Reaction|Shock|Sepsis|Dehydration|Vomiting|Diarrhoea|Diarrhea|Nausea|Bleeding|Haemorrhage|Hemorrhage|Clot|Embolism|Thrombosis|Obstruction|Rupture|Torsion|Hernia|Ulcer|Cyst|Polyp|Mass|Lesion|Pregnancy|Labour|Labor|Delivery|Miscarriage|Caesarean|Cesarean|Section|Surgery|Surgical|Operation|Repair|Removal|Replacement|Transplant|Biopsy|Imaging|Ultrasound|Scan|Xray|Ray|Test|Tests|Panel|Count|Culture|Therapy|Treatment|Physiotherapy|Rehabilitation|Medication|Prescription|Dose|Admission|Discharge|Summary|Emergency|Outpatient|Inpatient|Intensive|Unit|Ward|Room|Trip|Travel|Cancellation|Curtailment|Interruption|Baggage|Luggage|Delay|Delayed|Missed|Departure|Loss|Lost|Theft|Stolen|Damage|Damaged|Liability|Repatriation|Evacuation|Transport|Ambulance|Benefit|Benefits|Limit|Limits|Exclusion|Exclusions|Excess|Waiting|Period|Notification|Authorisation|Authorization|Guarantee|Payment|Total|Net|Gross|Eligible|Approved|Declined|Pending|Partial|Information)$/;
+var _MED_SUFFIX_RX = /(itis|osis|ectomy|otomy|ostomy|plasty|scopy|graphy|aemia|emia|algia|pathy|plegia|ism|oma|iasis|ectasis|uria|rrhoea|rrhea|cele|penia|trophy|sclerosis)$/i;
+function _isMedWord(w) {
+  if(_MED_WORD_RX.test(w)) return true;
+  return w.length >= 7 && _MED_SUFFIX_RX.test(w);
+}
+
 function pseudonymise(text, knownNames) {
   if(!text) return text;
   var result = text;
@@ -1449,22 +1471,39 @@ function pseudonymise(text, knownNames) {
   //     (verified: widening the ranges alone still left a real Greek test name
   //     unmatched). Replaced with \p{L}/\p{N} lookaround, same fix as the
   //     known-name matcher above, with the same old-browser \b fallback.
-  var nameBody = '([A-Z\\u0386-\\u03AB][a-z\\u00C0-\\u024F\\u03AC-\\u03CE\\u0600-\\u06FF]+(?:\\s[A-Z\\u0386-\\u03AB][a-z\\u00C0-\\u024F\\u03AC-\\u03CE\\u0600-\\u06FF]+){1,2})';
+  // Up to 4 words so a leading "Dear"/"Dr"/"Mother" can be trimmed off and the
+  // name behind it still masked (see _trimNameWords below).
+  var nameBody = '([A-Z\\u0386-\\u03AB][a-z\\u00C0-\\u024F\\u03AC-\\u03CE\\u0600-\\u06FF]+(?:\\s[A-Z\\u0386-\\u03AB][a-z\\u00C0-\\u024F\\u03AC-\\u03CE\\u0600-\\u06FF]+){1,3})';
   var nameRe2;
   try {
     nameRe2 = new RegExp('(?<![\\p{L}\\p{N}])' + nameBody + '(?![\\p{L}\\p{N}])', 'gu');
   } catch(_reErr2) {
     nameRe2 = new RegExp('\\b' + nameBody + '\\b', 'g');
   }
+  // Any capitalised 2-word phrase used to be treated as a person: countries
+  // ("United Kingdom", "Saudi Arabia"), cities ("New York"), airlines ("Air
+  // Canada"), insurers ("Allianz Care"), and even prompt labels ("Case
+  // Reference") were hidden from the evaluator — the territory, route and
+  // insurer facts a decision depends on. Meanwhile "Dr Somchai Rattanakul"
+  // was left in clear text because the whole phrase was skipped for
+  // containing "Dr". Now leading/trailing titles, roles and ordinary words
+  // are trimmed off first, and a phrase containing a place or organisation
+  // word is left alone.
   result = result.replace(nameRe2, function(match) {
     var parts = match.split(/\s/);
-    if(parts.some(function(p){ return skipWords.test(p); })) return match;
-    if(match.length < 4) return match;
-    if(!_pseudoMap[match]) {
+    var a = 0, b = parts.length;
+    while(a < b && _NAME_TRIM_RX.test(parts[a])) a++;
+    while(b > a && _NAME_TRIM_RX.test(parts[b-1])) b--;
+    var core = parts.slice(a, b);
+    if(core.length < 2) return match;
+    if(core.some(function(p){ return skipWords.test(p) || _PLACE_ORG_RX.test(p) || _NAME_TRIM_RX.test(p) || _isMedWord(p); })) return match;
+    var name = core.join(' ');
+    if(name.length < 4) return match;
+    if(!_pseudoMap[name]) {
       _pseudoCounters.PT++;
-      _pseudoMap[match] = '[PT-' + String(_pseudoCounters.PT).padStart(3,'0') + ']';
+      _pseudoMap[name] = '[PT-' + String(_pseudoCounters.PT).padStart(3,'0') + ']';
     }
-    return _pseudoMap[match];
+    return parts.slice(0, a).concat([_pseudoMap[name]], parts.slice(b)).join(' ');
   });
 
   // 2. Dates are NOT masked — policy start/issue dates, trip dates and diagnosis
@@ -1501,10 +1540,18 @@ function pseudonymise(text, knownNames) {
     return _pseudoMap[match];
   });
 
-  // 5. Phone numbers — international and local formats
+  // 5. Phone numbers — international and local formats.
+  // Dates (17.10.2026, 2026-10-17, 17/10/2026) and amounts with dot
+  // thousands separators (1.234.567) used to match this too and were hidden
+  // as [PHONE-…] — contradicting step 2, which keeps dates on purpose.
   result = result.replace(/(\+?\d[\d\s\-\.\(\)]{7,}\d)/g, function(match) {
     var digits = match.replace(/\D/g,'');
     if(digits.length < 7 || digits.length > 15) return match;
+    var intl = /^(\+|00)/.test(match);
+    if(!intl && /^\d{4}-\d{1,2}-\d{1,2}$/.test(match.trim())) return match;                 // ISO date
+    if(!intl && /^\d{1,2}[.\-\s]\d{1,2}[.\-\s]\d{2,4}$/.test(match.trim())) return match;    // dd.mm.yyyy
+    if(!intl && /^\d{1,3}(\.\d{3})+$/.test(match.trim())) return match;                     // 1.234.567
+    if(!intl && digits.length < 9) return match;                                              // too short for a local number
     if(!_pseudoMap[match]) {
       _pseudoCounters.PHONE++;
       _pseudoMap[match] = '[PHONE-' + String(_pseudoCounters.PHONE).padStart(3,'0') + ']';
@@ -2209,12 +2256,23 @@ async function runEval(caseId) {
   const btn = G('bRun'); if(btn) btn.disabled = true;
   
   // ── Auto-load files from IndexedDB if not in memory ──
-  // Fires when: FILES belongs to a different case, is empty, or all entries are metadata-only
+  // Fires when FILES belongs to a different case, or when ANY file listed on
+  // the case has no data in memory. This used to fire only when FILES was
+  // empty or had no data at all, so a case whose in-memory list was missing
+  // one or two documents (e.g. added on another screen, or loaded before a
+  // later upload finished) was evaluated without them and nothing said so.
   var c0 = getC(caseId);
+  // Saved evaluation reports (Evaluation_*.html) are not case evidence and are
+  // never sent; their data exists only on the device that ran the evaluation,
+  // so they must not count as missing documents on a teammate's PC.
+  var _isEvalReportMeta = function(f){ return !!(f && (f._isEvalReport || /^Evaluation_.*\.html$/i.test(f.name||''))); };
+  var _memHasData = function(name){
+    return _filesForCaseId === caseId && FILES.some(function(f){ return f.name === name && f.data && f.data.length > 100; });
+  };
   var needsIDBLoad = c0 && c0.filesData && c0.filesData.length > 0 &&
     (_filesForCaseId !== caseId ||
      FILES.length === 0 ||
-     FILES.every(function(f){ return !f.data || f.data.length <= 100; }));
+     c0.filesData.some(function(meta){ return meta && meta.name && !_isEvalReportMeta(meta) && !_memHasData(meta.name); }));
 
   if(needsIDBLoad) {
     setEvSt('run', '⏳ Loading documents from storage...');
@@ -2246,8 +2304,19 @@ async function runEval(caseId) {
       } catch(e0) { console.warn('[runEval] IDB key failed:', _idbKeys[_ki], e0.message); }
     }
 
+    // Data already in memory for this case wins — it may not be persisted yet
+    var memByName0 = {};
+    var memOnly0 = [];
+    if(_filesForCaseId === caseId) {
+      var _listed0 = new Set(c0.filesData.map(function(m){ return m && m.name; }));
+      FILES.forEach(function(f){
+        if(f && f.name && f.data && f.data.length > 100) memByName0[f.name] = f.data;
+        if(f && f.name && !_listed0.has(f.name)) memOnly0.push(f); // just added, not yet in filesData
+      });
+    }
     var _rebuilt0 = await Promise.all(c0.filesData.map(function(meta) {
       var fd = Object.assign({}, meta, {ext: (meta.ext && meta.ext.length <= 4 && ['pdf','doc','img','xls','rtf','eml','txt','html','heic','other'].indexOf(meta.ext)!==-1) ? meta.ext : fxt(meta.name||'')});
+      if(memByName0[meta.name]) { fd.data = memByName0[meta.name]; return fd; }
       if(combinedByName0[meta.name]) { fd.data = combinedByName0[meta.name]; return fd; }
       if(!meta._key) return fd;
       return idbGet(meta._key).then(function(data){
@@ -2261,7 +2330,7 @@ async function runEval(caseId) {
     }));
     // Guard: abort if user switched cases during the per-file IDB load
     if(window._currentCaseId !== caseId) { console.warn('[runEval] Case switched during per-file IDB load — aborting'); return; }
-    FILES = dedupeFiles(_rebuilt0);
+    FILES = dedupeFiles(_rebuilt0.concat(memOnly0));
     _filesForCaseId = caseId; // mark these files as belonging to caseId
     var loaded = FILES.some(function(f){ return f.data && f.data.length > 100; });
     console.log('[runEval] Loaded', FILES.filter(function(f){return f.data && f.data.length>100;}).length, '/', FILES.length, 'file(s) with data for case', caseId);
@@ -2274,8 +2343,8 @@ async function runEval(caseId) {
   }
 
   // Re-check after IDB load attempt
-  var filesWithData = FILES.filter(function(f){ return f.data && f.data.length > 100; });
-  var filesMetaOnly = FILES.filter(function(f){ return !f.data || f.data.length <= 100; });
+  var filesWithData = FILES.filter(function(f){ return f.data && f.data.length > 100 && !_isEvalReportMeta(f); });
+  var filesMetaOnly = FILES.filter(function(f){ return (!f.data || f.data.length <= 100) && !_isEvalReportMeta(f); });
   var hasUploadedFiles = c0 && c0.filesData && c0.filesData.length > 0;
 
   if(hasUploadedFiles && filesWithData.length === 0) {
@@ -2287,7 +2356,16 @@ async function runEval(caseId) {
     }
     toast('Evaluating without documents — case information only', 4000);
   } else if(filesMetaOnly.length > 0 && filesWithData.length > 0) {
-    toast('⚠ ' + filesMetaOnly.length + ' file(s) not loaded. Evaluating with ' + filesWithData.length + ' available.', 4000);
+    // Some documents exist only as names here (e.g. uploaded on another PC —
+    // file contents stay on the device that uploaded them). Evaluating without
+    // them must be a deliberate choice, not a 4-second toast.
+    if(!confirm('⚠ ' + filesMetaOnly.length + ' of ' + FILES.length + ' document(s) could not be loaded on this device and would NOT be read:\n\n'
+        + filesMetaOnly.map(function(f){ return '  • ' + f.name; }).join('\n')
+        + '\n\nThey were probably uploaded on another PC or browser. Re-upload them here for a complete evaluation.\n\nClick OK to evaluate WITHOUT them (the evaluation will be marked incomplete), or Cancel to stop.')) {
+      setEvSt('err', 'Cancelled — re-upload the missing documents in the Files tab');
+      if(btn) btn.disabled = false;
+      return;
+    }
   }
   const liveVals = {
     patient: G('f_p') ? G('f_p').value.trim() : '',
@@ -2669,38 +2747,34 @@ async function runEval(caseId) {
 
   const msgContent = [];
   var skippedFiles = [];
-  var MAX_FILE_B64 = 5 * 1024 * 1024; // 5MB per regular file
-  var MAX_EML_B64  = 20 * 1024 * 1024; // 20MB for .eml/.msg (may contain large PDF attachments)
+  var MAX_FILE_B64 = 5 * 1024 * 1024; // cap for the optional original policy PDF cross-check
   var totalSize = 0;
-  var MAX_TOTAL = 20 * 1024 * 1024; // 20MB total limit
+  // Budget for document/image attachments, measured on what is actually sent
+  // (after images are resized), not on the raw upload. The API rejects
+  // requests over 32MB, so this leaves room for the text and JSON overhead.
+  var MAX_TOTAL = 24 * 1024 * 1024;
+  // Per-file record of anything the AI will not see in full — written into the
+  // saved evaluation (not just a toast) so nobody relies on a decision that
+  // was made without part of the file.
+  var _docsNotRead = [];   // "name (reason)"
+  var _docsTruncated = []; // names whose text was cut
+  var _unreadNames = [];   // files the AI receives NOTHING usable from (excluded from the manifest)
+  function _markUnread(name, reason, whole) {
+    _docsNotRead.push(name + ' (' + reason + ')');
+    if(whole && _unreadNames.indexOf(name) === -1) _unreadNames.push(name);
+  }
+  filesMetaOnly.forEach(function(f){ if(f && f.name) _markUnread(f.name, 'not available on this device', true); });
 
   // Build content blocks for all file types — PARALLEL reading for speed
   // IMPORTANT: Only attach files that belong to THIS case. If FILES were loaded
   // for a different case in a previous session, do not attach them here.
   setEvSt('run', 'Preparing documents...');
-  var _filesToRead = [];
-  var _runningTotal = 0;
   var _evalFiles = (_filesForCaseId === caseId) ? FILES.filter(function(f){ return !f._isEvalReport && !/^Evaluation_.*\.html$/i.test(f.name||''); }) : [];
-  for(var _fi = 0; _fi < _evalFiles.length; _fi++) {
-    var _ff = _evalFiles[_fi];
-    if(!_ff.data) continue;
-    var _ds = _ff.data.length;
-    var _isEmailFile = (_ff.ext === 'eml' || _ff.ext === 'msg');
-    var _sizeLimit = _isEmailFile ? MAX_EML_B64 : MAX_FILE_B64;
-    if(_ds > _sizeLimit) {
-      if(_isEmailFile) { _filesToRead.push(_ff); continue; } // never skip emails
-      skippedFiles.push(_ff.name + ' (too large: ' + Math.round(_ds/1024/1024*10)/10 + 'MB)');
-      console.warn('[runEval] Skipping large file:', _ff.name);
-      continue;
-    }
-    if(_runningTotal + _ds > MAX_TOTAL) {
-      skippedFiles.push(_ff.name + ' (total size limit reached)');
-      continue;
-    }
-    _runningTotal += _ds;
-    _filesToRead.push(_ff);
-  }
-  // Read all files in parallel — much faster than sequential await
+  var _filesToRead = _evalFiles.filter(function(f){ return f.data; });
+  // Read all files in parallel — much faster than sequential await.
+  // Size is checked AFTER reading: photos are resized to well under 5MB by
+  // readFileForAI, so the old check on the raw upload size wrongly dropped
+  // ordinary phone photos and scans that would have fitted easily.
   var _readResults = await Promise.all(_filesToRead.map(function(f) {
     return readFileForAI(f).then(function(blocks) {
       console.log('[runEval] Ready:', f.name, '(', f.ext, ') -', (blocks||[]).length, 'block(s)');
@@ -2710,13 +2784,74 @@ async function runEval(caseId) {
       return { f: f, blocks: [], error: err.message };
     });
   }));
+  function _binSize(blk) { return (blk && (blk.type==='document' || blk.type==='image') && blk.source && blk.source.data) ? blk.source.data.length : 0; }
+  _readResults.forEach(function(r) {
+    r.bin = r.blocks.reduce(function(n, b){ return n + _binSize(b); }, 0);
+  });
+  // Fit as many documents as possible: admit the smallest first, then emit in
+  // the original upload order.
+  var _runningTotal = 0;
+  _readResults.slice().sort(function(a, b){ return a.bin - b.bin; }).forEach(function(r) {
+    if(r.error || !r.bin) return;
+    if(_runningTotal + r.bin > MAX_TOTAL) { r.overBudget = true; return; }
+    _runningTotal += r.bin;
+  });
+  // Shared text budget across all documents (~110k tokens) so a case with
+  // many long documents still fits the model's context window. When over,
+  // the longest texts are trimmed first (each to the same ceiling) and marked
+  // as truncated, which is reported below — never a silent cut.
+  var DOC_TEXT_BUDGET = 400000;
+  var _textBlocks = [];
+  _readResults.forEach(function(r){ r.blocks.forEach(function(b){ if(b.type === 'text' && b.text) _textBlocks.push(b); }); });
+  var _textTotal = _textBlocks.reduce(function(n, b){ return n + b.text.length; }, 0);
+  if(_textTotal > DOC_TEXT_BUDGET) {
+    var _lens = _textBlocks.map(function(b){ return b.text.length; }).sort(function(a, b){ return a - b; });
+    var _ceil = 0, _used = 0;
+    for(var _li = 0; _li < _lens.length; _li++) {
+      var _left = _lens.length - _li;
+      var _share = Math.floor((DOC_TEXT_BUDGET - _used) / _left);
+      if(_lens[_li] <= _share) { _used += _lens[_li]; continue; }
+      _ceil = _share; break;
+    }
+    if(_ceil > 0) {
+      _textBlocks.forEach(function(b){ if(b.text.length > _ceil) b.text = _capDocText(b.text, _ceil); });
+      console.warn('[runEval] Document text over budget (' + _textTotal + ' chars) — trimmed longest documents to', _ceil);
+    }
+  }
+  // Placeholders readFileForAI writes instead of content, e.g.
+  // "[PDF: x — file too large …]", "[ATTACHMENT x — could not be read …]",
+  // "[OUTLOOK EMAIL: x — binary format; …]". Matched anywhere in a block:
+  // emails emit one per unreadable attachment alongside their readable body.
+  var _UNREADABLE_RX = /\[[A-Z][A-Za-z ]{1,40}(?::| )[^\]\n]{0,200}?— [^\]\n]{0,200}?(?:no data|too large|TOO LARGE|could not|unreadable|not sent|not readable|appears empty|no extractable|not fully supported|binary format|no text content|TIFF format|image-only)[^\]\n]{0,200}\]/g;
+  var _TRUNC_RX = /\[\.\.\. ?(?:document )?truncated|\[\.\.\. TRUNCATED/i;
   _readResults.forEach(function(r) {
     if(r.error) {
       skippedFiles.push(r.f.name + ' (read error: ' + r.error + ')');
-    } else {
-      r.blocks.forEach(function(blk){ msgContent.push(blk); });
-      totalSize += r.f.data.length;
+      _markUnread(r.f.name, 'could not be read: ' + r.error, true);
+      return;
     }
+    var blocks = r.blocks;
+    if(r.overBudget) {
+      // Keep any extracted text; drop only the binary parts that do not fit
+      blocks = blocks.filter(function(b){ return !_binSize(b); });
+      skippedFiles.push(r.f.name + ' (total size limit reached)');
+      _markUnread(r.f.name, blocks.length ? 'scanned pages/images not sent — total upload limit reached' : 'not sent — total upload limit reached', !blocks.length);
+    }
+    var _usable = false;
+    blocks.forEach(function(blk){
+      msgContent.push(blk);
+      if(blk.type === 'text' && blk.text) {
+        var _marks = blk.text.match(_UNREADABLE_RX) || [];
+        _marks.forEach(function(m){ _markUnread(r.f.name, m.replace(/^\[|\]$/g,'').substring(0, 160), false); });
+        // Usable if anything is left once placeholders and [headers] are removed
+        if(blk.text.replace(_UNREADABLE_RX, '').replace(/\[[^\]\n]*\]/g, '').trim().length > 20) _usable = true;
+        if(_TRUNC_RX.test(blk.text) && _docsTruncated.indexOf(r.f.name) === -1) _docsTruncated.push(r.f.name);
+      } else if(_binSize(blk)) {
+        _usable = true;
+      }
+    });
+    if(!_usable && _unreadNames.indexOf(r.f.name) === -1) _unreadNames.push(r.f.name);
+    totalSize += r.bin;
   });
 
   // ── Attach the original policy PDF, if one was stored when it was uploaded ──
@@ -2741,60 +2876,62 @@ async function runEval(caseId) {
     try {
       var _polPdf = await idbGet('policy_pdf_' + _matchedLibraryPolicy.id);
       if(_polPdf && _polPdf.data) {
-        if(_polPdf.data.length > MAX_FILE_B64) {
+        if(_polPdf.data.length > MAX_FILE_B64 || _runningTotal + _polPdf.data.length > MAX_TOTAL) {
           var _polPdfMB = Math.round(_polPdf.data.length/1024/1024*10)/10;
           console.warn('[runEval] Skipping oversized original policy PDF:', _polPdf.name, _polPdfMB+'MB');
           toast('⚠ The original PDF for policy "'+(_matchedLibraryPolicy.name||'')+'" is '+_polPdfMB+'MB — too large to attach. Using the extracted policy wording only for this evaluation.', 10000);
         } else {
           msgContent.push({type:'text', text:'NOTE: The following PDF is the original source document for policy "'+(_matchedLibraryPolicy.name||'')+'", whose extracted wording appears later in this message. Use it to verify exact amounts, tables and clause text if anything in the extracted wording is unclear or ambiguous.'});
           msgContent.push({type:'document', source:{type:'base64', media_type:'application/pdf', data:_polPdf.data}, title:_polPdf.name||(_matchedLibraryPolicy.name+' (original policy PDF)')});
+          _runningTotal += _polPdf.data.length;
           console.log('[runEval] Attached original policy PDF:', _polPdf.name);
         }
       }
     } catch(_polPdfErr) { console.warn('[runEval] Could not load stored policy PDF:', _polPdfErr.message); }
   }
 
-  // Add note about skipped files to the prompt
+  // Tell the AI exactly which documents it has NOT seen in full, so it lists
+  // them as unreviewed evidence instead of evaluating as if the file were
+  // complete.
   var skipNote = '';
-  if(skippedFiles.length > 0) {
-    skipNote = '\nNOTE: The following files were too large to attach directly. ' +
-      'Please note them as submitted documents in your evaluation:\n' +
-      skippedFiles.map(function(f){ return '  - ' + f; }).join('\n') + '\n';
-    console.log('[runEval] Skipped files:', skippedFiles);
-    // This used to only be logged to the browser console — invisible to the
-    // operator actually running the evaluation. A skipped file was NOT read by
-    // the AI at all (only its filename gets mentioned to it), so silently
-    // leaving this to the console meant a document could be excluded from the
-    // evaluation with no visible sign of it. Surface it clearly instead.
-    toast('⚠ ' + skippedFiles.length + ' document(s) too large to include — the evaluation will NOT have read: ' + skippedFiles.map(function(f){ return f.split(' (')[0]; }).join(', '), 12000);
+  if(_docsNotRead.length || _docsTruncated.length) {
+    skipNote = '\n=== DOCUMENTS NOT AVAILABLE IN FULL ===\n'
+      + (_docsNotRead.length ? 'The following submitted documents were NOT provided to you (or only partly):\n'
+          + _docsNotRead.map(function(f){ return '  - ' + f; }).join('\n') + '\n' : '')
+      + (_docsTruncated.length ? 'The text of these documents was cut short (see the TRUNCATED marker inside each):\n'
+          + _docsTruncated.map(function(f){ return '  - ' + f; }).join('\n') + '\n' : '')
+      + 'RULE: Do not assume what these documents say. List them under missing/unreviewed evidence, and do not '
+      + 'APPROVE or DECLINE on a point that depends on them — use PENDING INFORMATION for that point instead.\n';
+    console.log('[runEval] Not read in full:', _docsNotRead, _docsTruncated);
+    toast('⚠ ' + (_docsNotRead.length + _docsTruncated.length) + ' document(s) will NOT be read in full: '
+      + _unreadNames.concat(_docsTruncated).concat(_docsNotRead.length > _unreadNames.length ? ['parts of other files'] : []).join(', ')
+      + ' — the evaluation will be marked incomplete.', 12000);
   }
+  // Persisted at the top of the saved evaluation (all save paths below)
+  var _incompleteBanner = (_docsNotRead.length || _docsTruncated.length)
+    ? '⚠ INCOMPLETE DOCUMENT REVIEW — the AI did not read every document in full:\n'
+      + _docsNotRead.map(function(f){ return '  • ' + f; }).join('\n') + (_docsNotRead.length ? '\n' : '')
+      + _docsTruncated.map(function(f){ return '  • ' + f + ' (text truncated)'; }).join('\n') + (_docsTruncated.length ? '\n' : '')
+      + 'Re-upload / fix these documents and re-run before relying on this decision.\n\n'
+    : '';
 
   // ── DOCUMENTS SUBMITTED manifest ────────────────────────────────────────
-  // Lists every filename provided in this evaluation so Claude cannot ask for
-  // re-submission of documents already uploaded. Hard rule injected into prompt.
+  // Lists the files actually provided so Claude does not ask for documents it
+  // already has. Files that were NOT provided are listed separately in
+  // skipNote — this used to list every filename on the case as "already
+  // provided", including ones that could not be loaded or were too large,
+  // which told the AI it had reviewed documents it never saw.
+  var _notReadNames = _unreadNames;
   var _manifestNames = [];
-  // Layer 1: files actually read and attached in this eval (highest confidence)
   _readResults.forEach(function(r) {
-    if(r.f && r.f.name) _manifestNames.push(r.f.name);
+    if(r.f && r.f.name && !r.error && _notReadNames.indexOf(r.f.name) === -1 && _manifestNames.indexOf(r.f.name) === -1) _manifestNames.push(r.f.name);
   });
-  // Layer 2: files that were skipped (too large) but were still submitted
-  skippedFiles.forEach(function(s) {
-    var nm = s.split(' (')[0]; // strip the "(too large: ...)" suffix
-    if(nm && _manifestNames.indexOf(nm) === -1) _manifestNames.push(nm);
-  });
-  // Layer 3: case metadata — filenames ever uploaded to this case (covers re-opened sessions)
-  var c0fm = getC(caseId);
-  if(c0fm && c0fm.filesData && c0fm.filesData.length > 0) {
-    c0fm.filesData.forEach(function(fd) {
-      var nm = fd.name || fd.filename || '';
-      if(nm && _manifestNames.indexOf(nm) === -1) _manifestNames.push(nm);
-    });
-  }
   var docManifest = '';
   if(_manifestNames.length > 0) {
-    docManifest = '\nDOCUMENTS SUBMITTED:\n'
+    docManifest = '\nDOCUMENTS SUBMITTED AND PROVIDED TO YOU (' + _manifestNames.length + '):\n'
       + _manifestNames.map(function(n){ return '  • ' + n; }).join('\n')
-      + '\nRULE: Every document listed above is already provided in this evaluation. '
+      + '\nRULE: Every document listed above is attached to this message (except any parts named under DOCUMENTS NOT AVAILABLE IN FULL). Read EVERY one of them in full — every page, '
+      + 'every image, every email and attachment — before deciding, and base your findings on all of them. '
       + 'Do NOT request resubmission of any listed document. '
       + 'If additional information is needed, specify the exact document type required and the reason it is needed.\n\n';
     console.log('[runEval] Document manifest: ' + _manifestNames.length + ' file(s) listed');
@@ -2900,8 +3037,29 @@ async function runEval(caseId) {
     // included) straight to the API, bypassing GDPR pseudonymisation
     // entirely, since it was built from `txt` directly instead of the
     // already-pseudonymised `txtPseudo`.
-    var textOnlyPseudo = pseudonymise(txt, [c.patient, c.policyHolder].filter(Boolean)) + '\n\nNOTE: Document attachments were removed due to a technical issue sending them. Please evaluate based on the case information above.';
-    var textOnlyContent = [{type:'text', text: textOnlyPseudo}];
+    // Keep every document's extracted TEXT (Word, Excel, emails, RTF, …) —
+    // only the binary PDF/image parts are dropped. This retry used to send no
+    // document content at all, so the saved decision rested on the case
+    // header alone.
+    var _droppedBinary = [];
+    var textOnlyContent = [];
+    _readResults.forEach(function(r){
+      if(r.error) return;
+      var hadBin = false;
+      r.blocks.forEach(function(b){
+        if(_binSize(b)) { hadBin = true; return; }
+        if(b.type === 'text') textOnlyContent.push(b);
+      });
+      if(hadBin && !r.overBudget) _droppedBinary.push(r.f.name);
+    });
+    var textOnlyPseudo = pseudonymise(_dupContext + _supplementaryContext + docManifest + txt, [c.patient, c.policyHolder].filter(Boolean))
+      + skipNote
+      + (_droppedBinary.length
+          ? '\n\nNOTE: Because of a technical issue, the PDF pages / images of these documents could NOT be sent and you have NOT seen them: '
+            + _droppedBinary.join(', ') + '. Treat them as unreviewed evidence. Any extracted text that was available is included above.'
+          : '')
+      + mandatoryEnd;
+    textOnlyContent.push({type:'text', text: textOnlyPseudo});
     var retryResult = '';
     // Pass opts so apiCallStream can report back WHY this attempt produced
     // nothing (stop_reason) — this call has no attachments and no thinking,
@@ -2924,7 +3082,14 @@ async function runEval(caseId) {
     if(retryPseudoMap && Object.keys(retryPseudoMap).length && typeof reidentify === 'function') {
       retryResult = reidentify(retryResult, retryPseudoMap);
     }
-    var retryHeader = '=== EVALUATION (text-only retry) ===\n'
+    var _retryNotRead = _droppedBinary.map(function(n){ return '  • ' + n + ' (PDF pages / images not sent — technical error)'; }).join('\n');
+    var retryHeader = (_incompleteBanner || _retryNotRead
+        ? '⚠ INCOMPLETE DOCUMENT REVIEW — the AI did not read every document in full:\n'
+          + _docsNotRead.map(function(f){ return '  • ' + f; }).concat(_docsTruncated.map(function(f){ return '  • ' + f + ' (text truncated)'; })).join('\n')
+          + (_retryNotRead ? (_docsNotRead.length || _docsTruncated.length ? '\n' : '') + _retryNotRead : '')
+          + '\nRe-run the evaluation before relying on this decision.\n\n'
+        : '')
+      + '=== EVALUATION (text-only retry) ===\n'
       + 'Date: '+new Date().toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'})+'\n'
       + 'Time: '+new Date().toLocaleTimeString('en',{hour:'2-digit',minute:'2-digit'})+'\n'
       + 'Evaluator: '+(typeof S==='function'?S().name||'Team Member':'Team Member')+'\n'
@@ -2932,13 +3097,18 @@ async function runEval(caseId) {
     var textOnlyFinal = retryResult;
     var retryDecMatches = [...textOnlyFinal.matchAll(/^\s*DECISION\s*:\s*(DECLINED|APPROVED|PARTIALLY APPROVED|PENDING INFORMATION)\b/gim)];
     var retryDecision = retryDecMatches.length ? retryDecMatches[retryDecMatches.length-1][1].trim() : 'UNKNOWN';
-    var retryStatus = /^DECLIN/.test(retryDecision) ? 'declined' : /^APPROV/.test(retryDecision) ? 'approved' : /^PARTIAL/.test(retryDecision) ? 'partial' : 'reviewing';
+    // Documents were not all read — leave the case under review rather than
+    // closing it as approved/declined on incomplete evidence.
+    var retryStatus = (_droppedBinary.length || _docsNotRead.length) ? 'reviewing'
+      : /^DECLIN/.test(retryDecision) ? 'declined' : /^APPROV/.test(retryDecision) ? 'approved' : /^PARTIAL/.test(retryDecision) ? 'partial' : 'reviewing';
     updC(caseId, {eval: retryHeader + textOnlyFinal, status: retryStatus, lastDecision: retryDecision, lastEvalAt: new Date().toISOString()});
     if(window._currentCaseId === caseId) {
-      if(erDiv) erDiv.innerHTML = renderEvalTxt(textOnlyFinal);
+      if(erDiv) erDiv.innerHTML = renderEvalTxt(retryHeader + textOnlyFinal);
       setEvSt('done', 'Done (text-only) — '+new Date().toLocaleTimeString('en',{hour:'2-digit',minute:'2-digit'}));
     }
-    toast('✓ Evaluation completed WITHOUT document attachments — please verify manually against the original documents', 9000);
+    toast(_droppedBinary.length
+      ? '⚠ Evaluation completed WITHOUT the PDF/image pages of ' + _droppedBinary.length + ' document(s) — marked incomplete; re-run before relying on it'
+      : '✓ Evaluation completed (retry) — all document text was included', 10000);
   }
 
   try {
@@ -3176,6 +3346,7 @@ async function runEval(caseId) {
       _usageLine = 'Tokens Used: '+_totalIn.toLocaleString()+' in'+_cacheNote+' / '+(_evalUsage.output_tokens||0).toLocaleString()+' out — Est. Cost: $'+_estCost.toFixed(3)+' ('+getMod()+(_thinkOn?', thinking on':'')+')\n';
     }
     var evalHeader = policyAbsentBanner
+      + _incompleteBanner
       + '=== EVALUATION ===\n'
       + 'Date: '+new Date().toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'})+'\n'
       + 'Time: '+new Date().toLocaleTimeString('en',{hour:'2-digit',minute:'2-digit'})+'\n'
@@ -3325,7 +3496,8 @@ async function runEval(caseId) {
       // outcome — until a second reviewer confirms the citation and signs off (see
       // confirmVerificationSignoff()). A wrong auto-finalized decline is worse than
       // one extra click. pendingStatus below records what it will become on sign-off.
-      status: _verificationFlag ? 'reviewing' : finalStatus,
+      // Likewise held when the AI did not see every document in full.
+      status: (_verificationFlag || _docsNotRead.length) ? 'reviewing' : finalStatus,
       lastDecision: savedDecision, evalHistory: evalHist,
       lastEvalAt: new Date().toISOString(),
       pseudoMap: pseudoMapSnapshot || {}
@@ -3336,7 +3508,7 @@ async function runEval(caseId) {
     // Same reasoning for pendingStatus: a clean re-evaluation must clear any earlier
     // hold so it can't leak forward and gate a decision that no longer needs review.
     _evalSave.verificationFlag = _verificationFlag || '';
-    _evalSave.pendingStatus = _verificationFlag ? finalStatus : '';
+    _evalSave.pendingStatus = (_verificationFlag || _docsNotRead.length) ? finalStatus : '';
     if(_approvedFromEval) _evalSave.amountApproved = _approvedFromEval;
     if(_fieldCorrections) {
       // Apply only recognised safe fields — never overwrite case ID or patient name
@@ -3450,7 +3622,7 @@ async function runEval(caseId) {
         if(pseudoMapSnapshot && Object.keys(pseudoMapSnapshot).length && typeof reidentify === 'function') {
           finalResult = reidentify(finalResult, pseudoMapSnapshot);
         }
-        var recoverHeader = '=== EVALUATION (recovered after connection error) ===\n'
+        var recoverHeader = _incompleteBanner + '=== EVALUATION (recovered after connection error) ===\n'
           + 'Date: '+new Date().toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'})+'\n'
           + 'Time: '+new Date().toLocaleTimeString('en',{hour:'2-digit',minute:'2-digit'})+'\n'
           + 'Evaluator: '+(typeof S==='function'?S().name||'Team Member':'Team Member')+'\n'
@@ -5353,7 +5525,7 @@ function renderCD(c) {
   html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">';
   html += '<div><label style="font-size:10px;font-weight:600;color:var(--tx3);display:block;margin-bottom:3px;text-transform:uppercase">Response Type</label>';
   html += '<select id="reply_type" style="width:100%;padding:5px 7px;border:1px solid var(--bor);border-radius:4px;font-size:12px;color:var(--navy);outline:none">';
-  html += '<option value="auto">Auto-detect</option><option value="answer_query">Answer Question</option><option value="handle_complaint">Handle Complaint</option><option value="request_documents">Request Documents</option><option value="claim_status">Status Update</option><option value="appeal_process">Explain Appeal</option><option value="approval_confirm">Confirm Approval</option><option value="denial_explain">Explain Denial</option><option value="payment_query">Payment Query</option><option value="urgent_case">URGENT</option><option value="extension_request">Extension Request</option><option value="positive_feedback">Acknowledgement</option>';
+  html += '<option value="auto">Auto-detect</option><option value="answer_query">Answer Question</option><option value="handle_complaint">Handle Complaint</option><option value="request_documents">Request Documents</option><option value="claim_status">Status Update</option><option value="appeal_process">Explain Appeal</option><option value="approval_confirm">Confirm Approval</option><option value="denial_explain">Explain Denial</option><option value="final_decision">Final Decision (no further review)</option><option value="payment_query">Payment Query</option><option value="urgent_case">URGENT</option><option value="extension_request">Extension Request</option><option value="positive_feedback">Acknowledgement</option>';
   html += '</select></div>';
   html += '<div><label style="font-size:10px;font-weight:600;color:var(--tx3);display:block;margin-bottom:3px;text-transform:uppercase">Tone</label>';
   html += '<select id="reply_tone" style="width:100%;padding:5px 7px;border:1px solid var(--bor);border-radius:4px;font-size:12px;color:var(--navy);outline:none">';
@@ -5734,9 +5906,12 @@ function renderCD(c) {
   var bUse=document.getElementById('btn_use_reply');
   if(bUse)bUse.onclick=function(){
     var r=document.getElementById('reply_output');var b=document.getElementById('f_eb');
-    if(r&&b){b.value=r.value;updC(cid,{emailBody:r.value});}
+    var _sp=_splitSubject(r?r.value:'');
+    if(r&&b){b.value=_sp.body;updC(cid,{emailBody:_sp.body});}
     var toEl=document.getElementById('f_et');if(toEl&&!toEl.value){var cx=getC(cid);if(cx&&cx.patientEmail)toEl.value=cx.patientEmail;}
-    var subEl=document.getElementById('f_es');if(subEl&&!subEl.value){var cx2=getC(cid);if(cx2)subEl.value='Re: Claim '+(cx2.caseNum||'');}
+    var subEl=document.getElementById('f_es');
+    if(subEl&&_sp.subject){subEl.value=_sp.subject;updC(cid,{emailSubj:_sp.subject});}
+    else if(subEl&&!subEl.value){var cx2=getC(cid);if(cx2)subEl.value='Re: Claim '+(cx2.caseNum||'');}
     document.querySelectorAll('.comm-tab')[1]&&document.querySelectorAll('.comm-tab')[1].click();
     toast('Moved to Compose — review and send');
   };
@@ -7771,6 +7946,102 @@ function clearAll() { CASES=[]; save(); updBadges(); renderDash(); toast('All da
 // ══════════════════════════════════════════════
 // EMAIL
 // ══════════════════════════════════════════════
+// ── Shared building blocks for AI-written client emails ────────────────────
+// Used by both "Answer Email" (generatePatientReply1) and "AI Draft"
+// (draftEmail) so the two never drift apart in rules, sign-off or language.
+
+// The evaluation text starts with banners and a header block; the decision,
+// reasons and cited clauses are at the END. Sending only the first few
+// thousand characters (as before) gave the reply writer the header and none of
+// the reasoning. Strip the header and keep the start and the end.
+function _evalForComms(evalText, maxChars) {
+  var t = String(evalText || '').replace(/\*\*/g, '');
+  if(!t) return '';
+  // Drop the "=== EVALUATION === / Date / Time / Evaluator / Tokens … =====" block
+  // (banners above it, e.g. INCOMPLETE DOCUMENT REVIEW, are kept)
+  t = t.replace(/=== EVALUATION[^\n]*===\n(?:[^\n]*\n){0,12}?=+\n+/, '');
+  maxChars = maxChars || 20000;
+  if(t.length <= maxChars) return t;
+  var head = Math.floor(maxChars * 0.4), tail = maxChars - head;
+  return t.slice(0, head) + '\n[... middle of evaluation omitted ...]\n' + t.slice(t.length - tail);
+}
+
+// Earlier emails sent on this case, so a new reply stays consistent with what
+// the client has already been told.
+function _commsHistory(c, n) {
+  var h = (c && c.emailHistory) || [];
+  if(!h.length) return '';
+  return h.slice(-(n || 3)).map(function(e){
+    return '--- Sent ' + (e.ts ? new Date(e.ts).toLocaleDateString('en-GB') : '') + ' — Subject: ' + (e.subject || '') + '\n' + String(e.body || '').substring(0, 3000);
+  }).join('\n\n');
+}
+
+var COMMS_SIGNOFF = 'Patient Relations Team, HealthWatch TPA';
+
+// Targeted masking for client emails: hides the client's real name(s),
+// email addresses and phone numbers before the API call and restores them in
+// the reply. The general pseudonymise() used for evaluations also masks any
+// Title-Case phrase ("Case Reference", "Canada") and the claim number, which
+// left the reply writer unable to follow the client's actual argument.
+function _maskComms(text, names) {
+  var map = {}, n = 0, out = String(text || '');
+  function tok(kind, val) {
+    for(var k in map) if(map[k] === val) return k;
+    var t = '[' + kind + '-' + (++n) + ']'; map[t] = val; return t;
+  }
+  var parts = [];
+  (names || []).forEach(function(nm){
+    nm = String(nm || '').trim(); if(!nm) return;
+    parts.push(nm);
+    nm.split(/\s+/).forEach(function(w){ if(w.length >= 3) parts.push(w); });
+  });
+  parts.sort(function(a, b){ return b.length - a.length; }); // full name before its parts
+  parts.forEach(function(p){
+    var re = new RegExp('(^|[^\\p{L}])(' + p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ')(?=$|[^\\p{L}])', 'giu');
+    out = out.replace(re, function(m, pre, val){ return pre + tok('NAME', val); });
+  });
+  out = out.replace(/[\w.+-]+@[\w-]+(?:\.[\w-]+)+/g, function(m){ return tok('EMAIL', m); });
+  // Phone numbers: "+30 …" / "0030 …", or 10+ digits split only by spaces,
+  // dashes or brackets — never amounts (dots/commas) or dates
+  out = out.replace(/(?:\+|\b00)?\d[\d\s()-]{7,}\d/g, function(m){
+    var digits = m.replace(/\D/g, '');
+    return (/^(\+|00)/.test(m) || digits.length >= 10) ? tok('PHONE', m) : m;
+  });
+  return {text: out, map: map};
+}
+function _unmaskComms(text, map) {
+  var out = String(text || '');
+  Object.keys(map || {}).forEach(function(t){ out = out.split(t).join(map[t]); });
+  return out;
+}
+
+function _commsRules(toneDesc) {
+  return 'You are a senior IPMI / travel-insurance TPA Patient Relations Specialist with 15 years of experience. '
+    + 'You are writing an email to a client on behalf of the TPA. Tone: ' + toneDesc + '. '
+    + 'STRICT RULES: '
+    + '1. LANGUAGE: write in the SAME language as the client\'s latest message (e.g. Greek → Greek, German → German). If there is no client message, write in English. '
+    + '2. Address the client\'s specific concern in the VERY FIRST sentence — never open with generic pleasantries. '
+    + '3. Use the client\'s name if known (signature, salutation or case data). Include the claim reference number. '
+    + '4. Answer EVERY question or point in the client\'s latest message — none may be skipped. If they asked several things, answer each in its own short paragraph or numbered point. '
+    + '5. Base every fact on the CASE DETAILS and EVALUATION provided. Explain decisions with the actual reason and the policy clause/limit cited in the evaluation — never a vague "according to the policy terms". '
+    + '6. NEVER invent facts, amounts, dates, deadlines, turnaround times, phone numbers, email addresses, portal links or procedures. Where the email needs one that is not in the case data, write a placeholder in square brackets for the claims handler to fill, e.g. [CONFIRM: payment date] or [CONFIRM: appeal deadline]. '
+    + '7. Never promise an outcome, a reversal, or a payment that the evaluation does not support. '
+    + '8. No insurance jargon — explain any technical term in plain words. Do not mention internal tools, AI, or the evaluation itself; speak as the TPA. '
+    + '9. If the client is upset, acknowledge their experience genuinely before explaining — without admitting fault or liability that the case data does not establish. '
+    + '10. If there is earlier correspondence, stay consistent with it; never contradict what the client was already told unless the decision has changed, in which case say so clearly. '
+    + '11. End with clear, specific next steps, then sign off exactly as "' + COMMS_SIGNOFF + '". '
+    + '12. Aim for 150–350 words; longer only if the client asked many questions. '
+    + 'OUTPUT FORMAT: plain text only — no markdown, no asterisks, no # headings. '
+    + 'Line 1 must be "Subject: <subject line including the claim reference>", then one blank line, then the email body.';
+}
+
+// Splits "Subject: …" off the first line of a generated email.
+function _splitSubject(txt) {
+  var m = String(txt || '').match(/^\s*Subject\s*:\s*(.+)\r?\n+/i);
+  if(!m) return {subject: '', body: String(txt || '').trim()};
+  return {subject: m[1].replace(/[*_#]/g, '').trim(), body: String(txt).slice(m[0].length).trim()};
+}
+
 async function draftEmail(id) {
   var c=getC(id);if(!c)return;
   if(!getKey()){toast('Add API key in Settings first');return;}
@@ -7778,22 +8049,27 @@ async function draftEmail(id) {
   var msgType=typeEl?typeEl.value:'general';
   var typeLabels={claim_update:'claim status update',approval:'claim approval notification',denial:'claim denial notification',docs_request:'request for additional documents',appointment:'pre-authorisation confirmation',complaint_response:'response to complaint',query_response:'response to patient query',general:'general correspondence'};
   var typeLabel=typeLabels[msgType]||'correspondence';
-  var prompt='Write a professional '+typeLabel+' email FROM the TPA TO the patient.\n'
-    +'Case: '+c.caseNum+'\nPatient: '+(c.patient||'—')+'\nInsurer: '+(c.insurer||'—')+'\nCountry: '+(c.country||'—')
-    +'\nStatus: '+c.status+'\nAmount Claimed: \u20ac'+(c.amountClaimed||'—')
-    +(c.eval?'\n\nEvaluation Summary:\n'+c.eval.substring(0,800):'');
-  var sys='You are a senior TPA case manager writing a '+typeLabel+' to the patient. '
-    +'Be professional, warm and empathetic. Use clear language the patient can understand. '
-    +'Reference the case number. Avoid jargon. Sign off as "Claims Department, [TPA Name]". '
-    +'Write only the email body, no subject line.';
+  if(msgType==='general') typeLabel='claim status update (current decision and next steps)';
+  var _knownD=[c.patient,c.policyHolder].filter(Boolean);
+  var prompt=('Write a '+typeLabel+' email FROM the TPA TO the client. This is a proactive email, not a reply.\n\n'
+    +'=== CASE DETAILS ===\nCase Reference: '+(c.caseNum||'—')+'\nClient: '+(c.patient||'—')+'\nInsurer: '+(c.insurer||'—')+'\nCountry: '+(c.country||'—')
+    +'\nStatus: '+(c.status||'—')+'\nDecision: '+(c.lastDecision||'—')+'\nAmount Claimed: '+(c.currency||'EUR')+' '+(c.amountClaimed||'—')
+    +(c.amountApproved?'\nAmount Approved: EUR '+c.amountApproved:'')
+    +(c.eval?'\n\n=== EVALUATION (internal — inform the email, do not quote it) ===\n'+_evalForComms(c.eval, 15000):'')
+    +(_commsHistory(c)?'\n\n=== EMAILS ALREADY SENT ON THIS CASE ===\n'+_commsHistory(c):''));
+  var _mD=_maskComms(prompt,_knownD); prompt=_mD.text; var _mapD=_mD.map;
+  var sys=_commsRules('professional and empathetic — warm but clear');
   var btn=document.getElementById('btn_ai_draft');
   if(btn){btn.textContent='Drafting...';btn.disabled=true;}
   try{
-    var body=await apiCall([{role:'user',content:prompt}],sys,800);
+    var raw=await apiCall([{role:'user',content:prompt}],sys,2500);
+    raw=_unmaskComms(raw,_mapD);
+    var parts=_splitSubject(raw), body=parts.body;
     updC(id,{emailBody:body});
     var eb=G('f_eb');if(eb)eb.value=body;
     var toEl=G('f_et');if(toEl&&!toEl.value&&c.patientEmail){toEl.value=c.patientEmail;updC(id,{emailTo:c.patientEmail});}
-    var subEl=G('f_es');if(subEl&&!subEl.value){subEl.value='Re: Your Claim '+c.caseNum;updC(id,{emailSubj:'Re: Your Claim '+c.caseNum});}
+    var subEl=G('f_es');var _subj=parts.subject||('Your Claim '+c.caseNum);
+    if(subEl&&!subEl.value){subEl.value=_subj;updC(id,{emailSubj:_subj});}
     addTL(id,'Email drafted: '+typeLabel);
     toast('Email drafted!');
   }catch(e){toast('Error: '+e.message);}
@@ -7876,18 +8152,17 @@ async function generatePatientReply1(id) {
     if(custom.trim())requestedDocs.push(custom.trim());
   }
 
-  // Auto-detect type from message if auto
-  if(responseType==='auto'){
-    var t=clientMsg.toLowerCase();
-    if(/complain|unhappy|dissatisfied|unacceptable|frustrated|angry|upset|not fair/.test(t))responseType='handle_complaint';
-    else if(/appeal|disagree|dispute|wrong decision|reconsider/.test(t))responseType='appeal_process';
-    else if(/document|report|certificate|proof|evidence|provide|send|upload|submit|missing/.test(t))responseType='request_documents';
-    else if(/status|update|progress|when|how long|waiting/.test(t))responseType='claim_status';
-    else if(/why|reason|explain|understand|confused|clarify/.test(t))responseType='answer_query';
-    else if(/pay|payment|money|transfer|bank|reimbursement|refund/.test(t))responseType='approval_confirm';
-    else responseType='answer_query';
-  }
+  // Auto-detect: the AI works out what the client needs from the message
+  // itself. The old keyword rules picked one type from the first word that
+  // matched — "I already sent the documents" became a request for documents,
+  // "when will I be paid" a status update — and a message asking several
+  // things only had one of them answered.
 
+  // A final-decision letter needs a finished evaluation to state and justify
+  if(responseType==='final_decision' && !(c.eval && /DECISION\s*:\s*(DECLINED|APPROVED|PARTIALLY APPROVED)/i.test(c.eval))){
+    toast('Final Decision needs a completed evaluation with an APPROVED / PARTIALLY APPROVED / DECLINED decision — run the evaluation first', 7000);
+    return;
+  }
   if(statusEl){statusEl.style.display='flex';statusEl.className='evs evr';statusEl.innerHTML='<div class="spin"></div>&nbsp;Reading case and drafting reply&hellip;';}
   if(genBtn){genBtn.innerHTML='<div class="spin" style="width:14px;height:14px;border-color:rgba(255,255,255,.5);border-top-color:#fff;flex-shrink:0"></div>&nbsp;Drafting...';genBtn.disabled=true;}
   if(outputWrap)outputWrap.style.display='none';
@@ -7898,32 +8173,30 @@ async function generatePatientReply1(id) {
 
   // Type-specific instructions
   var typeInstruction='';
-  if(responseType==='handle_complaint'){typeInstruction='The client is making a COMPLAINT. Start by genuinely acknowledging their frustration and their specific experience — do NOT be defensive or minimise their concern. Then explain the facts clearly and empathetically. Offer a concrete path forward (appeal, additional review, escalation). Thank them for raising the issue.';}
-  else if(responseType==='appeal_process'){typeInstruction='The client wishes to appeal or dispute the decision. Explain the formal appeal process clearly: they have 30 days to submit a written appeal with supporting evidence. It will be reviewed by a senior medical officer within 15 working days. Tell them specifically what additional evidence would strengthen their appeal.';}
-  else if(responseType==='request_documents'){typeInstruction='The claim requires additional documentation. Request these documents:\n'+(requestedDocs.length?requestedDocs.map(function(d){return'- '+d;}).join('\n'):'All relevant medical and supporting documents')+'\nFor each document, briefly explain why it is required. Give a 14-day submission deadline. Provide clear submission instructions (email address, portal link). Be helpful and specific.';}
+  if(responseType==='handle_complaint'){typeInstruction='The client is making a COMPLAINT. Start by genuinely acknowledging their frustration and their specific experience — do NOT be defensive or minimise their concern. Then explain the facts clearly, using the actual reason from the evaluation. Offer a concrete path forward that the case supports (for example what could change the outcome, or how to escalate) — without promising any outcome. Thank them for raising the issue.';}
+  else if(responseType==='appeal_process'){typeInstruction='The client wishes to appeal or dispute the decision. Explain how to submit an appeal: in writing, with any new supporting evidence. Use [CONFIRM: appeal deadline] and [CONFIRM: review timeframe] placeholders unless the policy wording in the evaluation states them. Tell them specifically — based on the reason for the decision — what additional evidence could change the outcome.';}
+  else if(responseType==='request_documents'){typeInstruction='The claim requires additional documentation. Request these documents:\n'+(requestedDocs.length?requestedDocs.map(function(d){return'- '+d;}).join('\n'):'All relevant medical and supporting documents')+'\nFor each document, briefly explain why it is required. Give a submission deadline as [CONFIRM: deadline] and submission instructions as [CONFIRM: email address / portal link] unless they are in the case data. Do not ask for any document the client has already provided (see the evaluation). Be helpful and specific.';}
   else if(responseType==='claim_status'){typeInstruction='Provide a clear and complete status update: the current decision is '+decText+'. Explain in plain language what this means for the client and what the next concrete steps are.';}
-  else if(responseType==='denial_explain'){typeInstruction='Explain the claim denial empathetically and clearly. Reference the specific policy clause or exclusion that applies. Acknowledge this is disappointing. Mention the 30-day appeal process, what additional evidence could support a reversal, and offer to clarify any points.';}
+  else if(responseType==='denial_explain'){typeInstruction='Explain the claim denial empathetically and clearly. Reference the specific policy clause or exclusion that applies. Acknowledge this is disappointing. Explain that they may appeal in writing (deadline: [CONFIRM: appeal deadline] unless stated in the policy), what additional evidence could support a different outcome, and offer to clarify any points.';}
+  else if(responseType==='final_decision'){typeInstruction='FINAL DECISION — the claim evaluation is FINAL AND COMPLETE and will not be changed. The current decision is '+decText+'. '
+    +'Write the reply so that: '
+    +'(a) the FIRST paragraph states plainly that the claim has been fully assessed and that the decision ('+decText+') is final and will not be reopened, reconsidered or changed; '
+    +'(b) it explains WHY, using the case evaluation: name every document the decision was based on, quote or cite the specific policy clause(s), limits or exclusions applied, and state the key facts from the documents that led to the outcome — never a vague "per policy terms"; '
+    +'(c) it answers EACH point the client raised in their latest message, one by one, and explains specifically why that point does not change the outcome (e.g. it was already considered, or it is not covered by the cited clause); '
+    +'(d) it confirms what happens now: if any amount is approved, the amount, payment method and expected timeline; otherwise that the file is closed; '
+    +'(e) in ONE short, neutral closing sentence, it notes that the client keeps any statutory right to refer the matter to the competent financial ombudsman or courts — this is a legal right the TPA cannot remove, so do not omit it, but do not encourage it either. '
+    +'Do NOT offer an internal appeal, a further review, a reconsideration, or "we will look into this again". Do NOT invite the client to send more documents. Do NOT use apologetic language that implies the decision is uncertain. Stay courteous and respectful. '
+    +'These rules OVERRIDE the general rules below wherever they conflict (next steps in rule 11 are only payment/administrative ones; placeholders under rule 6 must never promise a review of the decision). '
+    +'If the case evaluation does not contain a clear final DECISION and policy basis, do NOT write a final-decision letter: instead write a short internal note (addressed to the claims handler, not the client) saying the case is not ready for a final-decision letter and what is missing.';}
   else if(responseType==='approval_confirm'){typeInstruction='Confirm the approval positively and clearly: '+decText+'. Explain the payment process, expected timeline, and any conditions. Include bank details / reimbursement instructions if relevant. Be warm and reassuring.';}
-  else if(responseType==='payment_query'){typeInstruction='Address the payment question directly. Provide clear information on the approved amount, payment timeline, method and any bank details or reference needed. If payment is pending, give a specific expected date.';}
+  else if(responseType==='payment_query'){typeInstruction='Address the payment question directly. Provide clear information on the approved amount, payment timeline, method and any bank details or reference needed. If payment is pending, give the expected date only if it is in the case data; otherwise use [CONFIRM: payment date].';}
   else if(responseType==='urgent_case'){typeInstruction='This is an URGENT situation — respond immediately and with priority. Acknowledge the urgency explicitly in the first sentence. Provide any immediate assistance available and a specific named contact or escalation path. Confirm what is being done RIGHT NOW.';}
   else if(responseType==='extension_request'){typeInstruction='The client is requesting an extension of their coverage, stay, or deadline. Explain clearly what extensions are possible under the policy, what documents are needed to process an extension, and the expected timeline for a decision.';}
   else if(responseType==='positive_feedback'){typeInstruction='Acknowledge and thank the client genuinely for their positive feedback. Be warm and personal. Mention commitment to continued service. Keep it brief and sincere — 2-3 short paragraphs.';}
+  else if(responseType==='auto'){typeInstruction='First work out everything the client is asking for or complaining about in their latest message (questions, complaint, dispute of the decision, status, payment, documents they sent or were asked for, urgency). Then write ONE reply that handles all of it: answer each question, acknowledge any complaint, explain the decision and its reason if they dispute it, and give the status/payment/document position as the case data shows. Do not ask for documents they say they have already sent unless the evaluation shows they are still missing.';}
   else{typeInstruction='Answer the client question directly, completely and in plain language. Reference specific case/policy details where relevant. End with clear next steps.';}
 
-  var sys='You are a senior IPMI TPA Patient Relations Specialist with 15 years of experience handling complex international health insurance claims. '
-    +'You are writing a reply to a client on behalf of the TPA. Tone: '+toneDesc+'. '
-    +'STRICT RULES: '
-    +'1. Address the client specific concern in the VERY FIRST sentence — never start with generic pleasantries. '
-    +'2. Use the client name if known (extracted from the email signature, salutation, or case data). '
-    +'3. Always include the case/claim reference number. '
-    +'4. NEVER use insurance jargon the client would not understand — define any technical term you must use. '
-    +'5. Every reply must end with clear, specific next steps — the client must never be left wondering what happens next. '
-    +'6. If the client is upset: acknowledge their experience genuinely BEFORE explaining anything. '
-    +'7. If there is a quoted prior conversation in the email thread, read it for context but only address the latest message. '
-    +'8. End with a warm, personal closing and a direct invitation to contact us. '
-    +'9. Sign off as "Patient Relations Team, HealthWatch TPA". '
-    +'10. Target 200-350 words — thorough but readable. '
-    +'11. Do NOT invent information — if uncertain, say "we will confirm this within 24 hours".';
+  var sys=_commsRules(toneDesc);
 
   // ── Parse the pasted email for thread context ──
   var emailFrom='', emailSubject='', emailDate='', emailLatest=clientMsg, emailPrior='';
@@ -7964,7 +8237,8 @@ async function generatePatientReply1(id) {
     +(c.copayment?'Co-pay: '+c.copayment+'%\n':'')
     +'Pre-Auth Status: '+(c.paStatus||'—')+'\n'
     +(c.diagnosis||c.desc?'Diagnosis: '+((c.diagnosis||c.desc||'').substring(0,200))+'\n':'')
-    +(c.eval?'\n=== EVALUATION SUMMARY (internal — inform reply, do NOT quote verbatim) ===\n'+c.eval.replace(/\*\*/g,'').substring(0,4000)+'\n':'')
+    +(c.eval?'\n=== EVALUATION (internal — inform the reply, do NOT quote it verbatim) ===\n'+_evalForComms(c.eval, responseType==='final_decision' ? 40000 : 20000)+'\n':'')
+    +(_commsHistory(c)?'\n=== EMAILS ALREADY SENT TO THE CLIENT ON THIS CASE ===\n'+_commsHistory(c)+'\n':'')
     +'\n=== INCOMING CLIENT EMAIL ===\n'
     +(emailFrom?'From: '+emailFrom+'\n':'')
     +(emailDate?'Date: '+emailDate+'\n':'')
@@ -7972,11 +8246,21 @@ async function generatePatientReply1(id) {
     +'\n[LATEST MESSAGE]\n'+emailLatest
     +(emailPrior?'\n\n[PRIOR CORRESPONDENCE IN THREAD]\n'+emailPrior.substring(0,20000):'')
     +'\n\n=== TASK ===\n'+typeInstruction
-    +'\n\nWrite the reply in the specified tone: '+toneDesc+'. Address '+((emailFrom||c.patient||'the client').split(/[<@\s]/)[0])+'.';
+    +'\n\nWrite the reply in the specified tone: '+toneDesc+', in the language of the latest message.';
+
+  // GDPR: same pseudonymisation as evaluations — patient identifiers are
+  // swapped for placeholders before the API call and restored afterwards.
+  var _clientName=(emailFrom.match(/^\s*"?([^"<@]+?)"?\s*</)||[])[1]||'';
+  var _m=_maskComms(prompt,[c.patient,c.policyHolder,_clientName].filter(Boolean));
+  var _promptP=_m.text, _mapR=_m.map;
 
   try{
-    var reply=await apiCall([{role:'user',content:prompt}],sys,1200);
-    if(outputEl)outputEl.value=reply;
+    var reply=await apiCall([{role:'user',content:_promptP}],sys,2500);
+    reply=_unmaskComms(reply,_mapR);
+    var _rp=_splitSubject(reply);
+    if(outputEl){outputEl.value=reply.trim(); outputEl.dataset.subject=_rp.subject;}
+    var _ph=(reply.match(/\[CONFIRM:[^\]]*\]/g)||[]);
+    if(_ph.length) toast('✎ The reply has '+_ph.length+' [CONFIRM: …] placeholder(s) — fill them in before sending', 7000);
     if(outputWrap)outputWrap.style.display='block';
     if(statusEl){statusEl.className='evs evd';statusEl.innerHTML='<svg viewBox="0 0 24 24" style="width:14px;height:14px;stroke:currentColor;fill:none;stroke-width:2.5"><polyline points="20 6 9 17 4 12"/></svg>&nbsp;Reply ready — review and edit, then click → Compose to send';}
     if(btnUse)btnUse.style.display='';
@@ -8031,6 +8315,8 @@ function sendEmail(id) {
   var body=(bodyEl?bodyEl.value:'')||c.emailBody||'';
   if(!to){toast('Enter recipient email address');return;}
   if(!body){toast('Write a message first');return;}
+  var _left=(sub+'\n'+body).match(/\[CONFIRM:[^\]]*\]/g);
+  if(_left && !confirm('This email still has '+_left.length+' unfilled placeholder(s):\n\n'+_left.join('\n')+'\n\nSend anyway?')) return;
   var hist=c.emailHistory||[];
   hist.push({to:to,subject:sub,body:body,ts:new Date().toISOString()});
   updC(id,{emailTo:to,emailSubj:sub,emailBody:body,emailHistory:hist});
@@ -8279,7 +8565,7 @@ function idbGetFileByName(caseId, filename) {
 // ══════════════════════════════════════════════════════════
 
 // ── Deleted-case registry — prevents sync paths from re-adding deleted cases ──
-// Stored in localStorage as [{id, deletedAt}]. Pruned after 30 days.
+// Stored in localStorage as [{id, deletedAt}]. Pruned after a year.
 // Also shared via Gist so teammates receive deletions across sessions.
 function getDeletedIds() {
   try { return JSON.parse(localStorage.getItem('mp_deleted_ids')||'[]'); } catch(e) { return []; }
@@ -8291,7 +8577,10 @@ function addDeletedId(id) {
     if(!ids.some(function(x){ return x.id===id; })) {
       ids.push({id:id, deletedAt:new Date().toISOString()});
     }
-    var cutoff = Date.now() - 30*24*60*60*1000; // prune entries older than 30 days
+    // Prune after a year. This used to be 30 days, after which a stale copy
+    // on another device could come back; Firestore tombstones now cover
+    // that, but Gist-only setups still rely on this list.
+    var cutoff = Date.now() - 365*24*60*60*1000;
     ids = ids.filter(function(x){ return new Date(x.deletedAt||0).getTime() > cutoff; });
     localStorage.setItem('mp_deleted_ids', JSON.stringify(ids));
   } catch(e) {}
@@ -8723,16 +9012,25 @@ function startFirebaseSync() {
     var changed = false;
     snapshot.docChanges().forEach(function(change) {
       var remoteCase = change.doc.data();
+      if(!remoteCase.id) remoteCase.id = change.doc.id;
       var localIdx = CASES.findIndex(function(c){ return c.id === remoteCase.id; });
 
       if(change.type === 'removed') {
+        // Hard-deleted elsewhere (pre-tombstone versions): remember it so this
+        // device's startup push cannot upload its stale copy back.
+        addDeletedId(remoteCase.id);
         if(localIdx !== -1) {
           CASES.splice(localIdx, 1);
           changed = true;
         }
       } else if(change.type === 'added' || change.type === 'modified') {
+        // Deleted by a teammate (or by this user on another device)
+        if(_isCaseTombstone(remoteCase)) {
+          if(_applyRemoteDeletion(remoteCase.id)) changed = true;
+          return;
+        }
         // Skip any case that was deleted on this device — Firebase may lag behind
-        if(isDeletedId(remoteCase.id)) { deleteCaseFromFirestore(remoteCase.id); return; }
+        if(isDeletedId(remoteCase.id)) { deleteCaseFromFirestore(remoteCase.id, change.doc.id); return; }
         var remoteTime = new Date(remoteCase.updatedAt || remoteCase.created || 0).getTime();
         if(localIdx === -1) {
           // New case from a teammate — add it
@@ -8827,6 +9125,8 @@ function startFirebaseSync() {
 // Push a single case to Firebase (called on every save)
 function syncCaseToFirestore(caseObj) {
   if(!FB_READY || !FB_DB || !caseObj || !caseObj.id) return;
+  // Never upload a case this device knows was deleted
+  if(isDeletedId(caseObj.id)) return;
   ensureFBKeys();
   if(!FB_COLLECTION) { console.warn('[Firebase] syncCaseToFirestore: FB_COLLECTION is empty'); return; }
 
@@ -8853,19 +9153,65 @@ function syncCaseToFirestore(caseObj) {
     delete lean.evalHistory;
   }
 
-  FB_DB.collection(FB_COLLECTION).doc(caseObj.id).set(lean, {merge:true})
-    .then(function(){
-      console.log('[Firebase] Case synced:', caseObj.caseNum||caseObj.id);
-    })
-    .catch(function(e){
-      console.warn('[Firebase] Sync failed:', e.message);
-    });
+  var docRef = FB_DB.collection(FB_COLLECTION).doc(caseObj.id);
+  function write() {
+    return docRef.set(lean, {merge:true})
+      .then(function(){
+        console.log('[Firebase] Case synced:', caseObj.caseNum||caseObj.id);
+      })
+      .catch(function(e){
+        console.warn('[Firebase] Sync failed:', e.message);
+      });
+  }
+  // Check for a deletion tombstone first. Every device pushes all of its local
+  // cases on startup, so without this check a PC that still holds a stale copy
+  // of a deleted case would upload it again and the case would reappear for
+  // everyone.
+  docRef.get().then(function(snap){
+    if(snap.exists && _isCaseTombstone(snap.data())) {
+      console.log('[Firebase] Not syncing deleted case:', caseObj.caseNum||caseObj.id);
+      if(_applyRemoteDeletion(caseObj.id)) {
+        save();
+        if(typeof updBadges==='function') updBadges();
+        if(typeof CURRENT_PAGE!=='undefined' && CURRENT_PAGE==='cases' && !window._currentCaseId && typeof renderCasesWithSearch==='function') {
+          try { renderCasesWithSearch(); } catch(e){}
+        }
+      }
+      return;
+    }
+    return write();
+  }).catch(function(){ return write(); });
 }
 
-// Delete a case from Firebase
-function deleteCaseFromFirestore(caseId) {
+// Deleted cases are replaced in Firestore by a tombstone — {id, _deleted:true}
+// with all patient data dropped — instead of being removed outright. A removed
+// document leaves no trace, so a PC or browser that was closed at the time of
+// the deletion still had the case locally and uploaded it again on its next
+// startup; the deletion list that should have stopped it lived only in the
+// deleting browser's localStorage. The tombstone is the shared record: every
+// device that sees it drops its local copy, and syncCaseToFirestore refuses to
+// write over it.
+function _isCaseTombstone(d) { return !!(d && d._deleted === true); }
+
+// A teammate deleted this case: forget it locally (and its files). Returns
+// true if the case was in CASES. Caller saves.
+function _applyRemoteDeletion(id) {
+  if(!id) return false;
+  addDeletedId(id);
+  var victim = CASES.find(function(c){ return c.id === id; });
+  if(!victim) return false;
+  CASES = CASES.filter(function(c){ return c.id !== id; });
+  try { _cleanupCaseStorage(id, victim); } catch(e){}
+  return true;
+}
+
+// Delete a case from Firebase (writes a tombstone; see above). docId is the
+// Firestore document key when it differs from the case id.
+function deleteCaseFromFirestore(caseId, docId) {
   if(!FB_READY || !FB_DB || !caseId) return;
-  var docRef = FB_DB.collection(FB_COLLECTION).doc(caseId);
+  ensureFBKeys();
+  if(!FB_COLLECTION) return;
+  var docRef = FB_DB.collection(FB_COLLECTION).doc(docId || caseId);
 
   // Delete subcollections first (Firestore does not cascade-delete subcollections)
   var subcollections = ['provider_verification', 'medical_coding'];
@@ -8875,8 +9221,13 @@ function deleteCaseFromFirestore(caseId) {
     }).catch(function(){});
   });
 
-  // Delete the case document itself
-  docRef.delete().catch(function(e){ console.warn('[Firebase] Delete failed:', e.message); });
+  // Overwrite (no merge) so no patient data remains in the document
+  docRef.set({
+    id: caseId,
+    _deleted: true,
+    deletedAt: new Date().toISOString(),
+    deletedBy: (typeof S === 'function' ? S().name : '') || 'Team Member'
+  }).catch(function(e){ console.warn('[Firebase] Delete failed:', e.message); });
 }
 
 // Force-delete dialog — shows all Firebase cases as a checklist so the user
@@ -8892,7 +9243,7 @@ function purgeFirebaseGhosts() {
     // doc.id is the authoritative key for deletion; d.id is used to filter CASES[]
     snapshot.forEach(function(doc){
       var d=doc.data();
-      if(d) fbCases.push({_docId: doc.id, id: d.id||doc.id, caseNum: d.caseNum||'', patient: d.patient||''});
+      if(d && !_isCaseTombstone(d)) fbCases.push({_docId: doc.id, id: d.id||doc.id, caseNum: d.caseNum||'', patient: d.patient||''});
     });
     if(!fbCases.length) { toast('Firebase has no cases'); return; }
     fbCases.sort(function(a,b){ return (a.caseNum||'').localeCompare(b.caseNum||''); });
@@ -8943,16 +9294,8 @@ function doFbPurgeDelete() {
     var docId = cb.value;           // Firestore document key → used for FB deletion
     var dataId = cb.dataset.cid || cb.value; // data id → used to filter CASES[]
     addDeletedId(dataId);
-    if(docId) {
-      // Delete by Firestore document key (authoritative)
-      if(FB_READY && FB_DB && FB_COLLECTION) {
-        var docRef = FB_DB.collection(FB_COLLECTION).doc(docId);
-        ['provider_verification','medical_coding'].forEach(function(sub){
-          docRef.collection(sub).get().then(function(snap){ snap.forEach(function(d){d.ref.delete().catch(function(){});}); }).catch(function(){});
-        });
-        docRef.delete().catch(function(e){ console.warn('[purge] FB delete failed:', docId, e.message); });
-      }
-    }
+    // Tombstone by Firestore document key (authoritative)
+    if(docId) deleteCaseFromFirestore(dataId, docId);
     CASES = CASES.filter(function(c){ return c.id !== dataId && c.id !== docId; });
   });
 
@@ -9140,16 +9483,25 @@ function pullAllFromFirebase() {
       return;
     }
     var remoteCases = [];
-    snapshot.forEach(function(doc){ remoteCases.push(doc.data()); });
+    snapshot.forEach(function(doc){
+      var d = doc.data();
+      if(!d) return;
+      if(!d.id) d.id = doc.id;
+      d._fsDocId = doc.id;
+      // Deleted by someone — drop any local copy, never re-add
+      if(_isCaseTombstone(d)) { _applyRemoteDeletion(d.id); return; }
+      remoteCases.push(d);
+    });
     var _fbDelSet = new Set(getDeletedIds().map(function(x){return x.id;}));
     // Merge: keep local cases not in Firebase, update local with remote if newer
     // Never re-add a case that was locally deleted (even if Firebase lags behind)
     remoteCases.forEach(function(rc){
       if(_fbDelSet.has(rc.id)) {
         // Case was deleted locally — also delete from Firebase if not done yet
-        deleteCaseFromFirestore(rc.id);
+        deleteCaseFromFirestore(rc.id, rc._fsDocId);
         return;
       }
+      delete rc._fsDocId;
       var li = CASES.findIndex(function(c){ return c.id===rc.id; });
       var rt = new Date(rc.updatedAt||rc.created||0).getTime();
       if(li === -1) {
@@ -11430,7 +11782,9 @@ function b64AB(b64) {
 // Also normalises GIF/WebP/BMP to JPEG (BMP is not accepted by the API) and
 // upscales small images a little for OCR. opts: {enhance:bool, rotate:deg}.
 // Resolves to {dataUrl, b64, mime:'image/jpeg', width, height} or null.
-var IMG_MAX_EDGE = 2400, IMG_MIN_EDGE = 1200, IMG_MAX_B64 = 4.8 * 1024 * 1024;
+// 2000, not 2400: the API rejects any image over 2000px per side once a
+// request carries more than 20 images, and a multi-document case can.
+var IMG_MAX_EDGE = 2000, IMG_MIN_EDGE = 1200, IMG_MAX_B64 = 4.8 * 1024 * 1024;
 function prepareImageForAI(dataUrl, opts) {
   opts = opts || {};
   return new Promise(function(resolve) {
@@ -11991,7 +12345,7 @@ async function _msgToBlocks(m, fileLabel, depth) {
     + (m.subject ? 'Subject: ' + m.subject + '\n' : '')
     + (attNames.length ? 'Attachments (' + attNames.length + '): ' + attNames.join(', ') + '\n' : '');
   var bodyTxt = (m.bodyText || '').trim();
-  out.push({type:'text', text: hdr + (bodyTxt ? '\n' + parseEmailThread(bodyTxt).substring(0, 80000) : '\n(no text body)')});
+  out.push({type:'text', text: hdr + (bodyTxt ? '\n' + _capDocText(parseEmailThread(bodyTxt)) : '\n(no text body)')});
   for(var i = 0; i < m.attachments.length; i++) {
     var a = m.attachments[i];
     if(a.embedded) {
@@ -12153,7 +12507,7 @@ async function _msgHeuristicBlocks(fd, data) {
           +(fSubject?'Subject: '+fSubject+'\n':'')
           +(attachMentions.length?'Attachments mentioned: '+attachMentions.join(', ')+'\n':'');
         var threadParsed = parseEmailThread(msgClean);
-        var resultBlocks = [{type:'text', text:msgHdr+(msgClean.length>50?'\n'+threadParsed.substring(0,80000):'')}];
+        var resultBlocks = [{type:'text', text:msgHdr+(msgClean.length>50?'\n'+_capDocText(threadParsed):'')}];
         return resultBlocks.concat(msgBlocks);
       }
     } catch(msgErr) { console.warn('[readFileForAI] MSG parse failed:', msgErr.message); }
@@ -12161,6 +12515,17 @@ async function _msgHeuristicBlocks(fd, data) {
   
 }
 
+// Long documents used to be cut at 15–40k characters with no marker, so the
+// AI evaluated (say) the first third of a long hospital report as if it were
+// the whole thing. The cap is now far higher and every cut is marked, which
+// runEval detects and reports as an incompletely read document.
+var DOC_TEXT_CAP = 150000;
+function _capDocText(txt, cap) {
+  txt = String(txt || '');
+  cap = cap || DOC_TEXT_CAP;
+  if(txt.length <= cap) return txt;
+  return txt.substring(0, cap) + '\n[... TRUNCATED — ' + (txt.length - cap).toLocaleString() + ' further characters of this document were not included ...]';
+}
 async function readFileForAI(fd) {
   var ext = fd.ext || fxt(fd.name||'');
   var data = fd.data||'';
@@ -12284,7 +12649,7 @@ async function readFileForAI(fd) {
         var docImageBlocks = [];
         if(htmlResult && htmlResult.value) {
           var imgSrcs = [];
-          htmlResult.value.replace(/<img[^>]+src="(data:image\/[^"]+)"/gi, function(m, src){ if(imgSrcs.length < 8) imgSrcs.push(src); return m; });
+          htmlResult.value.replace(/<img[^>]+src="(data:image\/[^"]+)"/gi, function(m, src){ if(imgSrcs.length < 20) imgSrcs.push(src); return m; });
           for(var ii = 0; ii < imgSrcs.length; ii++) {
             try {
               var prepImg = await prepareImageForAI(imgSrcs[ii], {enhance: true});
@@ -12298,7 +12663,7 @@ async function readFileForAI(fd) {
         if(htmlResult && htmlResult.value && htmlResult.value.length > 10) {
           var mdText = htmlToMdWithTables(htmlResult.value);
           if(mdText && mdText.length > 10) {
-            docTextOut = mdText.length > 40000 ? mdText.substring(0, 40000) + '\n[... document truncated at 40 000 chars ...]' : mdText;
+            docTextOut = _capDocText(mdText);
             console.log('[readFileForAI] Mammoth (HTML→MD):', fd.name, docTextOut.length, 'chars,', docImageBlocks.length, 'image(s)');
           }
         }
@@ -12307,7 +12672,7 @@ async function readFileForAI(fd) {
           var rawRes = await mammoth.extractRawText({arrayBuffer: b64AB(b64wRaw)});
           var rawTxt = (rawRes.value||'').trim();
           if(rawTxt && rawTxt.length > 10) {
-            docTextOut = rawTxt.substring(0, 20000);
+            docTextOut = _capDocText(rawTxt);
             console.log('[readFileForAI] Mammoth (rawText fallback):', fd.name, rawTxt.length, 'chars,', docImageBlocks.length, 'image(s)');
           }
         }
@@ -12352,7 +12717,7 @@ async function readFileForAI(fd) {
         });
       }
       if(xmlText.trim().length > 20) {
-        return [{type:'text', text:'[WORD DOC (ZIP extracted): '+fd.name+']\n\n'+xmlText.trim().replace(/\s{3,}/g,' ').substring(0,20000)}];
+        return [{type:'text', text:'[WORD DOC (ZIP extracted): '+fd.name+']\n\n'+_capDocText(xmlText.trim().replace(/\s{3,}/g,' '))}];
       }
     } catch(zipErr) {
       console.warn('[readFileForAI] ZIP extraction failed for', fd.name, ':', zipErr.message);
@@ -12382,7 +12747,7 @@ async function readFileForAI(fd) {
       var docText = words.join(' ').replace(/\s{3,}/g,' ').trim();
       if(docText.length > 100) {
         console.log('[readFileForAI] Strategy 3 (binary scan) extracted', docText.length, 'chars from', fd.name);
-        return [{type:'text', text:'[WORD DOC (binary extracted): '+fd.name+']\n\n'+docText.substring(0,15000)}];
+        return [{type:'text', text:'[WORD DOC (binary extracted): '+fd.name+']\n\n'+_capDocText(docText)}];
       }
     } catch(s3Err) {
       console.warn('[readFileForAI] Strategy 3 failed for', fd.name, ':', s3Err.message);
@@ -12428,7 +12793,7 @@ async function readFileForAI(fd) {
         out += '\n';
       });
       if(!out.trim()) throw new Error('spreadsheet appears empty');
-      return [{type:'text', text:'[SPREADSHEET: '+fd.name+']\n\n'+out.substring(0,30000)}];
+      return [{type:'text', text:'[SPREADSHEET: '+fd.name+']\n\n'+_capDocText(out)}];
     } catch(e){
       return [{type:'text', text:'[Spreadsheet — could not read '+fd.name+': '+e.message+']'}];
     }
@@ -12444,7 +12809,7 @@ async function readFileForAI(fd) {
       .replace(/[{}\\]/g,'')
       .replace(/\s{2,}/g,' ').trim();
     if(!rtfClean) return [{type:'text', text:'[RTF document: '+fd.name+' — appears empty or image-only]'}];
-    return [{type:'text', text:'[RTF: '+fd.name+']\n\n'+rtfClean.substring(0,20000)}];
+    return [{type:'text', text:'[RTF: '+fd.name+']\n\n'+_capDocText(rtfClean)}];
   }
 
   // ═══════════════════════════════════════════════════════════
@@ -12671,7 +13036,7 @@ async function readFileForAI(fd) {
         if(altUsed && altUsed.v) return;
         var txt=partText(part).replace(/\r\n/g,'\n').replace(/\n{4,}/g,'\n\n').trim();
         if(txt.length>10 && textBlocks<10) {
-          blocks.push({type:'text', text:'[EMAIL BODY]\n\n'+parseEmailThread(txt).substring(0,80000)});
+          blocks.push({type:'text', text:'[EMAIL BODY]\n\n'+_capDocText(parseEmailThread(txt))});
           if(altUsed) altUsed.v=true;
         }
         return;
@@ -12682,7 +13047,7 @@ async function readFileForAI(fd) {
         var htmlSrc = partText(part);
         var htmlTxt = /<table/i.test(htmlSrc) ? htmlToMdWithTables(htmlSrc) : htmlEmailToText(htmlSrc);
         if(htmlTxt.length>10 && textBlocks<10) {
-          blocks.push({type:'text', text:'[EMAIL BODY]\n\n'+parseEmailThread(htmlTxt).substring(0,80000)});
+          blocks.push({type:'text', text:'[EMAIL BODY]\n\n'+_capDocText(parseEmailThread(htmlTxt))});
           if(altUsed) altUsed.v=true;
         }
         return;
@@ -12722,7 +13087,7 @@ async function readFileForAI(fd) {
       await walk(parsed,0,null);
     } catch(emlErr) {
       console.error('[EML] Parser error:', emlErr.message);
-      return [{type:'text', text:'[EMAIL: '+fd.name+']\n\n'+bytesToText(emlRaw,'').substring(0,80000)}];
+      return [{type:'text', text:'[EMAIL: '+fd.name+']\n\n'+_capDocText(bytesToText(emlRaw,""))}];
     }
 
     // Header summary first
@@ -12743,8 +13108,8 @@ async function readFileForAI(fd) {
         .replace(/Content-Transfer-Encoding:\s*base64[\s\S]*?(?=\n--|\n\nContent-)/gi,'[base64 data]')
         .replace(/^[A-Za-z0-9+/]{60,}=*\s*$/gm,'')
         .replace(/--[^\n]{5,}\n/g,'')
-        .replace(/\n{4,}/g,'\n\n').substring(0,80000);
-      blocks.push({type:'text',text:'[EMAIL BODY]\n\n'+parseEmailThread(cleanEml)});
+        .replace(/\n{4,}/g,'\n\n');
+      blocks.push({type:'text',text:'[EMAIL BODY]\n\n'+_capDocText(parseEmailThread(cleanEml))});
     }
 
     console.log('[EML] Parsed:', fd.name, '→', blocks.length, 'blocks,', attachmentNames.length, 'attachments');
@@ -12762,20 +13127,20 @@ async function readFileForAI(fd) {
       .replace(/&nbsp;/g,' ').replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>')
       .replace(/\s{2,}/g,' ').trim();
     if(!htmlClean) return [{type:'text', text:'[HTML document: '+fd.name+' — no text content found]'}];
-    return [{type:'text', text:'[HTML: '+fd.name+']\n\n'+htmlClean.substring(0,20000)}];
+    return [{type:'text', text:'[HTML: '+fd.name+']\n\n'+_capDocText(htmlClean)}];
   }
 
   // ── Plain text / CSV / TSV / ODT / LOG ──────────────────────
   if(ext==='txt' || ext==='other') {
     var txtRaw = readTextFromDataUrl(data);
     if(!txtRaw || !txtRaw.trim()) return [{type:'text', text:'[Document: '+fd.name+' — appears empty]'}];
-    return [{type:'text', text:'[DOCUMENT: '+fd.name+']\n\n'+txtRaw.substring(0,20000)}];
+    return [{type:'text', text:'[DOCUMENT: '+fd.name+']\n\n'+_capDocText(txtRaw)}];
   }
 
   // ── Unknown format — try to read as text anyway ──────────────
   var unknownTxt = readTextFromDataUrl(data);
   if(unknownTxt && unknownTxt.trim().length > 10) {
-    return [{type:'text', text:'[FILE: '+fd.name+' ('+ext+')]\n\n'+unknownTxt.trim().substring(0,20000)}];
+    return [{type:'text', text:'[FILE: '+fd.name+' ('+ext+')]\n\n'+_capDocText(unknownTxt.trim())}];
   }
   return [{type:'text', text:'[File: '+fd.name+' — format not fully supported but file is saved in the case]'}];
 }

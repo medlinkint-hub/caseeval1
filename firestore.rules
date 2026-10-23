@@ -40,7 +40,14 @@ service cloud.firestore {
     // ── Case files ────────────────────────────────────────────────────────
     // Patient medical records. GDPR Article 9 special-category data.
     match /cases/{caseId} {
-      allow read, write: if isApprovedMember();
+      allow read, create, delete: if isApprovedMember();
+      // A deleted case is kept as a tombstone ({id, _deleted:true, …}, no
+      // patient data) so other devices learn about the deletion. Once
+      // tombstoned it can never be written again — otherwise a PC that was
+      // offline or mid-edit at the time could merge the patient's data back
+      // into it.
+      allow update: if isApprovedMember()
+        && resource.data.get('_deleted', false) != true;
 
       // Subcollections written by the provider-verification and medical-coding
       // features. Firestore does NOT inherit rules into subcollections, so
