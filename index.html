@@ -719,7 +719,7 @@ var save = function() {
       name:f.name, size:f.size, type:f.type, ext:f.ext, _key:f._key||null,
       ...(f._isEvalReport ? {_isEvalReport:true, _decision:f._decision||'', _evalDate:f._evalDate||''} : {})
     })),
-    eval: c.eval ? c.eval.substring(0,30000)+(c.eval.length>30000?'\n[...]':'') : '',
+    eval: c.eval ? _clipEval(c.eval, 30000) : '',
     desc: (c.desc||'').substring(0,2000),
     notes: (c.notes||'').substring(0,1000),
     paJustification: (c.paJustification||'').substring(0,500),
@@ -778,9 +778,11 @@ const getC = id => CASES.find(c=>c.id===id) || null;
 // Normalize amount strings — handles European comma-decimal format (e.g. "11225,00" → "11225.00")
 function normAmt(val) {
   if(val === null || val === undefined || val === '') return '';
-  var s = String(val).trim().replace(/\s/g,'');
+  var s = String(val).trim().replace(/\s/g,'').replace(/[^\d.,-]/g,''); // drop "€", "EUR", "THB" …
+  // Dot thousands without decimals: "1.225.000" / "1.225" → "1225000" / "1225"
+  if(/^\d{1,3}(\.\d{3})+$/.test(s)) { s = s.replace(/\./g,''); }
   // European with thousands dots: "1.225,00" → "1225.00"
-  if(/\d\.\d{3},\d{1,2}$/.test(s)) { s = s.replace(/\./g,'').replace(',','.'); }
+  else if(/\d\.\d{3},\d{1,2}$/.test(s)) { s = s.replace(/\./g,'').replace(',','.'); }
   // Simple comma-decimal: "11225,00" → "11225.00"
   else if(/,\d{1,2}$/.test(s)) { s = s.replace(',','.'); }
   // Thousands commas only: "11,225" → "11225"
@@ -788,6 +790,74 @@ function normAmt(val) {
   var f = parseFloat(s);
   return (isNaN(f) || f < 0) ? '' : f.toFixed(2);
 }
+// Final "DECISION: X" line of an evaluation. Tolerates markdown bold/headings
+// ("**DECISION:** DECLINED") the way renderEvalTxt does, so the stored status
+// and the on-screen banner can no longer disagree.
+function _parseDecisionLine(text) {
+  var t = String(text || '').replace(/[*#_]+/g, '');
+  var m = [...t.matchAll(/^\s*DECISION\s*:\s*(DECLINED|APPROVED|PARTIALLY APPROVED|PENDING INFORMATION)\b/gim)];
+  return m.length ? m[m.length-1][1].toUpperCase() : '';
+}
+
+// Approved amount from an evaluation. The mandated "APPROVED AMOUNT: EUR x"
+// line wins even when it is 0 (a declined claim); looser phrases are only
+// used for an approved/partial decision with no such line. European formats
+// ("450,00", "1.234,56", "1 200,00") are parsed by normAmt — the old
+// parseFloat(x.replace(/,/g,'')) turned "EUR 450,00" into 45000.
+function _extractApprovedAmount(text, decision) {
+  var t = String(text || '').replace(/[*#_]+/g, '');
+  var NUM = '(\\d[\\d.,]*(?:\\s\\d{3})*(?:[.,]\\d{1,2})?)';
+  var strict = [...t.matchAll(new RegExp('APPROVED\\s+AMOUNT\\s*:?\\s*(?:EUR|€)\\s*' + NUM, 'gi'))];
+  if(strict.length) return normAmt(strict[strict.length-1][1]) || '';
+  var d = String(decision || '').toUpperCase();
+  if(/^DECLIN|^DENIED/.test(d)) return '0.00';
+  if(!/^APPROV|^PARTIAL/.test(d)) return '';
+  var loose = [
+    'net payable amount\\s+of\\s+EUR\\s*' + NUM,
+    'payable\\s+amount\\s*(?:of|:)?\\s*EUR\\s*' + NUM,
+    'EUR\\s*' + NUM + '\\s+(?:is\\s+)?(?:payable|reimbursable|approved)',
+    'net\\s+amount\\s*(?:of|:)?\\s*EUR\\s*' + NUM
+  ];
+  for(var i = 0; i < loose.length; i++) {
+    var m = t.match(new RegExp(loose[i], 'i'));
+    if(m) { var v = normAmt(m[1]); if(v && parseFloat(v) > 0) return v; }
+  }
+  return '';
+}
+
+// Keep the start AND the end of a long evaluation when it has to be cut for
+// storage — the DECISION / APPROVED AMOUNT / REASON lines are at the end, and
+// cutting only the tail (as before) removed them after a reload and on
+// teammates' devices.
+function _clipEval(t, max) {
+  t = String(t || '');
+  if(t.length <= max) return t;
+  var marker = '\n[... middle of evaluation omitted to fit storage ...]\n';
+  var head = Math.floor((max - marker.length) * 0.45);
+  return t.slice(0, head) + marker + t.slice(t.length - (max - marker.length - head));
+}
+
+// Merge a newer remote copy of a case into the local one. The evaluation and
+// the fields derived from it travel together and follow whichever side ran
+// the evaluation last; before, the LONGER text always won, so a teammate's
+// shorter re-evaluation was replaced by the old one while its new decision
+// and amount were kept.
+var _EVAL_FIELDS = ['eval','lastDecision','status','amountApproved','lastEvalAt','evalHistory','verificationFlag','pendingStatus'];
+function _mergeRemoteCase(local, remote) {
+  var merged = Object.assign({}, local, remote);
+  var lt = Date.parse(local.lastEvalAt || 0) || 0, rt = Date.parse(remote.lastEvalAt || 0) || 0;
+  if(lt > rt) {
+    _EVAL_FIELDS.forEach(function(f){ if(f in local) merged[f] = local[f]; });
+  } else if(lt === rt) {
+    // Same evaluation — keep the copy that was not cut for storage
+    var le = local.eval || '', re = remote.eval || '';
+    merged.eval = re.length >= le.length ? re : le;
+  } else if(!remote.eval && local.eval) {
+    merged.eval = local.eval;
+  }
+  return merged;
+}
+
 var updC = function(id,o) {
   const i = CASES.findIndex(c=>c.id===id);
   if(i>=0) {
@@ -1490,20 +1560,32 @@ function pseudonymise(text, knownNames) {
   // are trimmed off first, and a phrase containing a place or organisation
   // word is left alone.
   result = result.replace(nameRe2, function(match) {
-    var parts = match.split(/\s/);
-    var a = 0, b = parts.length;
-    while(a < b && _NAME_TRIM_RX.test(parts[a])) a++;
-    while(b > a && _NAME_TRIM_RX.test(parts[b-1])) b--;
-    var core = parts.slice(a, b);
-    if(core.length < 2) return match;
-    if(core.some(function(p){ return skipWords.test(p) || _PLACE_ORG_RX.test(p) || _NAME_TRIM_RX.test(p) || _isMedWord(p); })) return match;
-    var name = core.join(' ');
-    if(name.length < 4) return match;
-    if(!_pseudoMap[name]) {
-      _pseudoCounters.PT++;
-      _pseudoMap[name] = '[PT-' + String(_pseudoCounters.PT).padStart(3,'0') + ']';
+    // Split into words + the exact separators between them (a match can span
+    // a line break). Words that are titles, roles, places, organisations or
+    // medical terms break the phrase; every remaining run of 2+ words is a
+    // name and is masked on its own — so "husband Georgios Papas\nThessaloniki"
+    // masks "Georgios Papas" and keeps "Thessaloniki".
+    var segs = match.split(/(\s+)/), words = [], seps = [];
+    for(var si = 0; si < segs.length; si += 2) { words.push(segs[si]); seps.push(segs[si+1] || ''); }
+    var excl = words.map(function(w){ return skipWords.test(w) || _PLACE_ORG_RX.test(w) || _NAME_TRIM_RX.test(w) || _isMedWord(w); });
+    var out = '', k = 0;
+    while(k < words.length) {
+      if(excl[k]) { out += words[k] + seps[k]; k++; continue; }
+      var e = k; while(e + 1 < words.length && !excl[e+1]) e++;
+      var raw = '';
+      for(var q = k; q <= e; q++) raw += words[q] + (q < e ? seps[q] : '');
+      if(e > k && raw.length >= 4) {
+        if(!_pseudoMap[raw]) {
+          _pseudoCounters.PT++;
+          _pseudoMap[raw] = '[PT-' + String(_pseudoCounters.PT).padStart(3,'0') + ']';
+        }
+        out += _pseudoMap[raw] + seps[e];
+      } else {
+        out += raw + seps[e];
+      }
+      k = e + 1;
     }
-    return parts.slice(0, a).concat([_pseudoMap[name]], parts.slice(b)).join(' ');
+    return out;
   });
 
   // 2. Dates are NOT masked — policy start/issue dates, trip dates and diagnosis
@@ -1551,7 +1633,8 @@ function pseudonymise(text, knownNames) {
     if(!intl && /^\d{4}-\d{1,2}-\d{1,2}$/.test(match.trim())) return match;                 // ISO date
     if(!intl && /^\d{1,2}[.\-\s]\d{1,2}[.\-\s]\d{2,4}$/.test(match.trim())) return match;    // dd.mm.yyyy
     if(!intl && /^\d{1,3}(\.\d{3})+$/.test(match.trim())) return match;                     // 1.234.567
-    if(!intl && digits.length < 9) return match;                                              // too short for a local number
+    if(!intl && /^\d{1,4}[.\-\/]\d{1,2}[.\-\/]\d{2,4}\b/.test(match.trim())) return match;     // starts with a date ("17.10.2026 14", "2026-10-17 09")
+    if(!intl && digits.length < 8) return match;                                              // too short for a phone number
     if(!_pseudoMap[match]) {
       _pseudoCounters.PHONE++;
       _pseudoMap[match] = '[PHONE-' + String(_pseudoCounters.PHONE).padStart(3,'0') + ']';
@@ -2242,6 +2325,30 @@ async function completeDecisionFromPartial(partialText) {
     throw new Error('Verdict-completion call returned an empty response');
   }
   return partialText + '\n\n' + verdictResult;
+}
+
+// Save path shared by the two fallback outcomes of runEval (text-only retry
+// and recovery after a connection error). They used to write only eval /
+// status / decision: the previous evaluation never reached evalHistory, the
+// approved amount was not updated, and a stale verificationFlag/pendingStatus
+// from an earlier run kept asking for sign-off on the OLD decision.
+function _saveFallbackEval(caseId, evalText, decision, docsIncomplete) {
+  var cur = getC(caseId);
+  var hist = (cur && cur.evalHistory) ? cur.evalHistory.slice() : [];
+  if(cur && cur.eval && cur.eval.length > 50) {
+    hist.unshift({date: new Date().toISOString(), decision: cur.lastDecision || 'UNKNOWN', eval: cur.eval});
+    if(hist.length > 5) hist = hist.slice(0, 5);
+  }
+  var d = String(decision || '').toUpperCase();
+  var st = /^DECLIN/.test(d) ? 'declined' : /^APPROV/.test(d) ? 'approved' : /^PARTIAL/.test(d) ? 'partial' : 'reviewing';
+  updC(caseId, {
+    eval: evalText, lastDecision: decision, lastEvalAt: new Date().toISOString(), evalHistory: hist,
+    status: docsIncomplete ? 'reviewing' : st,
+    pendingStatus: docsIncomplete && st !== 'reviewing' ? st : '',
+    verificationFlag: '',
+    amountApproved: _extractApprovedAmount(evalText, decision)
+  });
+  return docsIncomplete ? 'reviewing' : st;
 }
 
 async function runEval(caseId) {
@@ -3095,13 +3202,10 @@ async function runEval(caseId) {
       + 'Evaluator: '+(typeof S==='function'?S().name||'Team Member':'Team Member')+'\n'
       + '=================\n\n';
     var textOnlyFinal = retryResult;
-    var retryDecMatches = [...textOnlyFinal.matchAll(/^\s*DECISION\s*:\s*(DECLINED|APPROVED|PARTIALLY APPROVED|PENDING INFORMATION)\b/gim)];
-    var retryDecision = retryDecMatches.length ? retryDecMatches[retryDecMatches.length-1][1].trim() : 'UNKNOWN';
+    var retryDecision = _parseDecisionLine(textOnlyFinal) || 'UNKNOWN';
     // Documents were not all read — leave the case under review rather than
     // closing it as approved/declined on incomplete evidence.
-    var retryStatus = (_droppedBinary.length || _docsNotRead.length) ? 'reviewing'
-      : /^DECLIN/.test(retryDecision) ? 'declined' : /^APPROV/.test(retryDecision) ? 'approved' : /^PARTIAL/.test(retryDecision) ? 'partial' : 'reviewing';
-    updC(caseId, {eval: retryHeader + textOnlyFinal, status: retryStatus, lastDecision: retryDecision, lastEvalAt: new Date().toISOString()});
+    _saveFallbackEval(caseId, retryHeader + textOnlyFinal, retryDecision, !!(_droppedBinary.length || _docsNotRead.length));
     if(window._currentCaseId === caseId) {
       if(erDiv) erDiv.innerHTML = renderEvalTxt(retryHeader + textOnlyFinal);
       setEvSt('done', 'Done (text-only) — '+new Date().toLocaleTimeString('en',{hour:'2-digit',minute:'2-digit'}));
@@ -3363,9 +3467,9 @@ async function runEval(caseId) {
     // otherwise pick up instead of the real verdict.
     var savedDecision = 'UNKNOWN';
     if(finalResult) {
-      var decMatchesStrict = [...finalResult.matchAll(/^\s*DECISION\s*:\s*(DECLINED|APPROVED|PARTIALLY APPROVED|PENDING INFORMATION)\b/gim)];
-      if(decMatchesStrict.length) {
-        savedDecision = decMatchesStrict[decMatchesStrict.length-1][1].trim();
+      var _strictDec = _parseDecisionLine(finalResult);
+      if(_strictDec) {
+        savedDecision = _strictDec;
       } else {
         var decMatches = [...finalResult.matchAll(/DECISION\s*:?\s*([^\n]+)/gi)];
         if(decMatches.length) savedDecision = decMatches[decMatches.length-1][1].trim();
@@ -3436,20 +3540,10 @@ async function runEval(caseId) {
       });
       if(evalHist.length > 5) evalHist = evalHist.slice(0, 5); // keep last 5
     }
-    // Extract approved amount from the evaluation text and auto-save to amountApproved
-    var _approvedFromEval = null;
-    var _approvedPatterns = [
-      /APPROVED\s+AMOUNT\s*:?\s*EUR\s*([\d,\.]+)/i,
-      /net payable amount\s+of\s+EUR\s*([\d,\.]+)/i,
-      /payable\s+amount\s*(?:of|:)?\s*EUR\s*([\d,\.]+)/i,
-      /EUR\s*([\d,\.]+)\s+(?:is\s+)?(?:payable|reimbursable|approved)/i,
-      /reimburse(?:ment\s+of)?\s+EUR\s*([\d,\.]+)/i,
-      /net\s+amount\s*(?:of|:)?\s*EUR\s*([\d,\.]+)/i,
-    ];
-    for(var _ai = 0; _ai < _approvedPatterns.length && !_approvedFromEval; _ai++) {
-      var _am = finalResult.match(_approvedPatterns[_ai]);
-      if(_am) { var _av = parseFloat(_am[1].replace(/,/g,'')); if(_av > 0) _approvedFromEval = _av.toFixed(2); }
-    }
+    // Approved amount from the evaluation (see _extractApprovedAmount). Always
+    // written below — '0.00' for a declined claim, '' when the evaluation
+    // gives none — so a re-evaluation can no longer keep an old amount.
+    var _approvedFromEval = _extractApprovedAmount(finalResult, savedDecision);
 
     // Re-identify: swap pseudonymisation tokens back to real values for local
     // display/storage. Only the API submission stays masked (GDPR Art. 25).
@@ -3509,7 +3603,7 @@ async function runEval(caseId) {
     // hold so it can't leak forward and gate a decision that no longer needs review.
     _evalSave.verificationFlag = _verificationFlag || '';
     _evalSave.pendingStatus = (_verificationFlag || _docsNotRead.length) ? finalStatus : '';
-    if(_approvedFromEval) _evalSave.amountApproved = _approvedFromEval;
+    _evalSave.amountApproved = _approvedFromEval;
     if(_fieldCorrections) {
       // Apply only recognised safe fields — never overwrite case ID or patient name
       var _safeFields = ['amountClaimed','amountClaimedOriginal','amountClaimedCurrency','currency','dol','country'];
@@ -3627,10 +3721,8 @@ async function runEval(caseId) {
           + 'Time: '+new Date().toLocaleTimeString('en',{hour:'2-digit',minute:'2-digit'})+'\n'
           + 'Evaluator: '+(typeof S==='function'?S().name||'Team Member':'Team Member')+'\n'
           + '=================\n\n';
-        var decMatchesRecov = [...finalResult.matchAll(/^\s*DECISION\s*:\s*(DECLINED|APPROVED|PARTIALLY APPROVED|PENDING INFORMATION)\b/gim)];
-        var recoveredDecision = decMatchesRecov.length ? decMatchesRecov[decMatchesRecov.length-1][1].trim() : 'UNKNOWN';
-        var recoveredStatus = /^DECLIN/.test(recoveredDecision) ? 'declined' : /^APPROV/.test(recoveredDecision) ? 'approved' : /^PARTIAL/.test(recoveredDecision) ? 'partial' : 'reviewing';
-        updC(caseId, {eval: recoverHeader + finalResult, status: recoveredStatus, lastDecision: recoveredDecision, lastEvalAt: new Date().toISOString()});
+        var recoveredDecision = _parseDecisionLine(finalResult) || 'UNKNOWN';
+        _saveFallbackEval(caseId, recoverHeader + finalResult, recoveredDecision, !!_docsNotRead.length);
         if(window._currentCaseId === caseId) {
           if(erDiv) erDiv.innerHTML = renderEvalTxt(recoverHeader + finalResult);
           setEvSt('done', 'Recovered after connection error — '+new Date().toLocaleTimeString('en',{hour:'2-digit',minute:'2-digit'}));
@@ -6525,7 +6617,7 @@ function renderNew() {
   if(window._pendingReadsTimeout) { clearTimeout(window._pendingReadsTimeout); window._pendingReadsTimeout = null; }
   window._extractQueue = [];
   window._extracting = false;
-  window.FILES = []; // Clear any files from previously opened case
+  FILES = []; // Clear any files from previously opened case (FILES is a top-level let — window.FILES is a different, unused variable)
   window._filesForCaseId = null; // no case owns FILES now
   setTop('New Case','Create a new case','');
   var pols = typeof getPolicies1==='function' ? getPolicies1() : [];
@@ -6696,11 +6788,11 @@ function createCase() {
     if(!confirm('⚠ ' + window._pendingReads + ' file(s) still loading. Create case with ' + (window._newCaseFiles||[]).length + ' loaded files so far?')) return;
   }
   // Reset FILES first to prevent previous case files bleeding in
-  window.FILES = [];
+  FILES = [];
   window._filesForCaseId = null; // clear case ownership while we set up
   // Transfer ALL new case files to FILES array (data in memory - no localStorage limit)
   if(window._newCaseFiles && window._newCaseFiles.length) {
-    window.FILES = window._newCaseFiles.slice();
+    FILES = window._newCaseFiles.slice();
     console.log('[createCase] Transferred', FILES.length, 'files, clearing old case data');
   } else {
     console.warn('[createCase] No files in _newCaseFiles - case will have no documents');
@@ -7992,12 +8084,16 @@ function _maskComms(text, names) {
   var parts = [];
   (names || []).forEach(function(nm){
     nm = String(nm || '').trim(); if(!nm) return;
-    parts.push(nm);
-    nm.split(/\s+/).forEach(function(w){ if(w.length >= 3) parts.push(w); });
+    parts.push({v: nm, f: 'giu'});                        // full name: any capitalisation
+    nm.split(/\s+/).forEach(function(w){
+      if(w.length < 3) return;
+      parts.push({v: w, f: 'gu'});                         // single name part: as written…
+      if(w.toUpperCase() !== w) parts.push({v: w.toUpperCase(), f: 'gu'}); // …or ALL CAPS — never lowercase ("May" ≠ "you may")
+    });
   });
-  parts.sort(function(a, b){ return b.length - a.length; }); // full name before its parts
+  parts.sort(function(a, b){ return b.v.length - a.v.length; }); // full name before its parts
   parts.forEach(function(p){
-    var re = new RegExp('(^|[^\\p{L}])(' + p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ')(?=$|[^\\p{L}])', 'giu');
+    var re = new RegExp('(^|[^\\p{L}])(' + p.v.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ')(?=$|[^\\p{L}])', p.f);
     out = out.replace(re, function(m, pre, val){ return pre + tok('NAME', val); });
   });
   out = out.replace(/[\w.+-]+@[\w-]+(?:\.[\w-]+)+/g, function(m){ return tok('EMAIL', m); });
@@ -8057,13 +8153,13 @@ async function draftEmail(id) {
     +(c.amountApproved?'\nAmount Approved: EUR '+c.amountApproved:'')
     +(c.eval?'\n\n=== EVALUATION (internal — inform the email, do not quote it) ===\n'+_evalForComms(c.eval, 15000):'')
     +(_commsHistory(c)?'\n\n=== EMAILS ALREADY SENT ON THIS CASE ===\n'+_commsHistory(c):''));
-  var _mD=_maskComms(prompt,_knownD); prompt=_mD.text; var _mapD=_mD.map;
+  var _mD=_maskComms(prompt,_knownD); pseudoReset(); prompt=pseudonymise(_mD.text,_knownD); var _mapD=_mD.map, _mapDP=getPseudoMap();
   var sys=_commsRules('professional and empathetic — warm but clear');
   var btn=document.getElementById('btn_ai_draft');
   if(btn){btn.textContent='Drafting...';btn.disabled=true;}
   try{
     var raw=await apiCall([{role:'user',content:prompt}],sys,2500);
-    raw=_unmaskComms(raw,_mapD);
+    raw=_unmaskComms(reidentify(raw,_mapDP),_mapD);
     var parts=_splitSubject(raw), body=parts.body;
     updC(id,{emailBody:body});
     var eb=G('f_eb');if(eb)eb.value=body;
@@ -8159,17 +8255,47 @@ async function generatePatientReply1(id) {
   // things only had one of them answered.
 
   // A final-decision letter needs a finished evaluation to state and justify
-  if(responseType==='final_decision' && !(c.eval && /DECISION\s*:\s*(DECLINED|APPROVED|PARTIALLY APPROVED)/i.test(c.eval))){
-    toast('Final Decision needs a completed evaluation with an APPROVED / PARTIALLY APPROVED / DECLINED decision — run the evaluation first', 7000);
-    return;
+  // Decision as stored for the case. lastDecision is the verdict saved by the
+  // evaluation; _parseDecisionLine reads the final DECISION line of the text
+  // (markdown-tolerant) as a fallback for older cases.
+  var _storedDec = String(c.lastDecision || '').replace(/[*#_]+/g,'').trim().toUpperCase() || _parseDecisionLine(c.eval) || '';
+  var _isFinalDec = /^(APPROVED|PARTIALLY APPROVED|DECLINED)\b/.test(_storedDec);
+  var _handlerDecision = null; // {decision, amount, reason} when the claims handler confirms it
+  if(responseType==='final_decision' && (!_isFinalDec || c.pendingStatus || c.verificationFlag)){
+    // The AI evaluation is not a final verdict (e.g. PENDING INFORMATION), or
+    // the case is held for review. Instead of a dead end, let the claims
+    // handler confirm the final decision themselves — the letter then rests
+    // on a human decision, recorded on the case timeline.
+    var _why = !_isFinalDec
+      ? 'The latest AI evaluation' + (c.lastEvalAt ? ' (' + new Date(c.lastEvalAt).toLocaleDateString('en-GB') + ')' : '') + ' ended with: ' + (_storedDec || 'no decision') + '.'
+      : 'This case is held for review (' + (c.verificationFlag ? 'unconfirmed policy clause' : 'not every document was read in full') + ').';
+    // window.prompt/confirm explicitly: this function has its own local `prompt` variable
+    if(!window.confirm(_why + '\n\nA Final Decision letter needs a final decision. Do you, as claims handler, want to confirm the final decision yourself?\n\nOK = confirm it now · Cancel = re-run the evaluation instead')) return;
+    var _code = (window.prompt('Final decision — type:\n  A = Approved\n  P = Partially approved\n  D = Declined', /^PARTIAL/.test(_storedDec) ? 'P' : /^DECLIN/.test(_storedDec) ? 'D' : /^APPROV/.test(_storedDec) ? 'A' : '') || '').trim().toUpperCase();
+    var _hd = {A:'APPROVED', P:'PARTIALLY APPROVED', D:'DECLINED'}[_code.charAt(0)];
+    if(!_hd){ toast('No decision entered — Final Decision letter not generated'); return; }
+    var _amt = '0.00';
+    if(_hd !== 'DECLINED') {
+      _amt = normAmt(window.prompt('Approved amount in EUR:', c.amountApproved || '') || '');
+      if(!_amt){ toast('No approved amount entered — Final Decision letter not generated'); return; }
+    }
+    var _reason = (window.prompt('Reason for the decision, in one or two sentences (cite the policy clause/limit if you can) — it is used as the basis of the letter:', '') || '').trim();
+    if(_reason.length < 10){ toast('A short reason is needed for a Final Decision letter'); return; }
+    _handlerDecision = {decision:_hd, amount:_amt, reason:_reason};
+    addTL(id, 'Final decision confirmed by claims handler for client letter: ' + _hd + (_hd !== 'DECLINED' ? ' — EUR ' + _amt : '') + ' — ' + _reason.substring(0, 160));
   }
   if(statusEl){statusEl.style.display='flex';statusEl.className='evs evr';statusEl.innerHTML='<div class="spin"></div>&nbsp;Reading case and drafting reply&hellip;';}
   if(genBtn){genBtn.innerHTML='<div class="spin" style="width:14px;height:14px;border-color:rgba(255,255,255,.5);border-top-color:#fff;flex-shrink:0"></div>&nbsp;Drafting...';genBtn.disabled=true;}
   if(outputWrap)outputWrap.style.display='none';
 
   // Build full case context for AI
-  var dec=typeof parseDecision==='function'?parseDecision(c.eval):null;
-  var decText=dec?dec.status+' — EUR '+dec.amount:c.status?c.status.toUpperCase():'Pending evaluation';
+  // The decision text given to the AI. This called parseDecision(), which
+  // does not exist, so every reply type got only the case status
+  // ("PARTIAL", "REVIEWING") instead of the decision and approved amount.
+  var decText;
+  if(_handlerDecision) decText=_handlerDecision.decision+(_handlerDecision.decision!=='DECLINED'?' — EUR '+_handlerDecision.amount:'');
+  else if(_storedDec) decText=_storedDec+(/^(APPROVED|PARTIALLY)/.test(_storedDec) && parseFloat(c.amountApproved)>0 ? ' — EUR '+c.amountApproved : '');
+  else decText=c.eval?'Evaluated (no final decision line)':'Pending evaluation';
 
   // Type-specific instructions
   var typeInstruction='';
@@ -8187,7 +8313,9 @@ async function generatePatientReply1(id) {
     +'(e) in ONE short, neutral closing sentence, it notes that the client keeps any statutory right to refer the matter to the competent financial ombudsman or courts — this is a legal right the TPA cannot remove, so do not omit it, but do not encourage it either. '
     +'Do NOT offer an internal appeal, a further review, a reconsideration, or "we will look into this again". Do NOT invite the client to send more documents. Do NOT use apologetic language that implies the decision is uncertain. Stay courteous and respectful. '
     +'These rules OVERRIDE the general rules below wherever they conflict (next steps in rule 11 are only payment/administrative ones; placeholders under rule 6 must never promise a review of the decision). '
-    +'If the case evaluation does not contain a clear final DECISION and policy basis, do NOT write a final-decision letter: instead write a short internal note (addressed to the claims handler, not the client) saying the case is not ready for a final-decision letter and what is missing.';}
+    +(_handlerDecision
+      ? 'The final decision was CONFIRMED BY THE CLAIMS HANDLER (it overrides any different or pending outcome in the AI evaluation): '+decText+'. Handler\'s reason: '+_handlerDecision.reason+' — base the explanation on this reason, supported by the facts and policy wording in the evaluation; do not contradict it and do not mention that the AI evaluation said otherwise.'
+      : 'If the case evaluation does not contain a clear final DECISION and policy basis, do NOT write a final-decision letter: instead write a short internal note (addressed to the claims handler, not the client) saying the case is not ready for a final-decision letter and what is missing.');}
   else if(responseType==='approval_confirm'){typeInstruction='Confirm the approval positively and clearly: '+decText+'. Explain the payment process, expected timeline, and any conditions. Include bank details / reimbursement instructions if relevant. Be warm and reassuring.';}
   else if(responseType==='payment_query'){typeInstruction='Address the payment question directly. Provide clear information on the approved amount, payment timeline, method and any bank details or reference needed. If payment is pending, give the expected date only if it is in the case data; otherwise use [CONFIRM: payment date].';}
   else if(responseType==='urgent_case'){typeInstruction='This is an URGENT situation — respond immediately and with priority. Acknowledge the urgency explicitly in the first sentence. Provide any immediate assistance available and a specific named contact or escalation path. Confirm what is being done RIGHT NOW.';}
@@ -8248,15 +8376,20 @@ async function generatePatientReply1(id) {
     +'\n\n=== TASK ===\n'+typeInstruction
     +'\n\nWrite the reply in the specified tone: '+toneDesc+', in the language of the latest message.';
 
-  // GDPR: same pseudonymisation as evaluations — patient identifiers are
-  // swapped for placeholders before the API call and restored afterwards.
+  // GDPR: client identifiers are masked twice before the API call — the
+  // targeted mask (_maskComms: client names, emails, phones) and the general
+  // pseudonymiser evaluations use — and restored afterwards.
   var _clientName=(emailFrom.match(/^\s*"?([^"<@]+?)"?\s*</)||[])[1]||'';
   var _m=_maskComms(prompt,[c.patient,c.policyHolder,_clientName].filter(Boolean));
-  var _promptP=_m.text, _mapR=_m.map;
+  // Then the same pseudonymisation evaluations get: the evaluation text and
+  // policy number carry third-party names, passport and policy numbers that
+  // the targeted mask above does not cover.
+  pseudoReset();
+  var _promptP=pseudonymise(_m.text,[c.patient,c.policyHolder,_clientName].filter(Boolean)), _mapR=_m.map, _mapP=getPseudoMap();
 
   try{
     var reply=await apiCall([{role:'user',content:_promptP}],sys,2500);
-    reply=_unmaskComms(reply,_mapR);
+    reply=_unmaskComms(reidentify(reply,_mapP),_mapR);
     var _rp=_splitSubject(reply);
     if(outputEl){outputEl.value=reply.trim(); outputEl.dataset.subject=_rp.subject;}
     var _ph=(reply.match(/\[CONFIRM:[^\]]*\]/g)||[]);
@@ -8791,7 +8924,7 @@ function toEUR(amount, cur) {
   if(!cur) return parseFloat(amount);
   var raw = (cur+'').trim();
   // Map common currency symbols and aliases to ISO codes
-  var symMap = {'₹':'INR','RS':'INR','RS.':'INR','฿':'THB','£':'GBP','€':'EUR','$':'USD','¥':'JPY','₺':'TRY','₱':'PHP','元':'CNY','RM':'MYR','RP':'IDR','HK$':'HKD','S$':'SGD','د.إ':'AED'};
+  var symMap = {'₹':'INR','RS':'INR','RS.':'INR','฿':'THB','£':'GBP','€':'EUR','$':'USD','¥':'JPY','₺':'TRY','₱':'PHP','元':'CNY','RM':'MYR','RP':'IDR','HK$':'HKD','S$':'SGD','د.إ':'AED','US$':'USD','USD$':'USD','A$':'AUD','AU$':'AUD','C$':'CAD','CA$':'CAD','NZ$':'NZD','SFR':'CHF','SFR.':'CHF','FR.':'CHF','CHF.':'CHF','R$':'BRL','ZŁ':'PLN','ZL':'PLN','KČ':'CZK','LEI':'RON','LEV':'BGN','ЛВ':'BGN','₽':'RUB','₩':'KRW','₫':'VND','₪':'ILS'};
   var key = symMap[raw] || symMap[raw.toUpperCase()] || raw.toUpperCase().trim().replace(/[^A-Z]/g,'');
   var r = (FX_LIVE && FX_LIVE[key]) || FX[key];
   if(!r) {
@@ -8800,7 +8933,7 @@ function toEUR(amount, cur) {
     else if(key.indexOf('EURO')!==-1||key==='€') r=1;
     else if(key.indexOf('DOLLAR')!==-1||key==='$') r=0.92;
     else if(key.indexOf('POUND')!==-1||key==='£') r=1.17;
-    else r=1; // unknown currency — return as-is
+    else { r=1; console.warn('[toEUR] Unknown currency "' + raw + '" — amount treated as EUR'); } // e.g. "kr" (SEK/NOK/DKK) is ambiguous
   }
   return Math.round(parseFloat(amount) * r * 100) / 100;
 }
@@ -8846,7 +8979,12 @@ function buildAmountString(caseObj) {
   var amt = parseFloat(caseObj.amountClaimedEUR||caseObj.amountClaimed||0);
   if(amt <= 0) return 'Not provided';
   var origCur = (caseObj.amountClaimedCurrency||caseObj.currency||'EUR').toUpperCase();
-  var eurAmt = origCur === 'EUR' ? amt : toEUR(amt, origCur);
+  // amountClaimed holds EUR whenever it was set from documents or an AI
+  // correction (those also set amountClaimedEUR / amountClaimedOriginal);
+  // only a hand-typed amount is in the case's own currency. Converting the
+  // former again turned "THB 70000 (≈ EUR 1867)" into "≈ EUR 48.54".
+  var alreadyEUR = !!(caseObj.amountClaimedEUR || caseObj.amountClaimedOriginal);
+  var eurAmt = (origCur === 'EUR' || alreadyEUR) ? amt : toEUR(amt, origCur);
   var eurStr = 'EUR ' + eurAmt.toLocaleString('en',{minimumFractionDigits:2,maximumFractionDigits:2});
   if(origCur !== 'EUR' && caseObj.amountClaimedOriginal) {
     return caseObj.amountClaimedOriginal + ' (≈ ' + eurStr + ')';
@@ -9043,10 +9181,7 @@ function startFirebaseSync() {
           var localTime = new Date(CASES[localIdx].updatedAt || CASES[localIdx].created || 0).getTime();
           if(remoteTime > localTime) {
             // Preserve local eval if it is longer (remote may be older truncated version)
-            var localEval = CASES[localIdx].eval || '';
-            var remoteEval = remoteCase.eval || '';
-            var mergedEval = remoteEval.length >= localEval.length ? remoteEval : localEval;
-            CASES[localIdx] = Object.assign({}, CASES[localIdx], remoteCase, { eval: mergedEval });
+            CASES[localIdx] = _mergeRemoteCase(CASES[localIdx], remoteCase);
             changed = true;
             console.log('[Firebase] Case updated from team:', remoteCase.caseNum);
           }
@@ -9144,7 +9279,7 @@ function syncCaseToFirestore(caseObj) {
   // Never overwrite a non-empty Firestore eval with an empty local one.
   // Only include eval in the sync when local has actual content.
   if(caseObj.eval && caseObj.eval.length > 0) {
-    lean.eval = caseObj.eval.substring(0, 25000);
+    lean.eval = _clipEval(caseObj.eval, 25000);
   } else {
     delete lean.eval;
   }
@@ -9511,10 +9646,8 @@ function pullAllFromFirebase() {
         var localEval = CASES[li].eval || '';
         var remoteEval = rc.eval || '';
         if(rt > lt) {
-          // Remote is newer — use remote but always keep the longer eval
-          CASES[li] = Object.assign({}, CASES[li], rc, {
-            eval: remoteEval.length >= localEval.length ? remoteEval : localEval
-          });
+          // Remote is newer — evaluation fields follow whichever side evaluated last
+          CASES[li] = _mergeRemoteCase(CASES[li], rc);
         } else if(!localEval && remoteEval) {
           // Timestamps equal or local is newer, but local eval is missing — restore from Firebase
           CASES[li].eval = remoteEval;
@@ -9930,7 +10063,7 @@ function renderCasesWithSearch() {
       html += '<td>'+sBadge(c.status)+'</td>';
       html += '<td>'+decBadge+'</td>';
       html += '<td class="tmo">'+esc(evalDoneLabel(c))+'</td>';
-      html += '<td class="tmo">'+(parseFloat(c.amountClaimed)>0 ? fmtAmt(parseFloat(c.amountClaimed),c.currency||'EUR').split('(')[0].trim() : parseFloat(c.amountApproved)>0 ? '≈'+fmtAmt(parseFloat(c.amountApproved),c.currency||'EUR').split('(')[0].trim() : '—')+'</td>';
+      html += '<td class="tmo">'+(parseFloat(c.amountClaimed)>0 ? ((c.amountClaimedEUR||c.amountClaimedOriginal) ? (c.amountClaimedOriginal ? esc(c.amountClaimedOriginal) : fmtAmt(parseFloat(c.amountClaimed),'EUR').split('(')[0].trim()) : fmtAmt(parseFloat(c.amountClaimed),c.currency||'EUR').split('(')[0].trim()) : parseFloat(c.amountApproved)>0 ? '≈'+fmtAmt(parseFloat(c.amountApproved),c.currency||'EUR').split('(')[0].trim() : '—')+'</td>';
       html += '<td class="tmo">'+fdts(c.dol||c.created)+'</td>';
       html += '<td>'+slaBadge(c)+'</td>';
       html += '<td onclick="event.stopPropagation();toggleEvalRow(\''+c.id+'\')" style="cursor:pointer;text-align:center;padding:0 8px">';
@@ -11035,7 +11168,7 @@ async function processPolicyFile1(file) {
     statusEl.style.display='flex';
     var colors={run:'var(--navy)',ok:'#059669',err:'#dc2626'};
     statusEl.style.cssText='display:flex;align-items:center;gap:8px;padding:8px 12px;border-radius:6px;font-size:12px;font-weight:600;color:'+(colors[state]||colors.run)+';background:'+(state==='ok'?'var(--grbg)':state==='err'?'var(--redbg)':'rgba(26,42,114,.06)')+';border:1px solid '+(state==='ok'?'rgba(16,185,129,.3)':state==='err'?'rgba(220,38,38,.3)':'rgba(26,42,114,.15)');
-    statusEl.innerHTML=(state==='run'?'<div class="spin" style="width:14px;height:14px;border-color:var(--navy);border-top-color:transparent;flex-shrink:0"></div>':'')+ ' '+msg;
+    statusEl.innerHTML=(state==='run'?'<div class="spin" style="width:14px;height:14px;border-color:var(--navy);border-top-color:transparent;flex-shrink:0"></div>':'')+ ' '+esc(msg);
   }
   if(dz) dz.style.borderColor='var(--navy)';
   setS('Reading '+file.name+'...','run');
@@ -11142,6 +11275,24 @@ async function pushToGist1(silent){
   if(!gistReady1()||GIST1_SYNCING)return false;
   GIST1_SYNCING=true;
   try{
+    // Pull and merge first: the PATCH below replaces the whole file, so
+    // pushing without this overwrote teammates' changes made since our
+    // last pull. Uses the raw save (no auto-push) to avoid a push loop.
+    try{
+      var pr=await fetch('https://api.github.com/gists/'+GIST1_ID,{headers:{'Authorization':'token '+GIST1_TOKEN}});
+      if(pr.ok){
+        var pd=await pr.json(); var pf=pd.files&&pd.files[GIST1_FILE];
+        if(pf&&pf.content&&!pf.truncated){
+          var pp=JSON.parse(pf.content);
+          if(pp&&Array.isArray(pp.cases)){
+            if(pp.deletedIds) mergeRemoteDeletedIds(pp.deletedIds);
+            CASES=_mergeGistCases(pp.cases,new Set(getDeletedIds().map(function(x){return x.id;})));
+            (typeof _origSave1==='function'?_origSave1:save)();
+            if(typeof updBadges==='function') updBadges();
+          }
+        }
+      }
+    }catch(_pullErr){ console.warn('[Gist] pre-push merge skipped:', _pullErr.message); }
     var payload={description:'CaseEval 1 — Team Data',files:{}};
     payload.files[GIST1_FILE]={content:JSON.stringify({version:1,updated:new Date().toISOString(),cases:CASES,policies:getPolicies1(),deletedIds:getDeletedIds()},null,2)};
     var resp=await fetch('https://api.github.com/gists/'+GIST1_ID,{method:'PATCH',headers:{'Authorization':'token '+GIST1_TOKEN,'Content-Type':'application/json'},body:JSON.stringify(payload)});
@@ -11150,6 +11301,27 @@ async function pushToGist1(silent){
     if(!silent)toast('Synced!');
     GIST1_SYNCING=false;return true;
   }catch(e){if(!silent)toast('Sync error: '+e.message);GIST1_SYNCING=false;return false;}
+}
+
+// Merge the Gist's cases into ours. Per case the newer side wins by
+// updatedAt — the field updC() actually stamps. This compared `updated`,
+// which nothing ever sets, so both sides fell back to `created`, tied, and
+// the remote copy always won: any pull before a successful push undid local
+// edits.
+function _mergeGistCases(remote, delSet) {
+  var localById = {}; CASES.forEach(function(c){ localById[c.id] = c; });
+  var merged = [], remoteIds = new Set();
+  remote.forEach(function(rc){
+    if(!rc || delSet.has(rc.id)) return;
+    remoteIds.add(rc.id);
+    var local = localById[rc.id];
+    if(!local) { merged.push(rc); return; }
+    var rt = new Date(rc.updatedAt || rc.updated || rc.created || 0).getTime();
+    var lt = new Date(local.updatedAt || local.updated || local.created || 0).getTime();
+    merged.push(rt > lt ? _mergeRemoteCase(local, rc) : local);
+  });
+  CASES.forEach(function(c){ if(!remoteIds.has(c.id) && !delSet.has(c.id)) merged.push(c); });
+  return merged;
 }
 
 async function pullFromGist1(silent){
@@ -11169,16 +11341,8 @@ async function pullFromGist1(silent){
     if(parsed.deletedIds) mergeRemoteDeletedIds(parsed.deletedIds);
     var _gistDelSet = new Set(getDeletedIds().map(function(x){return x.id;}));
 
-    remote.forEach(function(rc){
-      if(_gistDelSet.has(rc.id)) return; // skip cases deleted by anyone
-      remoteIds.add(rc.id);
-      var local=localById[rc.id];
-      if(!local){merged.push(rc);}
-      else{var rt=new Date(rc.updated||rc.created||0).getTime(),lt=new Date(local.updated||local.created||0).getTime();merged.push(rt>=lt?rc:local);}
-    });
-    // Only keep local-only cases that have NOT been deleted
-    CASES.forEach(function(c){if(!remoteIds.has(c.id) && !_gistDelSet.has(c.id))merged.push(c);});
-    CASES=merged;cleanDeletedFromCases();save();updBadges();
+    CASES=_mergeGistCases(remote,_gistDelSet);
+    cleanDeletedFromCases();save();updBadges();
     if(parsed.policies&&parsed.policies.length) try { localStorage.setItem('mp_policies',JSON.stringify(parsed.policies)); } catch(e) { console.warn('[pullFromGist] policies not saved to localStorage:', e.message); }
     GIST1_LAST_SYNC=new Date();
     if(!silent)toast('Cases synced — '+CASES.length+' total');
@@ -11633,7 +11797,7 @@ function runFraudCheck(c) {
   if(claimed > 200000) { flags.push({level:'high',msg:'Very high value claim > €200,000 — mandatory second opinion'}); score+=3; }
 
   // 3. Duplicate check (same patient, similar dates)
-  if(c.patient && window.CASES) {
+  if(c.patient && typeof CASES !== 'undefined' && CASES) { // CASES is a top-level let: window.CASES was always undefined, so this check never ran
     var dupes = CASES.filter(function(other) {
       if(other.id === c.id) return false;
       if((other.patient||'').toLowerCase() !== (c.patient||'').toLowerCase()) return false;
@@ -14560,7 +14724,7 @@ function clearCaseDocuments(caseId) {
   });
   idbDelete(c._idbKey || ('casefiles_' + caseId)).catch(function(){});
   updC(caseId, {filesData: []});
-  window.FILES = [];
+  FILES = [];
   window._filesForCaseId = caseId; // the (now empty) list still belongs to this case
   renderFL_C(caseId);
   if(typeof refreshEvalModeHint==='function') refreshEvalModeHint(caseId);
@@ -14609,9 +14773,16 @@ function saveEvalAsDocument(caseId, evalText, decision) {
     }).join('');
 
   // Build complete HTML document
+  // Everything below comes from case data, documents or the AI — escape it
+  // for HTML, and build the inline script's strings with JSON. A REASON line
+  // containing a double quote broke the email button, and one containing
+  // a closing script tag followed by an <img onerror=…> ran script in a window that can read the
+  // app's localStorage (API key, tokens).
+  var E = function(v){ return esc(v == null ? '' : String(v)); };
+  var J = function(v){ return JSON.stringify(String(v == null ? '' : v)).replace(/</g,'\\u003c').replace(/\u2028/g,'\\u2028').replace(/\u2029/g,'\\u2029'); };
   var html = '<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8">'
     + '<meta name="viewport" content="width=device-width,initial-scale=1">'
-    + '<title>Evaluation — '+(c.caseNum||caseId)+' — '+decision+'</title>'
+    + '<title>Evaluation — '+E(c.caseNum||caseId)+' — '+E(decision)+'</title>'
     + '<style>*{box-sizing:border-box;margin:0;padding:0}body{font-family:Arial,sans-serif;font-size:12px;color:#1a1a2e;background:#fff;padding:0}'
     + '.page{max-width:900px;margin:0 auto;padding:24px}'
     + '.header{border-bottom:3px solid #1a2a72;padding-bottom:14px;margin-bottom:20px;display:flex;justify-content:space-between;align-items:flex-end}'
@@ -14643,36 +14814,36 @@ function saveEvalAsDocument(caseId, evalText, decision) {
     + '<div style="text-align:right;font-size:11px;color:#64748b"><div>'+dateStr+' '+timeStr+'</div><div>HealthWatch Assistance, Thermi, Thessaloniki</div></div>'
     + '</div>'
     + '<div class="meta-grid">'
-    + '<div class="meta-item"><label>Case Reference</label><span>'+(c.caseNum||'—')+'</span></div>'
-    + '<div class="meta-item"><label>Patient</label><span>'+(c.patient||'—')+'</span></div>'
-    + '<div class="meta-item"><label>Insurer</label><span>'+(c.insurer||'—')+'</span></div>'
-    + '<div class="meta-item"><label>Date of Loss</label><span>'+(c.dol||'—')+'</span></div>'
-    + '<div class="meta-item"><label>Country of Treatment</label><span>'+(c.country||'—')+'</span></div>'
-    + '<div class="meta-item"><label>Amount Claimed</label><span>EUR '+(c.amountClaimed||'—')+'</span></div>'
+    + '<div class="meta-item"><label>Case Reference</label><span>'+E(c.caseNum||'—')+'</span></div>'
+    + '<div class="meta-item"><label>Patient</label><span>'+E(c.patient||'—')+'</span></div>'
+    + '<div class="meta-item"><label>Insurer</label><span>'+E(c.insurer||'—')+'</span></div>'
+    + '<div class="meta-item"><label>Date of Loss</label><span>'+E(c.dol||'—')+'</span></div>'
+    + '<div class="meta-item"><label>Country of Treatment</label><span>'+E(c.country||'—')+'</span></div>'
+    + '<div class="meta-item"><label>Amount Claimed</label><span>EUR '+E(c.amountClaimed||'—')+'</span></div>'
     + '</div>'
     + '<div class="verdict-box">'
     + '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:'+verdictColor+';margin-bottom:4px">Final Decision</div>'
-    + '<div class="verdict-label">'+decision+'</div>'
-    + (amtMatch ? '<div style="font-size:13px;font-weight:700;color:'+verdictColor+';margin-top:6px">Approved Amount: EUR '+amtMatch[1]+'</div>' : '')
+    + '<div class="verdict-label">'+E(decision)+'</div>'
+    + (amtMatch ? '<div style="font-size:13px;font-weight:700;color:'+verdictColor+';margin-top:6px">Approved Amount: EUR '+E(amtMatch[1])+'</div>' : '')
     + '</div>';
 
   if(clauseMatch || reasonMatch || nextMatch) {
     html += '<div class="key-facts">';
-    if(clauseMatch) html += '<div><div class="kf-label">Policy Clause</div><div class="kf-val" style="font-weight:600;color:#374151">'+clauseMatch[1].trim()+'</div></div>';
-    if(reasonMatch) html += '<div><div class="kf-label">Reason</div><div class="kf-val" style="font-weight:600;color:#374151">'+reasonMatch[1].trim()+'</div></div>';
-    if(nextMatch) html += '<div><div class="kf-label">Next Steps</div><div class="kf-val" style="font-weight:600;color:#374151">'+nextMatch[1].trim()+'</div></div>';
+    if(clauseMatch) html += '<div><div class="kf-label">Policy Clause</div><div class="kf-val" style="font-weight:600;color:#374151">'+E(clauseMatch[1].trim())+'</div></div>';
+    if(reasonMatch) html += '<div><div class="kf-label">Reason</div><div class="kf-val" style="font-weight:600;color:#374151">'+E(reasonMatch[1].trim())+'</div></div>';
+    if(nextMatch) html += '<div><div class="kf-label">Next Steps</div><div class="kf-val" style="font-weight:600;color:#374151">'+E(nextMatch[1].trim())+'</div></div>';
     html += '</div>';
   }
 
   html += '<div class="eval-body" id="evaltext">'+evalBody+'</div>'
     + '<div class="footer">'
-    + '<span>HealthWatch Assistance TPA — '+(c.caseNum||'')+'</span>'
+    + '<span>HealthWatch Assistance TPA — '+E(c.caseNum||'')+'</span>'
     + '<span>Generated by CaseEval AI — '+dateStr+'</span>'
     + '</div></div>'
     + '<scr'+'ipt>'
     + 'function sendEvalEmail(){'
-    + 'var s=encodeURIComponent("Evaluation Report — '+(c.caseNum||'')+(c.patient?' — '+c.patient:'')+' — '+decision+'");'
-    + 'var b=encodeURIComponent("Dear Team,\\n\\nPlease find below the AI evaluation summary for case '+(c.caseNum||'')+':\\n\\nPatient: '+(c.patient||'')+'\\nInsurer: '+(c.insurer||'')+'\\nDate of Loss: '+(c.dol||'')+'\\nDecision: '+decision+(amtMatch?'\\nApproved Amount: EUR '+amtMatch[1]:'')+( reasonMatch?'\\n\\nReason: '+reasonMatch[1].trim():'')+(nextMatch?'\\n\\nNext Steps: '+nextMatch[1].trim():'')+' \\n\\nFull evaluation is attached.\\n\\nBest regards,\\nHealthWatch Assistance TPA");'
+    + 'var s=encodeURIComponent('+J('Evaluation Report — '+(c.caseNum||'')+(c.patient?' — '+c.patient:'')+' — '+decision)+');'
+    + 'var b=encodeURIComponent('+J('Dear Team,\n\nPlease find below the AI evaluation summary for case '+(c.caseNum||'')+':\n\nPatient: '+(c.patient||'')+'\nInsurer: '+(c.insurer||'')+'\nDate of Loss: '+(c.dol||'')+'\nDecision: '+decision+(amtMatch?'\nApproved Amount: EUR '+amtMatch[1]:'')+(reasonMatch?'\n\nReason: '+reasonMatch[1].trim():'')+(nextMatch?'\n\nNext Steps: '+nextMatch[1].trim():'')+' \n\nFull evaluation is attached.\n\nBest regards,\nHealthWatch Assistance TPA')+');'
     + 'window.location.href="mailto:?subject="+s+"&body="+b;}'
     + '<\/scr'+'ipt>'
     + '</body></html>';
