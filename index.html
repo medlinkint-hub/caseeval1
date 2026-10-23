@@ -5478,7 +5478,7 @@ function renderCD(c) {
   html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">';
   html += '<div><label style="font-size:10px;font-weight:600;color:var(--tx3);display:block;margin-bottom:3px;text-transform:uppercase">Response Type</label>';
   html += '<select id="reply_type" style="width:100%;padding:5px 7px;border:1px solid var(--bor);border-radius:4px;font-size:12px;color:var(--navy);outline:none">';
-  html += '<option value="auto">Auto-detect</option><option value="answer_query">Answer Question</option><option value="handle_complaint">Handle Complaint</option><option value="request_documents">Request Documents</option><option value="claim_status">Status Update</option><option value="appeal_process">Explain Appeal</option><option value="approval_confirm">Confirm Approval</option><option value="denial_explain">Explain Denial</option><option value="payment_query">Payment Query</option><option value="urgent_case">URGENT</option><option value="extension_request">Extension Request</option><option value="positive_feedback">Acknowledgement</option>';
+  html += '<option value="auto">Auto-detect</option><option value="answer_query">Answer Question</option><option value="handle_complaint">Handle Complaint</option><option value="request_documents">Request Documents</option><option value="claim_status">Status Update</option><option value="appeal_process">Explain Appeal</option><option value="approval_confirm">Confirm Approval</option><option value="denial_explain">Explain Denial</option><option value="final_decision">Final Decision (no further review)</option><option value="payment_query">Payment Query</option><option value="urgent_case">URGENT</option><option value="extension_request">Extension Request</option><option value="positive_feedback">Acknowledgement</option>';
   html += '</select></div>';
   html += '<div><label style="font-size:10px;font-weight:600;color:var(--tx3);display:block;margin-bottom:3px;text-transform:uppercase">Tone</label>';
   html += '<select id="reply_tone" style="width:100%;padding:5px 7px;border:1px solid var(--bor);border-radius:4px;font-size:12px;color:var(--navy);outline:none">';
@@ -8013,6 +8013,11 @@ async function generatePatientReply1(id) {
     else responseType='answer_query';
   }
 
+  // A final-decision letter needs a finished evaluation to state and justify
+  if(responseType==='final_decision' && !(c.eval && /DECISION\s*:\s*(DECLINED|APPROVED|PARTIALLY APPROVED)/i.test(c.eval))){
+    toast('Final Decision needs a completed evaluation with an APPROVED / PARTIALLY APPROVED / DECLINED decision — run the evaluation first', 7000);
+    return;
+  }
   if(statusEl){statusEl.style.display='flex';statusEl.className='evs evr';statusEl.innerHTML='<div class="spin"></div>&nbsp;Reading case and drafting reply&hellip;';}
   if(genBtn){genBtn.innerHTML='<div class="spin" style="width:14px;height:14px;border-color:rgba(255,255,255,.5);border-top-color:#fff;flex-shrink:0"></div>&nbsp;Drafting...';genBtn.disabled=true;}
   if(outputWrap)outputWrap.style.display='none';
@@ -8028,6 +8033,16 @@ async function generatePatientReply1(id) {
   else if(responseType==='request_documents'){typeInstruction='The claim requires additional documentation. Request these documents:\n'+(requestedDocs.length?requestedDocs.map(function(d){return'- '+d;}).join('\n'):'All relevant medical and supporting documents')+'\nFor each document, briefly explain why it is required. Give a 14-day submission deadline. Provide clear submission instructions (email address, portal link). Be helpful and specific.';}
   else if(responseType==='claim_status'){typeInstruction='Provide a clear and complete status update: the current decision is '+decText+'. Explain in plain language what this means for the client and what the next concrete steps are.';}
   else if(responseType==='denial_explain'){typeInstruction='Explain the claim denial empathetically and clearly. Reference the specific policy clause or exclusion that applies. Acknowledge this is disappointing. Mention the 30-day appeal process, what additional evidence could support a reversal, and offer to clarify any points.';}
+  else if(responseType==='final_decision'){typeInstruction='FINAL DECISION — the claim evaluation is FINAL AND COMPLETE and will not be changed. The current decision is '+decText+'. '
+    +'Write the reply so that: '
+    +'(a) the FIRST paragraph states plainly that the claim has been fully assessed and that the decision ('+decText+') is final and will not be reopened, reconsidered or changed; '
+    +'(b) it explains WHY, using the case evaluation: name every document the decision was based on, quote or cite the specific policy clause(s), limits or exclusions applied, and state the key facts from the documents that led to the outcome — never a vague "per policy terms"; '
+    +'(c) it answers EACH point the client raised in their latest message, one by one, and explains specifically why that point does not change the outcome (e.g. it was already considered, or it is not covered by the cited clause); '
+    +'(d) it confirms what happens now: if any amount is approved, the amount, payment method and expected timeline; otherwise that the file is closed; '
+    +'(e) in ONE short, neutral closing sentence, it notes that the client keeps any statutory right to refer the matter to the competent financial ombudsman or courts — this is a legal right the TPA cannot remove, so do not omit it, but do not encourage it either. '
+    +'Do NOT offer an internal appeal, a further review, a reconsideration, or "we will look into this again". Do NOT invite the client to send more documents. Do NOT use apologetic language that implies the decision is uncertain. Stay courteous and respectful. '
+    +'These rules OVERRIDE the general rules below wherever they conflict (rule 8 becomes: offer contact only for payment/administrative questions; rule 11 never means promising a review of the decision). '
+    +'If the case evaluation does not contain a clear final DECISION and policy basis, do NOT write a final-decision letter: instead write a short internal note (addressed to the claims handler, not the client) saying the case is not ready for a final-decision letter and what is missing.';}
   else if(responseType==='approval_confirm'){typeInstruction='Confirm the approval positively and clearly: '+decText+'. Explain the payment process, expected timeline, and any conditions. Include bank details / reimbursement instructions if relevant. Be warm and reassuring.';}
   else if(responseType==='payment_query'){typeInstruction='Address the payment question directly. Provide clear information on the approved amount, payment timeline, method and any bank details or reference needed. If payment is pending, give a specific expected date.';}
   else if(responseType==='urgent_case'){typeInstruction='This is an URGENT situation — respond immediately and with priority. Acknowledge the urgency explicitly in the first sentence. Provide any immediate assistance available and a specific named contact or escalation path. Confirm what is being done RIGHT NOW.';}
@@ -8089,7 +8104,7 @@ async function generatePatientReply1(id) {
     +(c.copayment?'Co-pay: '+c.copayment+'%\n':'')
     +'Pre-Auth Status: '+(c.paStatus||'—')+'\n'
     +(c.diagnosis||c.desc?'Diagnosis: '+((c.diagnosis||c.desc||'').substring(0,200))+'\n':'')
-    +(c.eval?'\n=== EVALUATION SUMMARY (internal — inform reply, do NOT quote verbatim) ===\n'+c.eval.replace(/\*\*/g,'').substring(0,4000)+'\n':'')
+    +(c.eval?'\n=== EVALUATION SUMMARY (internal — inform reply, do NOT quote verbatim) ===\n'+c.eval.replace(/\*\*/g,'').substring(0, responseType==='final_decision' ? 40000 : 4000)+'\n':'')
     +'\n=== INCOMING CLIENT EMAIL ===\n'
     +(emailFrom?'From: '+emailFrom+'\n':'')
     +(emailDate?'Date: '+emailDate+'\n':'')
