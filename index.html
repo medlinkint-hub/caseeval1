@@ -2229,7 +2229,38 @@ async function autoExtractFinance(caseId, files) {
 // Build invoice breakdown text for evaluation prompt
 
 function fEUR(n){return n==null?'—':'€'+parseFloat(n).toLocaleString('en',{minimumFractionDigits:2,maximumFractionDigits:2});}
-var INV_PROMPT = 'You are an expert IPMI medical invoice analyst. ACCURACY IS CRITICAL — these are real insurance claims and any invented or guessed amounts can cause wrongful payment decisions.\n\nZERO HALLUCINATION RULES:\n(1) Copy every amount EXACTLY as printed digit-by-digit — NEVER calculate, estimate, or reconstruct a total.\n(2) If an amount is missing or unreadable, use 0 — NEVER guess.\n(3) Copy every line item description verbatim in original language, then translate to English.\n(4) If the currency is not stated, use null — NEVER guess from country context.\n(5) Mark any uncertain value with [UNCERTAIN].\n(6) EXTRACT EVERY SINGLE LINE ITEM — do not skip, summarise, or merge any rows.\n\nCURRENCY RECOGNITION — identify the correct ISO code from these common symbols and codes:\n• EUR or € = EUR\n• USD or $ = USD\n• GBP or £ = GBP\n• INR or ₹ or Rs. or Rs = INR (Indian Rupees — common on Amazon.in, Indian hospitals, Indian pharmacies)\n• THB or ฿ = THB (Thai Baht)\n• AED or د.إ = AED\n• SGD or S$ = SGD\n• TRY or ₺ = TRY\n• CHF = CHF\n• JPY or ¥ = JPY\n• CNY or 元 = CNY\n• MYR or RM = MYR\n• PHP or ₱ = PHP\n• IDR or Rp = IDR\n• HKD or HK$ = HKD\nIf the currency symbol or code is printed anywhere on the document, use it.\n\nNUMBER FORMAT RULES:\n• European: 1.500,00 = one thousand five hundred (dot=thousands, comma=decimal)\n• US/UK: 1,500.00 = one thousand five hundred (comma=thousands, dot=decimal)\n• Indian: 1,23,456.00 = one hundred twenty-three thousand four hundred fifty-six (grouping at 2 digits after first 3 — do NOT treat commas as decimals)\n• If the total printed on the document does not match the sum of line items, always trust the printed total.\n\nRead this invoice/receipt/bill completely — any language, any country, any format. Extract EVERY line item including small charges, taxes, stamps, service fees, and annotations.\n\nReturn ONLY raw JSON (no markdown, no explanation):\n{"provider_name":null,"provider_type":"hospital|clinic|pharmacy|lab|radiology|dental|physio|ambulance|other","provider_address":null,"provider_tax_id":null,"invoice_number":null,"invoice_date":null,"patient_name":null,"currency":"EXACT 3-letter ISO code from the document — null if not shown","line_items":[{"description":"English translation","original_description":"verbatim original text","category":"consultation|surgery|anesthesia|room_board|nursing|medication|lab|radiology|physiotherapy|ambulance|consumables|implant|prosthesis|dental|vaccination|other","quantity":1,"unit_price":0,"total":0,"date":"service date or null","ipmi_eligibility":"eligible|excluded|requires_review","eligibility_reason":"brief reason"}],"subtotal":0,"tax":0,"discount":0,"total":0,"deposit_paid":0,"outstanding":0,"total_eligible":0,"total_excluded":0,"payment_method":null,"notes":"stamps, handwritten amounts, annotations, unclear items","extraction_warnings":[]}';
+var INV_PROMPT = 'You are an expert IPMI medical invoice analyst. ACCURACY IS CRITICAL — these are real insurance claims and any invented or guessed amounts can cause wrongful payment decisions.\n\nZERO HALLUCINATION RULES:\n(1) Copy every amount EXACTLY as printed digit-by-digit — NEVER calculate, estimate, or reconstruct a total.\n(2) If an amount is missing or unreadable, use 0 — NEVER guess.\n(3) Copy every line item description verbatim in original language, then translate to English.\n(4) If the currency is not stated, use null — NEVER guess from country context.\n(5) Mark any uncertain value with [UNCERTAIN].\n(6) EXTRACT EVERY SINGLE LINE ITEM — do not skip, summarise, or merge any rows.\n\nCURRENCY RECOGNITION — identify the correct ISO code from these common symbols and codes:\n• EUR or € = EUR\n• USD or $ = USD\n• GBP or £ = GBP\n• INR or ₹ or Rs. or Rs = INR (Indian Rupees — common on Amazon.in, Indian hospitals, Indian pharmacies)\n• THB or ฿ = THB (Thai Baht)\n• AED or د.إ = AED\n• SGD or S$ = SGD\n• TRY or ₺ = TRY\n• CHF = CHF\n• JPY or ¥ = JPY\n• CNY or 元 = CNY\n• MYR or RM = MYR\n• PHP or ₱ = PHP\n• IDR or Rp = IDR\n• HKD or HK$ = HKD\nIf the currency symbol or code is printed anywhere on the document, use it.\n\nNUMBER FORMAT RULES:\n• European: 1.500,00 = one thousand five hundred (dot=thousands, comma=decimal)\n• US/UK: 1,500.00 = one thousand five hundred (comma=thousands, dot=decimal)\n• Indian: 1,23,456.00 = one hundred twenty-three thousand four hundred fifty-six (grouping at 2 digits after first 3 — do NOT treat commas as decimals)\n• If the total printed on the document does not match the sum of line items, always trust the printed total.\n\nPURCHASE DATE — CRITICAL (insurers cover only items bought within specific dates, e.g. during a baggage delay):\n• Find the TRANSACTION / PURCHASE date printed on the document — on retail receipts usually next to the time, till/terminal number or on the card-payment slip.\n• Copy it exactly as printed into date_as_printed, and give it as YYYY-MM-DD in purchase_date, plus the time (HH:MM) if printed.\n• NEVER use a return-by / exchange-by date, an expiry date, an offer/validity date, a print date, or today\u2019s date.\n• If day and month could be swapped (e.g. 03/04/2026), use the merchant country\u2019s convention (UK/EU/Greece = DD/MM, USA = MM/DD) and set date_confidence to medium with the alternative in date_note; if the country is unknown set date_confidence low.\n• If no date is printed or it is unreadable: purchase_date null, date_confidence "none" — NEVER guess.\n• If line items were bought on different dates, put each item\u2019s own date in its date field.\n\nRead this invoice/receipt/bill completely — any language, any country, any format. Extract EVERY line item including small charges, taxes, stamps, service fees, and annotations. For retail receipts (clothing, toiletries, essentials) give the item exactly as named on the receipt plus a plain-English description.\n\nReturn ONLY raw JSON (no markdown, no explanation):\n{"document_kind":"medical_invoice|retail_receipt|pharmacy_receipt|transport_ticket|hotel_invoice|other","purchase_date":"YYYY-MM-DD or null","purchase_time":"HH:MM or null","date_as_printed":null,"date_confidence":"high|medium|low|none","date_note":null,"merchant_country":null,"merchant_city":null,"card_last4":null,"transaction_reference":null,"provider_name":null,"provider_type":"hospital|clinic|pharmacy|lab|radiology|dental|physio|ambulance|other","provider_address":null,"provider_tax_id":null,"invoice_number":null,"invoice_date":null,"patient_name":null,"currency":"EXACT 3-letter ISO code from the document — null if not shown","line_items":[{"description":"English translation","original_description":"verbatim original text","category":"consultation|surgery|anesthesia|room_board|nursing|medication|lab|radiology|physiotherapy|ambulance|consumables|implant|prosthesis|dental|vaccination|other","quantity":1,"unit_price":0,"total":0,"date":"service date or null","ipmi_eligibility":"eligible|excluded|requires_review","eligibility_reason":"brief reason"}],"subtotal":0,"tax":0,"discount":0,"total":0,"deposit_paid":0,"outstanding":0,"total_eligible":0,"total_excluded":0,"payment_method":null,"notes":"stamps, handwritten amounts, annotations, unclear items","extraction_warnings":[]}';
+// One place that knows the extraction's field names. The receipt displays
+// read inv.data.provider / .date / item.desc, which the extraction never
+// returns (it returns provider_name, invoice_date, description) — so shop
+// names, purchase dates and every item description showed as "—".
+function _invView(inv) {
+  var d = (inv && inv.data) || inv || {};
+  var date = d.purchase_date || d.invoice_date || d.date || '';
+  var conf = String(d.date_confidence || (date ? '' : 'none')).toLowerCase();
+  return {
+    provider: d.provider_name || d.provider || '',
+    kind: d.document_kind || '',
+    date: date, time: d.purchase_time || '',
+    dateAsPrinted: d.date_as_printed || '',
+    dateConf: conf, dateNote: d.date_note || '',
+    ref: d.invoice_number || d.transaction_reference || d.invoice_ref || '',
+    card: d.card_last4 || '', country: d.merchant_country || '', city: d.merchant_city || '',
+    payment: d.payment_method || '',
+    items: (d.line_items || []).map(function(it){
+      return {desc: it.description || it.desc || it.original_description || '', orig: it.original_description || '',
+        category: it.category || '', qty: it.quantity, unit: it.unit_price, total: parseFloat(it.total) || 0, date: it.date || ''};
+    })
+  };
+}
+// Small HTML badge describing how sure we are of a receipt's purchase date.
+function _invDateHtml(v) {
+  if(!v.date) return '<span style="color:#dc2626;font-weight:700">⚠ No purchase date found — check the receipt</span>';
+  var s = '📅 ' + esc(v.date) + (v.time ? ' ' + esc(v.time) : '');
+  if(v.dateConf === 'high' || !v.dateConf) return '<b>' + s + '</b>';
+  return '<b>' + s + '</b> <span style="color:#d97706;font-weight:700">⚠ date ' + esc(v.dateConf || 'uncertain') + (v.dateNote ? ' — ' + esc(v.dateNote) : '') + '</span>';
+}
+
 function buildInvoiceBreakdown(caseId) {
   var invs = getInvoices(caseId);
   if(!invs || !invs.length) return '';
@@ -2249,8 +2280,10 @@ function buildInvoiceBreakdown(caseId) {
     grandTotalOriginal[cur] = (grandTotalOriginal[cur] || 0) + rawTotal;
 
     lines.push('\nINVOICE '+(idx+1)+': '+(d.provider_name || d.provider || inv.filename || 'Unknown Provider'));
-    if(d.invoice_number) lines.push('  Ref: '+d.invoice_number);
-    if(d.invoice_date)   lines.push('  Date: '+d.invoice_date);
+    var _v = _invView(inv);
+    if(_v.ref) lines.push('  Ref: '+_v.ref);
+    lines.push('  PURCHASE DATE: '+(_v.date ? _v.date+(_v.time?' '+_v.time:'')+(_v.dateAsPrinted?' (printed: "'+_v.dateAsPrinted+'")':'')+' — confidence: '+(_v.dateConf||'not stated')+(_v.dateNote?' — '+_v.dateNote:'') : 'NOT FOUND on the document'));
+    if(_v.kind) lines.push('  Type: '+_v.kind+(_v.country?' — '+_v.country:'')+(_v.card?' — card ending '+_v.card:''));
     lines.push('  TOTAL: '+cur+' '+rawTotal.toFixed(2)+(cur!=='EUR'?' (≈ EUR '+eurTotal.toFixed(2)+')':''));
 
     // Line items
@@ -2260,7 +2293,7 @@ function buildInvoiceBreakdown(caseId) {
         var elig = item.ipmi_eligibility || 'requires_review';
         var flag = elig==='eligible'?'✓':elig==='excluded'?'✗':'?';
         lines.push('  '+flag+' ['+( item.category||'other').toUpperCase()+'] '
-          +(item.description||item.original_description||'—')
+          +(item.description||item.original_description||'—')+(item.date?' (bought '+item.date+')':'')
           +': '+cur+' '+itemTotal.toFixed(2)
           +(elig!=='eligible'?' — '+( item.eligibility_reason||elig):''));
         if(elig==='eligible')   allEligible += toEUR(itemTotal, cur);
@@ -2275,6 +2308,14 @@ function buildInvoiceBreakdown(caseId) {
       lines.push('  → Excluded: '+cur+' '+parseFloat(d.total_excluded).toFixed(2));
     }
   });
+
+  // Chronological purchase list — insurers often cover only purchases made
+  // within a specific period (e.g. while baggage was delayed).
+  var _chron = invs.map(function(inv){ var v=_invView(inv); var d0=inv.data||inv; return {v:v, name:v.provider||inv.filename, file:inv.filename, cur:(d0.currency||inv.cur||'EUR').toUpperCase(), total:parseFloat(d0.total||inv.rawTotal||0)}; })
+    .sort(function(a,b){ return (a.v.date||'9999').localeCompare(b.v.date||'9999'); });
+  lines.push('\n--- PURCHASES BY DATE ---');
+  _chron.forEach(function(r){ lines.push('  '+(r.v.date?r.v.date+(r.v.time?' '+r.v.time:''):'DATE NOT FOUND')+(r.v.date&&r.v.dateConf&&r.v.dateConf!=='high'?' [date '+r.v.dateConf+']':'')+' — '+r.name+' ('+r.file+') — '+r.cur+' '+r.total.toFixed(2)); });
+  lines.push('  PURCHASE-DATE RULE: where the policy covers purchases only within a period (e.g. baggage delay — from arrival without baggage until the baggage is delivered; travel delay — during the delay), establish that period from the documents (boarding passes, PIR/airline delay report, delivery confirmation), then classify EVERY receipt as INSIDE the period, OUTSIDE it, or DATE UNCERTAIN, and show this as a table in the financial section. Verify each date against the attached receipt itself. Only INSIDE receipts may be paid; OUTSIDE are excluded; DATE UNCERTAIN or DATE NOT FOUND go to PENDING INFORMATION for that receipt. Never assume a date that is not printed.');
 
   lines.push('\n--- TOTALS ---');
   // Show original currency totals
@@ -2349,6 +2390,31 @@ function _saveFallbackEval(caseId, evalText, decision, docsIncomplete) {
     amountApproved: _extractApprovedAmount(evalText, decision)
   });
   return docsIncomplete ? 'reviewing' : st;
+}
+
+// When the API rejects ONE attachment it names it in the error, e.g.
+// "messages.0.content.3.document.source.base64.data: The PDF specified was not
+// valid" (damaged or password-protected PDF, unsupported image…). Replace just
+// that block with a text note and let the caller retry, instead of giving up
+// on the whole email (extraction) or dropping every PDF in the case (the
+// evaluation's text-only fallback). Also updates `shared` (the array the
+// caller rebuilds later requests from) so the bad block is not sent again.
+// Returns the replaced block, or null if the error does not name one.
+function _dropRejectedBlock(messages, errMsg, shared) {
+  var m = String(errMsg || '').match(/messages\.(\d+)\.content\.(\d+)/);
+  if(!m) return null;
+  var msg = messages[+m[1]], idx = +m[2];
+  if(!msg || !Array.isArray(msg.content)) return null;
+  var bad = msg.content[idx];
+  if(!bad || (bad.type !== 'document' && bad.type !== 'image')) return null;
+  var reason = String(errMsg).replace(/^[^:]*:\s*/, '').substring(0, 160);
+  var label = (bad.title || (bad.type === 'image' ? 'an image' : 'a PDF')).replace(/^\[[^\]]*\]\s*/, '');
+  var note = {type:'text', text:'[ATTACHMENT ' + label + ' — could not be read: the AI service rejected it (' + reason + '). Treat its content as not reviewed.]'};
+  msg.content[idx] = note;
+  if(Array.isArray(shared)) { var si = shared.indexOf(bad); if(si !== -1) shared[si] = note; }
+  console.warn('[API] Rejected attachment replaced and retried:', label, '—', reason);
+  bad._replacedBy = note;
+  return bad;
 }
 
 async function runEval(caseId) {
@@ -3015,12 +3081,15 @@ async function runEval(caseId) {
       + ' — the evaluation will be marked incomplete.', 12000);
   }
   // Persisted at the top of the saved evaluation (all save paths below)
-  var _incompleteBanner = (_docsNotRead.length || _docsTruncated.length)
-    ? '⚠ INCOMPLETE DOCUMENT REVIEW — the AI did not read every document in full:\n'
-      + _docsNotRead.map(function(f){ return '  • ' + f; }).join('\n') + (_docsNotRead.length ? '\n' : '')
-      + _docsTruncated.map(function(f){ return '  • ' + f + ' (text truncated)'; }).join('\n') + (_docsTruncated.length ? '\n' : '')
-      + 'Re-upload / fix these documents and re-run before relying on this decision.\n\n'
-    : '';
+  function _buildIncompleteBanner() {
+    return (_docsNotRead.length || _docsTruncated.length)
+      ? '⚠ INCOMPLETE DOCUMENT REVIEW — the AI did not read every document in full:\n'
+        + _docsNotRead.map(function(f){ return '  • ' + f; }).join('\n') + (_docsNotRead.length ? '\n' : '')
+        + _docsTruncated.map(function(f){ return '  • ' + f + ' (text truncated)'; }).join('\n') + (_docsTruncated.length ? '\n' : '')
+        + 'Re-upload / fix these documents and re-run before relying on this decision.\n\n'
+      : '';
+  }
+  var _incompleteBanner = _buildIncompleteBanner();
 
   // ── DOCUMENTS SUBMITTED manifest ────────────────────────────────────────
   // Lists the files actually provided so Claude does not ask for documents it
@@ -3245,7 +3314,28 @@ async function runEval(caseId) {
       // stopReason gets set on this object by apiCallStream — read after the
       // call below to explain an empty result (see the "no response" branch).
     };
-    try {
+    // The API may reject one attachment by index (damaged/protected PDF…):
+    // replace just that one, record it as not read, and retry the full
+    // request — instead of the text-only fallback that drops every PDF.
+    async function _primaryCall() {
+      for(var _att = 0; ; _att++) {
+        try { return await _primaryCallOnce(); }
+        catch(_pe) {
+          var _bad = _att < 5 ? _dropRejectedBlock([{role:'user', content:msgContent}], _pe.message, msgContent) : null;
+          if(!_bad) throw _pe;
+          var _owner = _readResults.find(function(r){ return r.blocks.indexOf(_bad) !== -1; });
+          var _nm = _owner ? _owner.f.name : (_bad.title || 'attachment');
+          _docsNotRead.push(_nm + ' (' + _bad._replacedBy.text.replace(/^\[ATTACHMENT /, '').replace(/\]$/, '').substring(0, 200) + ')');
+          _incompleteBanner = _buildIncompleteBanner();
+          fullResult = '';
+          if(window._currentCaseId === caseId) setEvSt('run', '⚠ One attachment was rejected — retrying without it...');
+          toast('⚠ ' + _nm + ': one attachment could not be read by the AI — retrying the evaluation without it', 7000);
+        }
+      }
+    }
+    var _primaryErr = null;
+    try { await _primaryCall(); } catch(_pce) { _primaryErr = _pce; }
+    async function _primaryCallOnce() {
       await apiCallStream(
         [{role:'user', content:msgContent}],
         sys,
@@ -3260,7 +3350,8 @@ async function runEval(caseId) {
         },
         _primaryOpts
       );
-    } catch(primaryErr) {
+    }
+    if(_primaryErr) { var primaryErr = _primaryErr;
       // Only a stall/timeout is safe to recover from here by falling through to
       // the empty-result retry below (disabling thinking directly addresses the
       // cause — thinking ran long with no visible output yet). Anything else
@@ -5104,7 +5195,7 @@ function exportEvalPDF(caseId) {
       var lineItems   = d.line_items || [];
       var provider    = d.provider_name || d.provider || inv.filename || '—';
       var invNum      = d.invoice_number || '—';
-      var invDate     = d.invoice_date   || d.date || '—';
+      var invDate     = d.purchase_date || d.invoice_date || d.date || '—';
       var payMethod   = d.payment_method || '—';
       var notes       = d.notes || '';
 
@@ -6243,7 +6334,8 @@ async function extractInvoicesFromCase(caseId) {
 
 function renderCaseInvoices(caseId, invoices) {
   const el = G('invExtResults'); if(!el || !invoices.length) return;
-  let h = '<div style="margin-bottom:6px;font-size:11px;font-weight:600;color:var(--tx3);text-transform:uppercase;letter-spacing:.05em">Extracted Financial Data</div>';
+  let h = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px"><span style="font-size:11px;font-weight:600;color:var(--tx3);text-transform:uppercase;letter-spacing:.05em">Extracted Financial Data</span>'
+    + '<button type="button" class="btn bs" style="font-size:11px;padding:3px 10px" onclick="exportInvoicesXLSX(\''+esc(caseId)+'\')">⬇ Export receipts (Excel)</button></div>';
   let grandTotal = 0;
   let allCurrencyKnown = true;
   let perCurrency2 = {};
@@ -6258,8 +6350,10 @@ function renderCaseInvoices(caseId, invoices) {
 
     h += '<div style="border:1px solid var(--bor);border-radius:var(--r2);padding:10px 12px;margin-bottom:8px;background:var(--bg3)">';
     h += '<div style="display:flex;justify-content:space-between;align-items:flex-start">';
-    h += '<div style="flex:1"><div style="font-size:12px;font-weight:600;color:var(--navy)">'+esc(inv.data.provider||inv.filename)+'</div>';
-    h += '<div style="font-size:11px;color:var(--tx3);margin-top:2px">'+esc(inv.filename)+(inv.data.date?' &middot; '+esc(inv.data.date):'')+'</div></div>';
+    const _v = _invView(inv);
+    h += '<div style="flex:1"><div style="font-size:12px;font-weight:600;color:var(--navy)">'+esc(_v.provider||inv.filename)+'</div>';
+    h += '<div style="font-size:12px;margin-top:3px">'+_invDateHtml(_v)+'</div>';
+    h += '<div style="font-size:11px;color:var(--tx3);margin-top:2px">'+esc(inv.filename)+(_v.ref?' &middot; Ref: '+esc(_v.ref):'')+(_v.card?' &middot; card …'+esc(_v.card):'')+'</div></div>';
     h += '<div style="text-align:right;margin-left:10px">';
     if(cur && rawTotal) {
       h += '<div style="font-family:monospace;font-size:15px;font-weight:700;color:var(--navy)">'+cur+' '+rawTotal.toLocaleString('en',{minimumFractionDigits:2,maximumFractionDigits:2})+'</div>';
@@ -6274,14 +6368,14 @@ function renderCaseInvoices(caseId, invoices) {
     }
     h += '</div></div>';
 
-    const items = inv.data.line_items || [];
+    const items = _v.items;
     if(items.length) {
       h += '<div style="margin-top:8px;border-top:1px solid var(--bor);padding-top:8px">';
       items.forEach(it => {
         const itTotal = parseFloat(it.total)||0;
         const itEUR = (cur && cur !== 'EUR') ? toEUR(itTotal, cur) : 0;
         h += '<div style="display:flex;justify-content:space-between;font-size:11px;margin-bottom:3px;gap:8px">';
-        h += '<span style="color:var(--tx2);flex:1">'+esc(it.desc||'—')+'</span>';
+        h += '<span style="color:var(--tx2);flex:1">'+esc(it.desc||'—')+(it.date && it.date!==_v.date?' <span style="color:#d97706">(bought '+esc(it.date)+')</span>':'')+'</span>';
         if(itTotal) {
           h += '<span style="font-family:monospace;color:var(--navy);white-space:nowrap">'+(cur||'')+' '+itTotal.toLocaleString('en',{minimumFractionDigits:2})+'</span>';
           if(itEUR) h += '<span style="font-family:monospace;color:var(--tx3);white-space:nowrap;margin-left:4px">'+fEUR(itEUR)+'</span>';
@@ -6435,6 +6529,16 @@ async function processExtractQueue() {
             : 'Saved ✓ — auto-read failed: '+errMsg;
       }
       if(item.rowDiv) item.rowDiv.style.borderLeftColor = '#f59e0b';
+      // Show WHY on the row itself — the tooltip is invisible on touch
+      // screens and in screenshots, so a ⚠ gave no clue what went wrong.
+      if(!isNoData && item.rowDiv && !item.rowDiv.querySelector('.read-note')) {
+        var wnote = document.createElement('span');
+        wnote.className = 'read-note';
+        wnote.style.cssText = 'font-size:9px;color:#92400e;flex-shrink:0;max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+        wnote.textContent = 'auto-read failed: ' + String(errMsg||'unknown error').substring(0, 110) + ' — the file is saved and will still be read at evaluation';
+        wnote.title = errMsg;
+        item.rowDiv.appendChild(wnote);
+      }
       // Add hint for emails with no data
       if(isEmailNoData && item.rowDiv && !item.rowDiv.querySelector('.email-hint')) {
         var hint = document.createElement('span');
@@ -7472,10 +7576,47 @@ async function extractAllInvoices(caseId) {
   toast('Extracted from '+extracted.length+' document(s) — '+fEUR(total));
 }
 
+// Download every extracted receipt/invoice — one row per line item, with the
+// purchase date, time, how sure the date is, shop, card and amounts — as an
+// Excel file (CSV if the spreadsheet library cannot load).
+async function exportInvoicesXLSX(caseId) {
+  var c = getC(caseId) || {};
+  var invs = getInvoices(caseId);
+  if(!invs.length) { toast('No extracted receipts yet — click Extract first'); return; }
+  var header = ['Case','Patient','File','Merchant / provider','Document type','Purchase date','Time','Date as printed','Date confidence','Date note','Item','Item (original)','Category','Qty','Unit price','Item total','Item date (if different)','Currency','Item total EUR','Receipt total','Receipt total EUR','Card ending','Ref / invoice no.','Country','City','Notes'];
+  var rows = [header];
+  invs.forEach(function(inv){
+    var v = _invView(inv), d = inv.data || {};
+    var cur = (d.currency || inv.cur || '').toUpperCase();
+    var tot = parseFloat(d.total || inv.rawTotal || 0) || 0;
+    var totEUR = cur ? toEUR(tot, cur) : '';
+    var base = [c.caseNum||'', c.patient||'', inv.filename||'', v.provider, v.kind, v.date, v.time, v.dateAsPrinted, v.dateConf, v.dateNote];
+    var items = v.items.length ? v.items : [{desc:'(no line items)', orig:'', category:'', qty:'', unit:'', total:'', date:''}];
+    items.forEach(function(it){
+      var itEUR = (cur && it.total !== '') ? toEUR(parseFloat(it.total)||0, cur) : '';
+      rows.push(base.concat([it.desc, it.orig, it.category, it.qty==null?'':it.qty, it.unit==null?'':it.unit, it.total, it.date && it.date!==v.date ? it.date : '', cur, itEUR, tot, totEUR, v.card, v.ref, v.country, v.city, d.notes||'']));
+    });
+  });
+  var fname = 'Receipts_' + (c.caseNum || caseId) + '_' + new Date().toISOString().slice(0,10);
+  try {
+    if(typeof loadSheetJS === 'function') await loadSheetJS();
+    if(typeof XLSX === 'undefined') throw new Error('XLSX unavailable');
+    var ws = XLSX.utils.aoa_to_sheet(rows);
+    ws['!cols'] = header.map(function(h){ return {wch: Math.min(40, Math.max(10, h.length + 2))}; });
+    var wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'Receipts');
+    XLSX.writeFile(wb, fname + '.xlsx');
+  } catch(e) {
+    var csv = rows.map(function(r){ return r.map(function(x){ x = x==null ? '' : String(x); return /[",\n;]/.test(x) ? '"'+x.replace(/"/g,'""')+'"' : x; }).join(','); }).join('\r\n');
+    var a = document.createElement('a'); a.href = URL.createObjectURL(new Blob(['\ufeff'+csv], {type:'text/csv;charset=utf-8'})); a.download = fname + '.csv'; a.click();
+  }
+  var noDate = invs.filter(function(inv){ return !_invView(inv).date; }).length;
+  toast('⬇ Exported ' + invs.length + ' receipt(s)' + (noDate ? ' — ' + noDate + ' without a purchase date: check them' : ''), 7000);
+}
+
 function renderInvoiceList(caseId, invoices) {
   const el = G('inv_list'); if(!el) return;
   if(!invoices.length) { el.innerHTML='<div style="color:var(--tx3);font-size:13px;padding:12px">No data extracted yet.</div>'; return; }
-  let h = '';
+  let h = '<div style="display:flex;justify-content:flex-end;margin-bottom:8px"><button type="button" class="btn bs" style="font-size:11px;padding:4px 12px" onclick="exportInvoicesXLSX(\''+esc(caseId)+'\')">⬇ Export receipts (Excel)</button></div>';
   let grandTotal = 0;
   let allCurrencyKnown = true;
   let perCurrency = {};  // track original amounts per currency
@@ -7487,13 +7628,15 @@ function renderInvoiceList(caseId, invoices) {
     if(!inv.currencyKnown) allCurrencyKnown = false;
     if(inv.currencyKnown && eurTotal) grandTotal += eurTotal;
     if(cur && rawTotal) { perCurrency[cur] = (perCurrency[cur]||0) + rawTotal; }
-    const items = inv.data.line_items || [];
+    const _v = _invView(inv);
+    const items = _v.items;
 
     h += '<div style="border:1px solid var(--bor);border-radius:var(--r2);overflow:hidden;margin-bottom:12px">';
     // Header
     h += '<div style="display:flex;justify-content:space-between;align-items:center;padding:12px 14px;background:var(--bg3)">';
-    h += '<div><div style="font-size:13px;font-weight:600;color:var(--navy)">'+esc(inv.data.provider||inv.filename)+'</div>';
-    h += '<div style="font-size:11px;color:var(--tx3);margin-top:2px">'+esc(inv.filename)+(inv.data.date?' &middot; '+esc(inv.data.date):'')+(inv.data.invoice_ref?' &middot; Ref: '+esc(inv.data.invoice_ref):'')+'</div></div>';
+    h += '<div><div style="font-size:13px;font-weight:600;color:var(--navy)">'+esc(_v.provider||inv.filename)+'</div>';
+    h += '<div style="font-size:12px;margin-top:3px">'+_invDateHtml(_v)+'</div>';
+    h += '<div style="font-size:11px;color:var(--tx3);margin-top:2px">'+esc(inv.filename)+(_v.ref?' &middot; Ref: '+esc(_v.ref):'')+(_v.card?' &middot; card …'+esc(_v.card):'')+'</div></div>';
     h += '<div style="text-align:right">';
     if(cur && rawTotal) {
       h += '<div style="font-family:monospace;font-size:16px;font-weight:700;color:var(--navy)">'+cur+' '+rawTotal.toLocaleString('en',{minimumFractionDigits:2,maximumFractionDigits:2})+'</div>';
@@ -7513,7 +7656,7 @@ function renderInvoiceList(caseId, invoices) {
         const itTotal = parseFloat(it.total)||0;
         const itEUR = (cur && cur !== 'EUR') ? toEUR(itTotal, cur) : itTotal;
         h += '<tr style="border-bottom:1px solid var(--bor)">';
-        h += '<td style="padding:8px 12px;font-size:12px;color:var(--navy)">'+esc(it.desc||'—')+'</td>';
+        h += '<td style="padding:8px 12px;font-size:12px;color:var(--navy)">'+esc(it.desc||'—')+(it.orig && it.orig!==it.desc?'<div style="font-size:10px;color:var(--tx3)">'+esc(it.orig)+'</div>':'')+(it.date && it.date!==_v.date?'<div style="font-size:10px;color:#d97706">bought '+esc(it.date)+'</div>':'')+'</td>';
         h += '<td style="padding:8px 12px;font-size:11px;color:var(--tx3);text-align:center">'+esc(it.category||'—')+'</td>';
         h += '<td style="padding:8px 12px;font-size:12px;font-family:monospace;text-align:right;color:var(--navy)">';
         if(itTotal) h += (cur||'')+' '+itTotal.toLocaleString('en',{minimumFractionDigits:2,maximumFractionDigits:2});
@@ -13587,15 +13730,26 @@ async function extractFromFile(fd) {
 
   // ── Streaming call with fallback to regular call ────────────
   async function callAPI(msgs, maxTok) {
-    var text = '';
-    try {
-      await apiCallStream(msgs, SYS, maxTok, function(chunk, full){ text = full; });
-      if(text && text.trim()) return text;
-    } catch(e) {
-      console.warn('[DocEngine] Stream failed:', e.message);
+    for(var attempt = 0; ; attempt++) {
+      var text = '', streamErr = null;
+      try {
+        await apiCallStream(msgs, SYS, maxTok, function(chunk, full){ text = full; });
+        if(text && text.trim()) return text;
+      } catch(e) {
+        streamErr = e;
+        console.warn('[DocEngine] Stream failed:', e.message);
+      }
+      // One rejected attachment (damaged/protected PDF, bad image) used to fail
+      // every pass for the whole file — skip just that attachment and retry.
+      if(streamErr && attempt < 5 && _dropRejectedBlock(msgs, streamErr.message, content)) continue;
+      try {
+        // Fallback to regular call
+        return await apiCall(msgs, SYS, maxTok);
+      } catch(e2) {
+        if(attempt < 5 && _dropRejectedBlock(msgs, e2.message, content)) continue;
+        throw e2;
+      }
     }
-    // Fallback to regular call
-    return await apiCall(msgs, SYS, maxTok);
   }
 
   // ── Extract raw text from PDF binary (text-based PDFs only) ───
