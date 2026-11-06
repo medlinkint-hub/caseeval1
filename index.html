@@ -2234,22 +2234,39 @@ var INV_PROMPT = 'You are an expert IPMI medical invoice analyst. ACCURACY IS CR
 // read inv.data.provider / .date / item.desc, which the extraction never
 // returns (it returns provider_name, invoice_date, description) — so shop
 // names, purchase dates and every item description showed as "—".
+// Normalise a printed date to YYYY-MM-DD so receipts sort by real date.
+// DD/MM/YYYY, DD.MM.YYYY and DD-MM-YYYY (2- or 4-digit year) are read
+// day-first (EU/UK/Greece). Anything else is returned unchanged.
+function _isoDate(s) {
+  s = String(s || '').trim();
+  if(/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
+  var m = s.match(/^(\d{1,2})[\/.\-](\d{1,2})[\/.\-](\d{2}|\d{4})\b/);
+  if(!m) return s;
+  var y = m[3].length === 2 ? '20' + m[3] : m[3];
+  var mo = +m[2], da = +m[1];
+  if(mo < 1 || mo > 12 || da < 1 || da > 31) return s;
+  return y + '-' + String(mo).padStart(2,'0') + '-' + String(da).padStart(2,'0');
+}
 function _invView(inv) {
   var d = (inv && inv.data) || inv || {};
-  var date = d.purchase_date || d.invoice_date || d.date || '';
+  var fromPurchase = !!d.purchase_date;
+  var date = _isoDate(d.purchase_date || d.invoice_date || d.date || '');
   var conf = String(d.date_confidence || (date ? '' : 'none')).toLowerCase();
+  // A date taken from the older invoice_date field (no purchase_date) has
+  // not been confirmed as the purchase date — never show it as "none".
+  if(date && !fromPurchase && (!conf || conf === 'none')) conf = 'low';
   return {
     provider: d.provider_name || d.provider || '',
     kind: d.document_kind || '',
     date: date, time: d.purchase_time || '',
     dateAsPrinted: d.date_as_printed || '',
-    dateConf: conf, dateNote: d.date_note || '',
+    dateConf: conf, dateNote: d.date_note || (date && !fromPurchase ? 'taken from the invoice date — re-run Extract to confirm the purchase date' : ''),
     ref: d.invoice_number || d.transaction_reference || d.invoice_ref || '',
     card: d.card_last4 || '', country: d.merchant_country || '', city: d.merchant_city || '',
     payment: d.payment_method || '',
     items: (d.line_items || []).map(function(it){
       return {desc: it.description || it.desc || it.original_description || '', orig: it.original_description || '',
-        category: it.category || '', qty: it.quantity, unit: it.unit_price, total: parseFloat(it.total) || 0, date: it.date || ''};
+        category: it.category || '', qty: it.quantity, unit: it.unit_price, total: parseFloat(it.total) || 0, date: _isoDate(it.date || '')};
     })
   };
 }
@@ -7588,12 +7605,14 @@ async function exportInvoicesXLSX(caseId) {
   invs.forEach(function(inv){
     var v = _invView(inv), d = inv.data || {};
     var cur = (d.currency || inv.cur || '').toUpperCase();
+    var curOk = !!cur && cur !== '?' && cur !== 'NULL'; // unknown currency: no EUR figure (toEUR would treat it as EUR)
+    if(!curOk) cur = '';
     var tot = parseFloat(d.total || inv.rawTotal || 0) || 0;
-    var totEUR = cur ? toEUR(tot, cur) : '';
+    var totEUR = curOk ? toEUR(tot, cur) : '';
     var base = [c.caseNum||'', c.patient||'', inv.filename||'', v.provider, v.kind, v.date, v.time, v.dateAsPrinted, v.dateConf, v.dateNote];
     var items = v.items.length ? v.items : [{desc:'(no line items)', orig:'', category:'', qty:'', unit:'', total:'', date:''}];
     items.forEach(function(it){
-      var itEUR = (cur && it.total !== '') ? toEUR(parseFloat(it.total)||0, cur) : '';
+      var itEUR = (curOk && it.total !== '') ? toEUR(parseFloat(it.total)||0, cur) : '';
       rows.push(base.concat([it.desc, it.orig, it.category, it.qty==null?'':it.qty, it.unit==null?'':it.unit, it.total, it.date && it.date!==v.date ? it.date : '', cur, itEUR, tot, totEUR, v.card, v.ref, v.country, v.city, d.notes||'']));
     });
   });
@@ -7606,7 +7625,8 @@ async function exportInvoicesXLSX(caseId) {
     var wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'Receipts');
     XLSX.writeFile(wb, fname + '.xlsx');
   } catch(e) {
-    var csv = rows.map(function(r){ return r.map(function(x){ x = x==null ? '' : String(x); return /[",\n;]/.test(x) ? '"'+x.replace(/"/g,'""')+'"' : x; }).join(','); }).join('\r\n');
+    // Text from documents must not run as a spreadsheet formula when opened.
+    var csv = rows.map(function(r){ return r.map(function(x){ x = x==null ? '' : String(x); if(typeof x === 'string' && /^[=+\-@\t\r]/.test(x) && !/^-?\d+(\.\d+)?$/.test(x)) x = "'" + x; return /[",\n;]/.test(x) ? '"'+x.replace(/"/g,'""')+'"' : x; }).join(','); }).join('\r\n');
     var a = document.createElement('a'); a.href = URL.createObjectURL(new Blob(['\ufeff'+csv], {type:'text/csv;charset=utf-8'})); a.download = fname + '.csv'; a.click();
   }
   var noDate = invs.filter(function(inv){ return !_invView(inv).date; }).length;
