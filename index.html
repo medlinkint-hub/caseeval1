@@ -2351,6 +2351,31 @@ function _saveFallbackEval(caseId, evalText, decision, docsIncomplete) {
   return docsIncomplete ? 'reviewing' : st;
 }
 
+// When the API rejects ONE attachment it names it in the error, e.g.
+// "messages.0.content.3.document.source.base64.data: The PDF specified was not
+// valid" (damaged or password-protected PDF, unsupported image…). Replace just
+// that block with a text note and let the caller retry, instead of giving up
+// on the whole email (extraction) or dropping every PDF in the case (the
+// evaluation's text-only fallback). Also updates `shared` (the array the
+// caller rebuilds later requests from) so the bad block is not sent again.
+// Returns the replaced block, or null if the error does not name one.
+function _dropRejectedBlock(messages, errMsg, shared) {
+  var m = String(errMsg || '').match(/messages\.(\d+)\.content\.(\d+)/);
+  if(!m) return null;
+  var msg = messages[+m[1]], idx = +m[2];
+  if(!msg || !Array.isArray(msg.content)) return null;
+  var bad = msg.content[idx];
+  if(!bad || (bad.type !== 'document' && bad.type !== 'image')) return null;
+  var reason = String(errMsg).replace(/^[^:]*:\s*/, '').substring(0, 160);
+  var label = (bad.title || (bad.type === 'image' ? 'an image' : 'a PDF')).replace(/^\[[^\]]*\]\s*/, '');
+  var note = {type:'text', text:'[ATTACHMENT ' + label + ' — could not be read: the AI service rejected it (' + reason + '). Treat its content as not reviewed.]'};
+  msg.content[idx] = note;
+  if(Array.isArray(shared)) { var si = shared.indexOf(bad); if(si !== -1) shared[si] = note; }
+  console.warn('[API] Rejected attachment replaced and retried:', label, '—', reason);
+  bad._replacedBy = note;
+  return bad;
+}
+
 async function runEval(caseId) {
   console.log('[runEval] called with caseId:', caseId);
   const key = getKey();
@@ -3015,12 +3040,15 @@ async function runEval(caseId) {
       + ' — the evaluation will be marked incomplete.', 12000);
   }
   // Persisted at the top of the saved evaluation (all save paths below)
-  var _incompleteBanner = (_docsNotRead.length || _docsTruncated.length)
-    ? '⚠ INCOMPLETE DOCUMENT REVIEW — the AI did not read every document in full:\n'
-      + _docsNotRead.map(function(f){ return '  • ' + f; }).join('\n') + (_docsNotRead.length ? '\n' : '')
-      + _docsTruncated.map(function(f){ return '  • ' + f + ' (text truncated)'; }).join('\n') + (_docsTruncated.length ? '\n' : '')
-      + 'Re-upload / fix these documents and re-run before relying on this decision.\n\n'
-    : '';
+  function _buildIncompleteBanner() {
+    return (_docsNotRead.length || _docsTruncated.length)
+      ? '⚠ INCOMPLETE DOCUMENT REVIEW — the AI did not read every document in full:\n'
+        + _docsNotRead.map(function(f){ return '  • ' + f; }).join('\n') + (_docsNotRead.length ? '\n' : '')
+        + _docsTruncated.map(function(f){ return '  • ' + f + ' (text truncated)'; }).join('\n') + (_docsTruncated.length ? '\n' : '')
+        + 'Re-upload / fix these documents and re-run before relying on this decision.\n\n'
+      : '';
+  }
+  var _incompleteBanner = _buildIncompleteBanner();
 
   // ── DOCUMENTS SUBMITTED manifest ────────────────────────────────────────
   // Lists the files actually provided so Claude does not ask for documents it
@@ -3245,7 +3273,28 @@ async function runEval(caseId) {
       // stopReason gets set on this object by apiCallStream — read after the
       // call below to explain an empty result (see the "no response" branch).
     };
-    try {
+    // The API may reject one attachment by index (damaged/protected PDF…):
+    // replace just that one, record it as not read, and retry the full
+    // request — instead of the text-only fallback that drops every PDF.
+    async function _primaryCall() {
+      for(var _att = 0; ; _att++) {
+        try { return await _primaryCallOnce(); }
+        catch(_pe) {
+          var _bad = _att < 5 ? _dropRejectedBlock([{role:'user', content:msgContent}], _pe.message, msgContent) : null;
+          if(!_bad) throw _pe;
+          var _owner = _readResults.find(function(r){ return r.blocks.indexOf(_bad) !== -1; });
+          var _nm = _owner ? _owner.f.name : (_bad.title || 'attachment');
+          _docsNotRead.push(_nm + ' (' + _bad._replacedBy.text.replace(/^\[ATTACHMENT /, '').replace(/\]$/, '').substring(0, 200) + ')');
+          _incompleteBanner = _buildIncompleteBanner();
+          fullResult = '';
+          if(window._currentCaseId === caseId) setEvSt('run', '⚠ One attachment was rejected — retrying without it...');
+          toast('⚠ ' + _nm + ': one attachment could not be read by the AI — retrying the evaluation without it', 7000);
+        }
+      }
+    }
+    var _primaryErr = null;
+    try { await _primaryCall(); } catch(_pce) { _primaryErr = _pce; }
+    async function _primaryCallOnce() {
       await apiCallStream(
         [{role:'user', content:msgContent}],
         sys,
@@ -3260,7 +3309,8 @@ async function runEval(caseId) {
         },
         _primaryOpts
       );
-    } catch(primaryErr) {
+    }
+    if(_primaryErr) { var primaryErr = _primaryErr;
       // Only a stall/timeout is safe to recover from here by falling through to
       // the empty-result retry below (disabling thinking directly addresses the
       // cause — thinking ran long with no visible output yet). Anything else
@@ -6435,6 +6485,16 @@ async function processExtractQueue() {
             : 'Saved ✓ — auto-read failed: '+errMsg;
       }
       if(item.rowDiv) item.rowDiv.style.borderLeftColor = '#f59e0b';
+      // Show WHY on the row itself — the tooltip is invisible on touch
+      // screens and in screenshots, so a ⚠ gave no clue what went wrong.
+      if(!isNoData && item.rowDiv && !item.rowDiv.querySelector('.read-note')) {
+        var wnote = document.createElement('span');
+        wnote.className = 'read-note';
+        wnote.style.cssText = 'font-size:9px;color:#92400e;flex-shrink:0;max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+        wnote.textContent = 'auto-read failed: ' + String(errMsg||'unknown error').substring(0, 110) + ' — the file is saved and will still be read at evaluation';
+        wnote.title = errMsg;
+        item.rowDiv.appendChild(wnote);
+      }
       // Add hint for emails with no data
       if(isEmailNoData && item.rowDiv && !item.rowDiv.querySelector('.email-hint')) {
         var hint = document.createElement('span');
@@ -13587,15 +13647,26 @@ async function extractFromFile(fd) {
 
   // ── Streaming call with fallback to regular call ────────────
   async function callAPI(msgs, maxTok) {
-    var text = '';
-    try {
-      await apiCallStream(msgs, SYS, maxTok, function(chunk, full){ text = full; });
-      if(text && text.trim()) return text;
-    } catch(e) {
-      console.warn('[DocEngine] Stream failed:', e.message);
+    for(var attempt = 0; ; attempt++) {
+      var text = '', streamErr = null;
+      try {
+        await apiCallStream(msgs, SYS, maxTok, function(chunk, full){ text = full; });
+        if(text && text.trim()) return text;
+      } catch(e) {
+        streamErr = e;
+        console.warn('[DocEngine] Stream failed:', e.message);
+      }
+      // One rejected attachment (damaged/protected PDF, bad image) used to fail
+      // every pass for the whole file — skip just that attachment and retry.
+      if(streamErr && attempt < 5 && _dropRejectedBlock(msgs, streamErr.message, content)) continue;
+      try {
+        // Fallback to regular call
+        return await apiCall(msgs, SYS, maxTok);
+      } catch(e2) {
+        if(attempt < 5 && _dropRejectedBlock(msgs, e2.message, content)) continue;
+        throw e2;
+      }
     }
-    // Fallback to regular call
-    return await apiCall(msgs, SYS, maxTok);
   }
 
   // ── Extract raw text from PDF binary (text-based PDFs only) ───
