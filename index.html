@@ -1687,6 +1687,8 @@ function buildDescBlock(info) {
   if(ok2(info.policy_number))       lines.push('Policy No: '+info.policy_number);
   if(ok2(info.policy_type))         lines.push('Policy Type: '+info.policy_type);
   if(ok2(info.airline))             lines.push('Airline: '+info.airline+(ok2(info.flight_number)?' ('+info.flight_number+')':''));
+  if(ok2(info.baggage_file_reference)) lines.push('Baggage File Ref (PIR): '+String(info.baggage_file_reference).toUpperCase().replace(/\s+/g,''));
+  if(ok2(info.baggage_delivered_date)) lines.push('Baggage delivered: '+info.baggage_delivered_date);
   if(ok2(info.destination))         lines.push('Destination: '+info.destination);
   if(ok2(info.cancellation_reason)) lines.push('Cancellation Reason: '+info.cancellation_reason);
   if(ok2(info.hotel_name))          lines.push('Hotel: '+info.hotel_name);
@@ -2391,6 +2393,8 @@ async function completeDecisionFromPartial(partialText) {
 // approved amount was not updated, and a stale verificationFlag/pendingStatus
 // from an earlier run kept asking for sign-off on the OLD decision.
 function _saveFallbackEval(caseId, evalText, decision, docsIncomplete) {
+  // Machine-readable blocks are parsed only on the main path — never show them raw
+  evalText = String(evalText || '').replace(/<corrections>[^<]*<\/corrections>/gi, '').replace(/<baggage>[\s\S]*?<\/baggage>/gi, '').trim();
   var cur = getC(caseId);
   var hist = (cur && cur.evalHistory) ? cur.evalHistory.slice() : [];
   if(cur && cur.eval && cur.eval.length > 50) {
@@ -2407,6 +2411,33 @@ function _saveFallbackEval(caseId, evalText, decision, docsIncomplete) {
     amountApproved: _extractApprovedAmount(evalText, decision)
   });
   return docsIncomplete ? 'reviewing' : st;
+}
+
+// ── Baggage File Reference (PIR) ──────────────────────────────────────────
+// WorldTracer file reference: 3-letter airport + 2-character airline code +
+// 5 digits, e.g. ATHA312345 (Athens, Aegean A3, 12345). A match counts as
+// confirmed when baggage/PIR wording is nearby; otherwise it is "possible".
+var _PIR_CONTEXT_RX = /PIR|file\s*ref|reference|ref\.?\s*(?:no|number|#)|world\s*tracer|baggage|luggage|\bbags?\b|suitcase|delayed|αποσκευ|βαλίτσ|αναφορ/i;
+function _findPIRs(text) {
+  var out = [], seen = {};
+  String(text || '').replace(/\b([A-Z]{3})([A-Z0-9]{2})(\d{5})\b/g, function(m, ap, al, num, off, all) {
+    if(seen[m]) return m;
+    if(/^\d\d$/.test(al)) return m; // airline codes are never two digits
+    var ctx = all.slice(Math.max(0, off - 90), off + m.length + 90);
+    var confirmed = _PIR_CONTEXT_RX.test(ctx);
+    if(!confirmed && !/[A-Z]/.test(al)) return m; // e.g. ABC12 12345 with no baggage wording: too weak
+    seen[m] = 1;
+    out.push({pir: m, airline: al, confirmed: confirmed});
+    return m;
+  });
+  return out.sort(function(a, b){ return (b.confirmed ? 1 : 0) - (a.confirmed ? 1 : 0); });
+}
+// Airline's public WorldTracer status page for a PIR (passenger enters the
+// file reference and surname there). Same page all WorldTracer airlines use,
+// keyed by the 2-character airline code inside the PIR.
+function _pirStatusUrl(pir) {
+  var al = String(pir || '').substr(3, 2);
+  return /^[A-Z0-9]{2}$/.test(al) ? 'https://wtrweb.worldtracer.aero/WorldTracerWeb/pax.do?airlineCode=' + al : '';
 }
 
 // When the API rejects ONE attachment it names it in the error, e.g.
@@ -3097,6 +3128,17 @@ async function runEval(caseId) {
       + _unreadNames.concat(_docsTruncated).concat(_docsNotRead.length > _unreadNames.length ? ['parts of other files'] : []).join(', ')
       + ' — the evaluation will be marked incomplete.', 12000);
   }
+  // ── Baggage File Reference (PIR): scan every document text and the case
+  // description, so the evaluation re-checks it and the report shows it.
+  var _pirTexts = [c.desc || '', c.notes || '', liveVals.desc || ''];
+  _readResults.forEach(function(r){ r.blocks.forEach(function(b){ if(b.type === 'text' && b.text) _pirTexts.push(b.text); }); });
+  var _pirsFound = _findPIRs(_pirTexts.join('\n'));
+  if(c.pirNumber && !_pirsFound.some(function(x){ return x.pir === c.pirNumber; })) _pirsFound.unshift({pir: c.pirNumber, confirmed: true});
+  if(_pirsFound.length) {
+    skipNote += '\n=== BAGGAGE FILE REFERENCE (PIR) FOUND IN THE DOCUMENTS ===\n'
+      + _pirsFound.map(function(x){ return '  - ' + x.pir + (x.confirmed ? '' : ' (possible — check it is a baggage file reference)'); }).join('\n')
+      + '\nUse it in the BAGGAGE TIMELINE and check the delivery date/time against the documents.\n';
+  }
   // Persisted at the top of the saved evaluation (all save paths below)
   function _buildIncompleteBanner() {
     return (_docsNotRead.length || _docsTruncated.length)
@@ -3145,7 +3187,14 @@ async function runEval(caseId) {
     + '(e.g. the amount field says EUR X but the actual documents show a different currency/amount), '
     + 'append a machine-readable corrections block ON ITS OWN LINE immediately after the DECISION line:\n'
     + '<corrections>{"amountClaimed":"1867.00","amountClaimedOriginal":"THB 70000","amountClaimedCurrency":"THB"}</corrections>\n'
-    + 'Only include fields that need correction. Omit this block entirely if no corrections are needed.';
+    + 'Only include fields that need correction. Omit this block entirely if no corrections are needed.'
+    + '\n\nBAGGAGE CLAIMS (delayed / lost baggage): include a "BAGGAGE TIMELINE" in your evaluation with the baggage File Reference / PIR '
+    + '(10 characters, e.g. ATHA312345), the flight and its arrival date/time, when the bag was reported missing, and the date AND time the bag '
+    + 'was DELIVERED to the passenger — each with the document it comes from. Never assume a delivery date/time that no document states: if '
+    + 'it is missing, say so and request the courier delivery receipt or the airline\'s written delivery confirmation. Then append ON ITS OWN '
+    + 'LINE after the DECISION line (use null for anything not in the documents):\n'
+    + '<baggage>{"pir":"ATHA312345","arrival":"YYYY-MM-DD HH:MM","delivered":"YYYY-MM-DD HH:MM","delivered_source":"document name","delivery_confirmed":true}</baggage>\n'
+    + 'Omit the <baggage> block for claims that are not about baggage.';
   // ── Supplementary evaluation context — tell the AI this is a follow-up ──
   function _lastRegexMatch(text, rx) {
     var matches = [...String(text||'').matchAll(rx)];
@@ -3362,7 +3411,7 @@ async function runEval(caseId) {
           window._evalLastChunk = Date.now();
           clearInterval(iv);
           // Strip machine-readable corrections block before streaming display
-          if(streamEl) streamEl.textContent = full.replace(/<corrections>[^<]*<\/corrections>/gi, '').trim();
+          if(streamEl) streamEl.textContent = full.replace(/<corrections>[^<]*<\/corrections>/gi, '').replace(/<baggage>[\s\S]*?(<\/baggage>|$)/gi, '').trim();
           if(window._currentCaseId === caseId) setEvSt('run', 'Writing decision...');
         },
         _primaryOpts
@@ -3409,7 +3458,7 @@ async function runEval(caseId) {
           function(chunk, full){
             _retryFull = full;
             window._evalLastChunk = Date.now();
-            if(streamEl) streamEl.textContent = full.replace(/<corrections>[^<]*<\/corrections>/gi, '').trim();
+            if(streamEl) streamEl.textContent = full.replace(/<corrections>[^<]*<\/corrections>/gi, '').replace(/<baggage>[\s\S]*?(<\/baggage>|$)/gi, '').trim();
             if(window._currentCaseId === caseId) setEvSt('run', 'Writing decision...');
           },
           _retryOpts
@@ -3557,8 +3606,27 @@ async function runEval(caseId) {
       var _cacheNote = _cacheRead ? ' ('+_cacheRead.toLocaleString()+' from cache)' : (_cacheWrite ? ' ('+_cacheWrite.toLocaleString()+' cached for next run)' : '');
       _usageLine = 'Tokens Used: '+_totalIn.toLocaleString()+' in'+_cacheNote+' / '+(_evalUsage.output_tokens||0).toLocaleString()+' out — Est. Cost: $'+_estCost.toFixed(3)+' ('+getMod()+(_thinkOn?', thinking on':'')+')\n';
     }
+    // Baggage timeline block → case fields + report header
+    var _bag = null;
+    var _bagMatch = finalResult.match(/<baggage>\s*(\{[\s\S]*?\})\s*<\/baggage>/i);
+    if(_bagMatch) {
+      try { _bag = JSON.parse(_bagMatch[1]); } catch(e) { console.warn('[runEval] Could not parse baggage block:', e.message); }
+      finalResult = finalResult.replace(/<baggage>[\s\S]*?<\/baggage>/gi, '').trim();
+    }
+    var _bagPir = (_bag && _bag.pir && /^[A-Z]{3}[A-Z0-9]{2}\d{5}$/.test(String(_bag.pir).toUpperCase().replace(/\s+/g,''))) ? String(_bag.pir).toUpperCase().replace(/\s+/g,'') : '';
+    var _pirFinal = _bagPir || (_pirsFound[0] && _pirsFound[0].pir) || c.pirNumber || '';
+    var _bagLine = (_pirFinal || (_bag && (_bag.delivered || _bag.arrival)))
+      ? '🧳 BAGGAGE — File Reference (PIR): ' + (_pirFinal || 'not found in the documents')
+        + (_pirFinal && _pirStatusUrl(_pirFinal) ? '\n   Check status (enter PIR + passenger surname): ' + _pirStatusUrl(_pirFinal) : '')
+        + (_bag && _bag.arrival ? '\n   Flight arrival: ' + _bag.arrival : '')
+        + '\n   Bag delivered: ' + (_bag && _bag.delivered ? _bag.delivered + (_bag.delivered_source ? ' (source: ' + _bag.delivered_source + ')' : '') + (_bag.delivery_confirmed === false ? ' — NOT confirmed by a delivery document' : '') : 'NOT FOUND in the documents — request the delivery receipt or the airline\'s written confirmation')
+        + (_pirsFound.length > 1 ? '\n   Other references found: ' + _pirsFound.slice(1).map(function(x){ return x.pir; }).join(', ') : '')
+        + '\n\n'
+      : '';
+
     var evalHeader = policyAbsentBanner
       + _incompleteBanner
+      + _bagLine
       + '=== EVALUATION ===\n'
       + 'Date: '+new Date().toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'})+'\n'
       + 'Time: '+new Date().toLocaleTimeString('en',{hour:'2-digit',minute:'2-digit'})+'\n'
@@ -3712,6 +3780,8 @@ async function runEval(caseId) {
     _evalSave.verificationFlag = _verificationFlag || '';
     _evalSave.pendingStatus = (_verificationFlag || _docsNotRead.length) ? finalStatus : '';
     _evalSave.amountApproved = _approvedFromEval;
+    if(_pirFinal) _evalSave.pirNumber = _pirFinal;
+    if(_bag) { _evalSave.bagArrival = _bag.arrival || ''; _evalSave.bagDelivered = _bag.delivered || ''; _evalSave.bagDeliveredSource = _bag.delivered_source || ''; _evalSave.bagDeliveryConfirmed = _bag.delivery_confirmed !== false && !!_bag.delivered; }
     if(_fieldCorrections) {
       // Apply only recognised safe fields — never overwrite case ID or patient name
       var _safeFields = ['amountClaimed','amountClaimedOriginal','amountClaimedCurrency','currency','dol','country'];
@@ -13711,7 +13781,7 @@ async function extractFromFile(fd) {
     + '"critical_fields_missing":["key claim fields this document type would normally contain but genuinely does not — e.g. patient name, date of loss, diagnosis, amount — empty array if none"],'
     + '"patient":null,"patient_original_script":null,"dob":null,"age":null,"gender":null,"nationality":null,"passport_number":null,"id_number":null,"address":null,"email":null,"phone":null,'
     + '"insurer":null,"policy_holder":null,"policy_number":null,"claim_number":null,"policy_type":null,"plan_name":null,"policy_start":null,"policy_end":null,"coverage_area":null,"sum_insured":null,"deductible":null,"copayment_pct":null,'
-    + '"trip_type":null,"departure_date":null,"return_date":null,"destination":null,"origin":null,"airline":null,"flight_number":null,"ticket_purchase_date":null,"ticket_amount":null,"ticket_currency":null,"airline_refund":null,"cancellation_reason":null,"hotel_name":null,"hotel_amount":null,'
+    + '"trip_type":null,"departure_date":null,"return_date":null,"destination":null,"origin":null,"airline":null,"flight_number":null,"ticket_purchase_date":null,"baggage_file_reference":"10-character WorldTracer/PIR file reference exactly as printed (e.g. ATHA312345) or null","baggage_delivered_date":"date+time the delayed baggage was delivered to the passenger, as printed, or null","ticket_amount":null,"ticket_currency":null,"airline_refund":null,"cancellation_reason":null,"hotel_name":null,"hotel_amount":null,'
     + '"dol":null,"admission_date":null,"admission_time":null,"discharge_date":null,"discharge_time":null,"length_of_stay":null,"admission_type":null,'
     + '"country":null,"city":null,"hospital":null,"hospital_address":null,"ward_type":null,"doctor":null,"doctor_specialty":null,"referring_doctor":null,'
     + '"chief_complaint":null,"history_of_present_illness":null,"past_medical_history":null,'
@@ -14464,6 +14534,8 @@ async function extractFromNewFile(fd) {
       destination:       safeStr(info.destination),
       airline:           safeStr(info.airline),
       flight_number:     safeStr(info.flight_number),
+      baggage_file_reference: safeStr(info.baggage_file_reference).toUpperCase().replace(/\s+/g,''),
+      baggage_delivered_date: safeStr(info.baggage_delivered_date),
       ticket_purchase_date: safeStr(info.ticket_purchase_date),
       ticket_amount:     safeNum(info.ticket_amount),
       ticket_currency:   safeStr(info.ticket_currency).toUpperCase().replace(/[^A-Z]/g,'').substring(0,3),
@@ -14649,6 +14721,8 @@ async function extractFromNewFile(fd) {
     if(s.sum_insured > 0) parts.push('Sum Insured: '+s.currency+' '+s.sum_insured);
     if(ok(s.pa_number)) parts.push('PA: '+s.pa_number+(ok(s.pa_status)?' ('+s.pa_status+')':''));
     if(ok(s.airline)) parts.push('Airline: '+s.airline+(ok(s.flight_number)?' '+s.flight_number:''));
+    if(ok(s.baggage_file_reference)) parts.push('Baggage File Ref (PIR): '+s.baggage_file_reference);
+    if(ok(s.baggage_delivered_date)) parts.push('Baggage delivered: '+s.baggage_delivered_date);
     if(ok(s.destination)) parts.push('Destination: '+s.destination);
     if(ok(s.cancellation_reason)) parts.push('Cancellation: '+s.cancellation_reason);
     if(ok(s.hotel_name)) parts.push('Hotel: '+s.hotel_name+(s.hotel_amount>0?' — '+s.currency+' '+s.hotel_amount:''));
