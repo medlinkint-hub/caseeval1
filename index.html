@@ -3139,6 +3139,11 @@ async function runEval(caseId) {
       + _pirsFound.map(function(x){ return '  - ' + x.pir + (x.confirmed ? '' : ' (possible — check it is a baggage file reference)'); }).join('\n')
       + '\nUse it in the BAGGAGE TIMELINE and check the delivery date/time against the documents.\n';
   }
+  if(c.bagDelivered && (c.bagDeliveredBasis === 'handler' || c.bagDeliveredBasis === 'document' || (!c.bagDeliveredBasis && c.bagDeliveryConfirmed))) {
+    skipNote += '\n=== FIXED DELIVERY DATE ===\nThe baggage was delivered on ' + c.bagDelivered
+      + (c.bagDeliveredBasis === 'handler' ? ' — FIXED BY THE CLAIMS HANDLER: authoritative, use it as is.' : ' — from document' + (c.bagDeliveredSource ? ' "' + c.bagDeliveredSource + '"' : '') + ': use it unless another document clearly contradicts it (then report the conflict).')
+      + (c.bagArrival ? '\nFlight arrival: ' + c.bagArrival + '.' : '') + '\n';
+  }
   // Persisted at the top of the saved evaluation (all save paths below)
   function _buildIncompleteBanner() {
     return (_docsNotRead.length || _docsTruncated.length)
@@ -3190,10 +3195,14 @@ async function runEval(caseId) {
     + 'Only include fields that need correction. Omit this block entirely if no corrections are needed.'
     + '\n\nBAGGAGE CLAIMS (delayed / lost baggage): include a "BAGGAGE TIMELINE" in your evaluation with the baggage File Reference / PIR '
     + '(10 characters, e.g. ATHA312345), the flight and its arrival date/time, when the bag was reported missing, and the date AND time the bag '
-    + 'was DELIVERED to the passenger — each with the document it comes from. Never assume a delivery date/time that no document states: if '
-    + 'it is missing, say so and request the courier delivery receipt or the airline\'s written delivery confirmation. Then append ON ITS OWN '
-    + 'LINE after the DECISION line (use null for anything not in the documents):\n'
-    + '<baggage>{"pir":"ATHA312345","arrival":"YYYY-MM-DD HH:MM","delivered":"YYYY-MM-DD HH:MM","delivered_source":"document name","delivery_confirmed":true}</baggage>\n'
+    + 'was DELIVERED to the passenger — each with the document it comes from. The DELIVERY DATE/TIME MUST ALWAYS BE FIXED, because it ends the '
+    + 'covered delay period: (a) if a document states it (courier/delivery receipt, airline or WorldTracer delivery message), use it — basis "document"; '
+    + '(b) otherwise determine the most likely delivery date/time from the indirect evidence (emails saying the bag arrived or was collected, '
+    + 'airline updates, the passenger\'s own statement or claim form, the date purchases of essentials stop) — basis "ai_inferred", and name that '
+    + 'evidence; (c) only if there is no evidence at all: null, basis "none", and the amounts that depend on it are PENDING INFORMATION. '
+    + 'If a FIXED DELIVERY DATE is given above, use it. Use arrival → delivery as the covered period for the receipt date check. Then append ON ITS OWN '
+    + 'LINE after the DECISION line:\n'
+    + '<baggage>{"pir":"ATHA312345","arrival":"YYYY-MM-DD HH:MM","delivered":"YYYY-MM-DD HH:MM","delivered_basis":"document|ai_inferred|none","delivered_source":"document name or the evidence used","delivery_confirmed":true}</baggage>\n'
     + 'Omit the <baggage> block for claims that are not about baggage.';
   // ── Supplementary evaluation context — tell the AI this is a follow-up ──
   function _lastRegexMatch(text, rx) {
@@ -3615,11 +3624,19 @@ async function runEval(caseId) {
     }
     var _bagPir = (_bag && _bag.pir && /^[A-Z]{3}[A-Z0-9]{2}\d{5}$/.test(String(_bag.pir).toUpperCase().replace(/\s+/g,''))) ? String(_bag.pir).toUpperCase().replace(/\s+/g,'') : '';
     var _pirFinal = _bagPir || (_pirsFound[0] && _pirsFound[0].pir) || c.pirNumber || '';
+    // Fixed delivery date: a handler's value always wins, a document-based
+    // one is not replaced by an AI inference; otherwise the newest result.
+    var _bagBasis = _bag ? String(_bag.delivered_basis || (_bag.delivered ? (_bag.delivery_confirmed === false ? 'ai_inferred' : 'document') : 'none')).toLowerCase() : '';
+    if(c.bagDelivered && (c.bagDeliveredBasis === 'handler' || (c.bagDeliveredBasis === 'document' && _bagBasis !== 'document'))) {
+      _bag = Object.assign({}, _bag || {}, {delivered: c.bagDelivered, delivered_source: c.bagDeliveredSource || '', delivery_confirmed: true});
+      _bagBasis = c.bagDeliveredBasis;
+    }
+    var _basisLabel = {document:'✓ from document', ai_inferred:'🤖 determined by AI — confirm or correct in the case', handler:'✍ fixed by claims handler'}[_bagBasis] || '';
     var _bagLine = (_pirFinal || (_bag && (_bag.delivered || _bag.arrival)))
       ? '🧳 BAGGAGE — File Reference (PIR): ' + (_pirFinal || 'not found in the documents')
         + (_pirFinal && _pirStatusUrl(_pirFinal) ? '\n   Check status (enter PIR + passenger surname): ' + _pirStatusUrl(_pirFinal) : '')
         + (_bag && _bag.arrival ? '\n   Flight arrival: ' + _bag.arrival : '')
-        + '\n   Bag delivered: ' + (_bag && _bag.delivered ? _bag.delivered + (_bag.delivered_source ? ' (source: ' + _bag.delivered_source + ')' : '') + (_bag.delivery_confirmed === false ? ' — NOT confirmed by a delivery document' : '') : 'NOT FOUND in the documents — request the delivery receipt or the airline\'s written confirmation')
+        + '\n   Bag delivered: ' + (_bag && _bag.delivered ? _bag.delivered + (_basisLabel ? ' — ' + _basisLabel : '') + (_bag.delivered_source ? ' (source: ' + _bag.delivered_source + ')' : '') : 'NOT FIXED — no evidence in the documents; request the delivery receipt or the airline\'s written confirmation, or enter it in the case')
         + (_pirsFound.length > 1 ? '\n   Other references found: ' + _pirsFound.slice(1).map(function(x){ return x.pir; }).join(', ') : '')
         + '\n\n'
       : '';
@@ -3781,7 +3798,13 @@ async function runEval(caseId) {
     _evalSave.pendingStatus = (_verificationFlag || _docsNotRead.length) ? finalStatus : '';
     _evalSave.amountApproved = _approvedFromEval;
     if(_pirFinal) _evalSave.pirNumber = _pirFinal;
-    if(_bag) { _evalSave.bagArrival = _bag.arrival || ''; _evalSave.bagDelivered = _bag.delivered || ''; _evalSave.bagDeliveredSource = _bag.delivered_source || ''; _evalSave.bagDeliveryConfirmed = _bag.delivery_confirmed !== false && !!_bag.delivered; }
+    if(_bag) {
+      if(_bag.arrival || !c.bagArrival) _evalSave.bagArrival = _bag.arrival || c.bagArrival || '';
+      _evalSave.bagDelivered = _bag.delivered || '';
+      _evalSave.bagDeliveredSource = _bag.delivered_source || '';
+      _evalSave.bagDeliveredBasis = _bag.delivered ? (_bagBasis === 'none' ? 'ai_inferred' : _bagBasis) : '';
+      _evalSave.bagDeliveryConfirmed = !!_bag.delivered && (_bagBasis === 'document' || _bagBasis === 'handler');
+    }
     if(_fieldCorrections) {
       // Apply only recognised safe fields — never overwrite case ID or patient name
       var _safeFields = ['amountClaimed','amountClaimedOriginal','amountClaimedCurrency','currency','dol','country'];
@@ -5711,6 +5734,27 @@ function renderCD(c) {
 
   html += '</div>'; // end annual panel
 
+  // ── Baggage delay panel: PIR + the FIXED delivery date/time ────────────
+  // The delivery date ends the covered delay period, so it must always be
+  // set: from a document, by the AI evaluation, or here by the handler
+  // (a handler's value is final and every later evaluation uses it).
+  if(c.pirNumber || c.bagDelivered || c.bagArrival || c.type === 'nonmedclaim' || /baggage|luggage|suitcase|\bPIR\b|αποσκευ|βαλίτσ/i.test(c.desc || '')) {
+    var _dtv = function(v){ v = String(v || ''); return /^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}/.test(v) ? v.slice(0,16).replace(' ','T') : (/^\d{4}-\d{2}-\d{2}$/.test(v) ? v + 'T00:00' : ''); };
+    var _basis = c.bagDeliveredBasis || (c.bagDelivered ? (c.bagDeliveryConfirmed ? 'document' : 'ai_inferred') : '');
+    var _basisHtml = !c.bagDelivered ? '<span style="color:#dc2626;font-weight:700">⚠ Not fixed yet — run the evaluation or enter it</span>'
+      : _basis === 'handler' ? '<span style="color:#065f46;font-weight:700">✍ Fixed by claims handler</span>'
+      : _basis === 'document' ? '<span style="color:#065f46;font-weight:700">✓ From document' + (c.bagDeliveredSource ? ': ' + esc(c.bagDeliveredSource) : '') + '</span>'
+      : '<span style="color:#d97706;font-weight:700">🤖 Determined by AI' + (c.bagDeliveredSource ? ' — ' + esc(c.bagDeliveredSource) : '') + ' — confirm or correct</span>';
+    html += '<div style="margin-top:10px;padding:10px 12px;background:rgba(5,150,105,.05);border-radius:8px;border:1px solid rgba(5,150,105,.2)">';
+    html += '<div style="font-size:11px;font-weight:800;color:var(--navy);margin-bottom:6px">🧳 BAGGAGE DELAY</div>';
+    html += '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px">';
+    html += '<div><label style="font-size:10px;font-weight:700;color:var(--navy);text-transform:uppercase;display:block;margin-bottom:3px">File Reference (PIR)</label><input id="f_bag_pir" value="'+esc(c.pirNumber||'')+'" placeholder="e.g. ATHA312345" maxlength="10" style="width:100%;padding:7px 8px;border:1px solid var(--bor);border-radius:6px;font-size:12px;box-sizing:border-box;text-transform:uppercase">'
+      + (c.pirNumber && typeof _pirStatusUrl === 'function' && _pirStatusUrl(c.pirNumber) ? '<a href="'+esc(_pirStatusUrl(c.pirNumber))+'" target="_blank" rel="noopener" style="font-size:9px">Check bag status (PIR + surname) ↗</a>' : '') + '</div>';
+    html += '<div><label style="font-size:10px;font-weight:700;color:var(--navy);text-transform:uppercase;display:block;margin-bottom:3px">Flight Arrival</label><input type="datetime-local" id="f_bag_arrival" value="'+esc(_dtv(c.bagArrival))+'" style="width:100%;padding:7px 8px;border:1px solid var(--bor);border-radius:6px;font-size:12px;box-sizing:border-box"></div>';
+    html += '<div><label style="font-size:10px;font-weight:700;color:var(--navy);text-transform:uppercase;display:block;margin-bottom:3px">Bag Delivered (fixed)</label><input type="datetime-local" id="f_bag_delivered" value="'+esc(_dtv(c.bagDelivered))+'" style="width:100%;padding:7px 8px;border:1px solid var(--bor);border-radius:6px;font-size:12px;box-sizing:border-box"><div id="f_bag_basis" style="font-size:9px;margin-top:2px">'+_basisHtml+'</div></div>';
+    html += '</div></div>';
+  }
+
   // Annual policy coverage analysis badge
   if(_isAnnual && c.ticketPurchaseDate && c.policyStart) {
     var ticketD = new Date(c.ticketPurchaseDate);
@@ -6252,6 +6296,25 @@ function renderCD(c) {
       };
     }
   });
+  // Baggage panel: a value the handler enters is final (basis "handler")
+  var _bagPirEl = document.getElementById('f_bag_pir');
+  if(_bagPirEl) _bagPirEl.onchange = function(){
+    var v = this.value.toUpperCase().replace(/\s+/g,'');
+    if(v && !/^[A-Z]{3}[A-Z0-9]{2}\d{5}$/.test(v)) toast('⚠ A baggage file reference has 10 characters: airport (3) + airline (2) + 5 digits, e.g. ATHA312345', 6000);
+    this.value = v; updC(cid, {pirNumber: v});
+  };
+  var _bagArrEl = document.getElementById('f_bag_arrival');
+  if(_bagArrEl) _bagArrEl.onchange = function(){ updC(cid, {bagArrival: this.value.replace('T',' ')}); };
+  var _bagDelEl = document.getElementById('f_bag_delivered');
+  if(_bagDelEl) _bagDelEl.onchange = function(){
+    var v = this.value.replace('T',' ');
+    updC(cid, v ? {bagDelivered: v, bagDeliveredBasis: 'handler', bagDeliveredSource: 'claims handler (' + ((typeof S==='function' && S().name) || 'Team Member') + ', ' + new Date().toLocaleDateString('en-GB') + ')', bagDeliveryConfirmed: true}
+                : {bagDelivered: '', bagDeliveredBasis: '', bagDeliveredSource: '', bagDeliveryConfirmed: false});
+    var bEl = document.getElementById('f_bag_basis');
+    if(bEl) bEl.innerHTML = v ? '<span style="color:#065f46;font-weight:700">✍ Fixed by claims handler</span>' : '<span style="color:#dc2626;font-weight:700">⚠ Not fixed yet — run the evaluation or enter it</span>';
+    toast(v ? '✍ Delivery date fixed: ' + v + ' — every evaluation will use it' : 'Delivery date cleared');
+  };
+
   // Wire annual policy toggle
   var annualChk = document.getElementById('f_annual_pol');
   var annualPanel = document.getElementById('f_annual_panel');
