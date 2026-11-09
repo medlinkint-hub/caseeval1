@@ -3009,14 +3009,51 @@ async function runEval(caseId) {
   _readResults.forEach(function(r) {
     r.bin = r.blocks.reduce(function(n, b){ return n + _binSize(b); }, 0);
   });
-  // Fit as many documents as possible: admit the smallest first, then emit in
-  // the original upload order.
+  // Fit as many documents as possible in the one request: documents added
+  // since the last evaluation first (a re-evaluation exists to read them),
+  // then the smallest; emit in the original upload order.
   var _runningTotal = 0;
-  _readResults.slice().sort(function(a, b){ return a.bin - b.bin; }).forEach(function(r) {
+  var _isNewDoc = function(r){ return _newDocsSinceEval.indexOf(r.f.name) !== -1 ? 0 : 1; };
+  _readResults.slice().sort(function(a, b){ return (_isNewDoc(a) - _isNewDoc(b)) || (a.bin - b.bin); }).forEach(function(r) {
     if(r.error || !r.bin) return;
     if(_runningTotal + r.bin > MAX_TOTAL) { r.overBudget = true; return; }
     _runningTotal += r.bin;
   });
+
+  // Documents that do not fit are no longer skipped: each is read IN FULL by
+  // a separate AI pass (its own request, so the size limit applies to it
+  // alone) and its complete transcription goes into the evaluation. They were
+  // previously sent as "not read — total upload limit reached".
+  var _overflow = _readResults.filter(function(r){ return r.overBudget && !r.error; });
+  var _docsTranscribed = [];
+  if(_overflow.length) {
+    setEvSt('run', '📄 Reading ' + _overflow.length + ' large document(s) in full, separately...');
+    var _TRANSCRIBE = 'You are reading ONE document from an insurance claim file so that a separate claims evaluation can use it. '
+      + 'Transcribe it COMPLETELY: every page from the first to the LAST, in order, with page markers "--- Page N ---". Include all text, '
+      + 'tables (as rows), amounts with currency, dates and times, names, reference numbers (PIR / file references, booking and ticket numbers), '
+      + 'stamps, signatures, handwriting and email headers. Translate non-English text into English after the original. Do not summarise, '
+      + 'skip or shorten anything — the last page often holds the decisive information. If something is unreadable, write [UNREADABLE]. '
+      + 'Finish with a line "=== END OF DOCUMENT (N pages) ===".';
+    var _queue = _overflow.slice(), _workers = [];
+    for(var _w = 0; _w < 3; _w++) _workers.push((async function(){
+      while(_queue.length) {
+        var r = _queue.shift();
+        var bins = r.blocks.filter(function(b){ return _binSize(b); });
+        var transcript = '';
+        try {
+          await apiCallStream([{role:'user', content: bins.concat([{type:'text', text:_TRANSCRIBE}])}], null, 32000,
+            function(chunk, full){ transcript = full; window._evalLastChunk = Date.now(); }, {thinking:false, idleTimeoutMs:180000});
+        } catch(_te) { console.warn('[runEval] Full-read pass failed for', r.f.name, _te.message); transcript = ''; }
+        if(transcript && transcript.trim().length > 50) {
+          r.blocks = r.blocks.filter(function(b){ return !_binSize(b); }).concat([{type:'text', text:'[FULL TRANSCRIPTION — ' + r.f.name + ' — read in full by a separate AI pass because all attachments together exceed the size of one request]\n\n' + transcript}]);
+          r.overBudget = false; r.bin = 0; r.transcribed = true;
+          _docsTranscribed.push(r.f.name);
+        }
+      }
+    })());
+    await Promise.all(_workers);
+    console.log('[runEval] Read in full by separate passes:', _docsTranscribed);
+  }
   // Shared text budget across all documents (~110k tokens) so a case with
   // many long documents still fits the model's context window. When over,
   // the longest texts are trimmed first (each to the same ceiling) and marked
@@ -3143,6 +3180,10 @@ async function runEval(caseId) {
     skipNote += '\n=== FIXED DELIVERY DATE ===\nThe baggage was delivered on ' + c.bagDelivered
       + (c.bagDeliveredBasis === 'handler' ? ' — FIXED BY THE CLAIMS HANDLER: authoritative, use it as is.' : ' — from document' + (c.bagDeliveredSource ? ' "' + c.bagDeliveredSource + '"' : '') + ': use it unless another document clearly contradicts it (then report the conflict).')
       + (c.bagArrival ? '\nFlight arrival: ' + c.bagArrival + '.' : '') + '\n';
+  }
+  if(_docsTranscribed.length) {
+    skipNote += '\nNOTE: these documents did not fit in one request with the others, so each was read IN FULL by a separate AI pass and its '
+      + 'complete transcription (every page, including the last) is included above: ' + _docsTranscribed.join(', ') + '. Treat them as fully provided.\n';
   }
   // Persisted at the top of the saved evaluation (all save paths below)
   function _buildIncompleteBanner() {
@@ -3643,6 +3684,7 @@ async function runEval(caseId) {
 
     var evalHeader = policyAbsentBanner
       + _incompleteBanner
+      + (_docsTranscribed.length ? 'ℹ Read in full by separate AI passes (too large to attach together with the other documents): ' + _docsTranscribed.join(', ') + '\n\n' : '')
       + _bagLine
       + '=== EVALUATION ===\n'
       + 'Date: '+new Date().toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'})+'\n'
@@ -12980,11 +13022,15 @@ async function _msgHeuristicBlocks(fd, data) {
 // the whole thing. The cap is now far higher and every cut is marked, which
 // runEval detects and reports as an incompletely read document.
 var DOC_TEXT_CAP = 150000;
+// Keeps the START and the END of an over-long document (the last page often
+// holds the decisive content — totals, signatures, final confirmations);
+// only the middle is dropped, and the marker says how much.
 function _capDocText(txt, cap) {
   txt = String(txt || '');
   cap = cap || DOC_TEXT_CAP;
   if(txt.length <= cap) return txt;
-  return txt.substring(0, cap) + '\n[... TRUNCATED — ' + (txt.length - cap).toLocaleString() + ' further characters of this document were not included ...]';
+  var head = Math.floor(cap * 0.6), tail = cap - head;
+  return txt.substring(0, head) + '\n[... TRUNCATED — ' + (txt.length - cap).toLocaleString() + ' characters from the MIDDLE of this document were not included; its start and end are shown ...]\n' + txt.substring(txt.length - tail);
 }
 async function readFileForAI(fd) {
   var ext = fd.ext || fxt(fd.name||'');
