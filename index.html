@@ -15097,7 +15097,27 @@ function addFiles(list, caseId) {
       var fd = {name:f.name, size:f.size, type:f.type, ext:fxt(f.name), data:e.target.result, addedAt:_addedAt};
       var fileKey = 'fd_'+caseId+'_'+Date.now()+'_'+FILES.length;
       fd._key = fileKey;
-      FILES.push(fd);
+
+      // Re-adding the same document replaces the earlier copy rather than
+      // sitting beside it. Dropping a file in twice — or a colleague adding
+      // one that is already attached — used to leave two identical rows, both
+      // listed to the evaluator and both sent to the AI, which read the same
+      // invoice twice. A match needs the same name AND the same size: two
+      // genuinely different documents that happen to share a filename
+      // (two providers both sending "invoice.pdf") are kept separately.
+      var _sameFile = function(a, b) {
+        return a && b && a.name === b.name && Number(a.size) === Number(b.size) && !a._isEvalReport && !b._isEvalReport;
+      };
+      var _dupIdx = FILES.findIndex(function(x){ return _sameFile(x, fd); });
+      if(_dupIdx !== -1) {
+        // Free the superseded blob; the replacement carries its own key.
+        var _oldKey = FILES[_dupIdx]._key;
+        if(_oldKey && _oldKey !== fileKey) { try { idbDelete(_oldKey); } catch(e){} }
+        FILES[_dupIdx] = fd;
+      } else {
+        FILES.push(fd);
+      }
+
       // Store in IndexedDB
       idbSet(fileKey, fd.data).then(function(){
         console.log('[Files] Stored:', f.name, Math.round(fd.data.length/1024)+'KB');
@@ -15110,7 +15130,8 @@ function addFiles(list, caseId) {
       // or every re-upload would wipe the timestamp off files added earlier.
       var existing = (getC(caseId)||{}).filesData||[];
       var metas = existing.map(fileMetaOf); // keeps eval-report markers intact
-      metas.push(fileMetaOf(fd));
+      var _mDup = metas.findIndex(function(m){ return _sameFile(m, fd); });
+      if(_mDup !== -1) metas[_mDup] = fileMetaOf(fd); else metas.push(fileMetaOf(fd));
       updC(caseId, {filesData:metas});
       renderFL_C(caseId);
       if(typeof refreshEvalModeHint==='function') refreshEvalModeHint(caseId);
