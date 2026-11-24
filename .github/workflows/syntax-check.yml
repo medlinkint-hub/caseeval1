@@ -50,3 +50,9 @@ jobs:
 
       - name: Auth gate must fail closed and open only for approved members
         run: npm run test:auth
+
+      # Document and identity fraud detection. The false-positive cases matter
+      # as much as the detections: a check that cries forgery over a poor scan
+      # or a missing middle name gets ignored, and then catches nothing.
+      - name: Document & ID fraud detection
+        run: npm run test:fraud

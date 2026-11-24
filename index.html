@@ -2071,6 +2071,37 @@ MANDATORY FINANCIAL CALCULATION:
 - Late notification, duplicate risk, round-number billing, pre-existing concealment, provider irregularities, upcoding, unbundling.
 - Overall fraud risk: CLEAR / LOW / MEDIUM / HIGH with reasoning.
 
+12b. DOCUMENT AND IDENTITY INTEGRITY
+Assess the documents themselves, not only what they say. Where a
+DOCUMENT INTEGRITY CHECKS block appears in the case data, those results were
+computed arithmetically before you saw them — treat them as established fact
+and do not re-derive, second-guess or recompute them. A failed identity check
+digit in particular is arithmetic, not opinion.
+
+Address each of the following, and say NOT APPLICABLE where there is nothing to assess:
+- IDENTITY: Does the patient's identity document belong to the patient, cover the
+  date of loss, and pass its own check digits?
+- CONSISTENCY: Do the documents agree with each other on patient name, dates,
+  provider and amounts? Name any document that disagrees with the rest.
+- AUTHENTICITY INDICATORS: duplicated or reused invoice numbers, invoices that do
+  not add up, dates that cannot be true, a provider with no verifiable tax
+  registration, documents from supposedly different providers sharing a template.
+- MATERIALITY: State whether what you found changes the decision, or is a
+  documentation defect to be corrected.
+
+Two rules govern this section, because an accusation of forgery is serious and
+hard to withdraw:
+(1) Never state or imply that a document is forged. Describe what is wrong with
+    it and what would resolve the question. Determining fraud is for HWA and the
+    insurer, not for you.
+(2) Distinguish clearly between a computed finding (arithmetic, stated as fact)
+    and a visual impression (stated as requiring human confirmation). A poor scan,
+    an unfamiliar national format, a translated or reissued invoice and an
+    honest clerical error all look suspicious and are not fraud. Where an
+    innocent explanation is as likely, say so.
+
+Finish with: DOCUMENT INTEGRITY: SOUND / MINOR DEFECTS / REQUIRES VERIFICATION / SERIOUS CONCERNS — with one sentence of reasoning.
+
 13. FINAL DECISION — MANDATORY FORMAT:
 DECISION: [APPROVED / PARTIALLY APPROVED / DECLINED / PENDING INFORMATION]
 APPROVED AMOUNT: EUR [exact number — 0 if declined]
@@ -2278,6 +2309,37 @@ function _invDateHtml(v) {
   var s = '📅 ' + esc(v.date) + (v.time ? ' ' + esc(v.time) : '');
   if(v.dateConf === 'high' || !v.dateConf) return '<b>' + s + '</b>';
   return '<b>' + s + '</b> <span style="color:#d97706;font-weight:700">⚠ date ' + esc(v.dateConf || 'uncertain') + (v.dateNote ? ' — ' + esc(v.dateNote) : '') + '</span>';
+}
+
+// Renders the deterministic document checks into the evaluation prompt. These
+// are computed, not inferred, so the prompt presents them as established and
+// tells the model not to recompute them — a model re-deriving a check digit
+// gets it wrong often enough to turn a sound finding into a retracted one.
+function buildDocIntegrityBlock(caseId) {
+  if(typeof runDocumentFraudCheck !== 'function') return '';
+  var c = getC(caseId); if(!c) return '';
+  var r;
+  try { r = runDocumentFraudCheck(c); } catch(e) { console.warn('[docIntegrity] block failed:', e.message); return ''; }
+  if(!r || (!r.findings.length && !(r.mrz||[]).length)) return '';
+
+  var out = '\n=== DOCUMENT INTEGRITY CHECKS (computed before this evaluation — treat as fact) ===\n';
+  (r.mrz||[]).forEach(function(m) {
+    var p2 = m.parsed, bad = p2.checks.filter(function(k){ return !k.valid; });
+    out += 'IDENTITY DOCUMENT (' + p2.format + ', ' + m.file + '): '
+         + (bad.length
+            ? 'CHECK DIGITS FAIL — ' + bad.map(function(k){ return k.field + ' printed ' + k.actual + ', computed ' + k.expected; }).join('; ')
+            : 'all check digits valid')
+         + (p2.documentNumber ? ' | number ' + p2.documentNumber : '')
+         + ((p2.givenNames||p2.surname) ? ' | holder ' + (p2.givenNames + ' ' + p2.surname).trim() : '')
+         + (p2.expiryDate ? ' | expires ' + p2.expiryDate : '') + '\n';
+  });
+  r.findings.forEach(function(f) {
+    out += '[' + f.level.toUpperCase() + '] ' + f.title + ': ' + f.detail + (f.evidence ? ' (' + f.evidence + ')' : '') + '\n';
+  });
+  out += 'Computed risk level: ' + r.riskLevel.toUpperCase() + ' from ' + r.checksRun + ' check(s).\n';
+  if(!r.aiRun) out += 'NOTE: the visual page examination has NOT been run for this case, so only data-level checks are represented here.\n';
+  out += '=== END DOCUMENT INTEGRITY CHECKS ===\n';
+  return out;
 }
 
 function buildInvoiceBreakdown(caseId) {
@@ -2952,7 +3014,7 @@ async function runEval(caseId) {
     +((liveVals.policyStart||c.policyStart)&&(liveVals.policyEnd||c.policyEnd)?'POLICY PERIOD: '+(liveVals.policyStart||c.policyStart)+' to '+(liveVals.policyEnd||c.policyEnd)+' (manually entered)'+nl:'')
     +(liveVals.deductible||c.deductible?'DEDUCTIBLE: EUR '+(liveVals.deductible||c.deductible)+nl:'')
     +(liveVals.copayment||c.copayment?'CO-PAYMENT: '+(liveVals.copayment||c.copayment)+'%'+nl:'')
-    +(liveVals.diagnosis||c.diagnosis?'PRIMARY DIAGNOSIS: '+(liveVals.diagnosis||c.diagnosis)+nl:'')+'AMOUNT CLAIMED: '+(typeof buildAmountString==='function'?buildAmountString(c):(claimed&&c.currency&&c.currency!=='EUR'?c.currency+' '+claimed+' (≈ EUR '+toEUR(parseFloat(claimed||0),c.currency).toFixed(2)+')':('EUR '+(claimed||'Not provided'))))+nl+(_filesForCaseId===caseId&&FILES.length?'NOTE: Medical documents are attached to this message. If those documents show amounts in a currency different from what is stated above (e.g. invoices in THB, USD, etc.), use the currency and amounts as shown in the actual documents — the field value may reflect a manual entry error.\n':'')+nl+'DESCRIPTION:'+nl+desc+nl+nl+(function(){var inv=buildInvoiceBreakdown(caseId);return inv?inv+nl:'';})()+'ICD CODES: '+(c.icdCodes&&c.icdCodes.length?c.icdCodes.join(', '):'not specified')+nl+'PA NUMBER: '+(liveVals.paNumber||c.paNumber||'none')+' STATUS: '+(liveVals.paStatus||c.paStatus||'not set')+nl+'PA PROCEDURE: '+(c.paProcedure||'not specified')+nl+'PA TREATING DOCTOR: '+(c.paTreatingDoctor||'not specified')+nl+'PA HOSPITAL: '+(c.paHospital||'not specified')+nl+'PA EST. COST: EUR '+(c.paEstCost||'not stated')+nl+(c.preexisting_conditions||c.preexistingConditions?'PRE-EXISTING (from documents): '+(c.preexisting_conditions||c.preexistingConditions||'')+nl:'')+(c.preexistingConditions?'PRE-EXISTING CONDITIONS: '+c.preexistingConditions+nl:'')+(parseFloat(c.reserve||0)>0?'CASE RESERVE: EUR '+c.reserve+nl:'')+nl+(function(){ var lang=localStorage.getItem('mp_eval_lang')||'auto'; if(lang==='el') return 'INSTRUCTION: Write the ENTIRE evaluation in GREEK (Ελληνικά).\n'; if(lang==='en') return 'INSTRUCTION: Write the ENTIRE evaluation in ENGLISH.\n'; return 'INSTRUCTION: Write in ENGLISH by default. Only write in Greek if the policy wording above is in Greek.\n'; })()+'EVALUATION INSTRUCTIONS:\n'
+    +(liveVals.diagnosis||c.diagnosis?'PRIMARY DIAGNOSIS: '+(liveVals.diagnosis||c.diagnosis)+nl:'')+'AMOUNT CLAIMED: '+(typeof buildAmountString==='function'?buildAmountString(c):(claimed&&c.currency&&c.currency!=='EUR'?c.currency+' '+claimed+' (≈ EUR '+toEUR(parseFloat(claimed||0),c.currency).toFixed(2)+')':('EUR '+(claimed||'Not provided'))))+nl+(_filesForCaseId===caseId&&FILES.length?'NOTE: Medical documents are attached to this message. If those documents show amounts in a currency different from what is stated above (e.g. invoices in THB, USD, etc.), use the currency and amounts as shown in the actual documents — the field value may reflect a manual entry error.\n':'')+nl+'DESCRIPTION:'+nl+desc+nl+nl+(function(){var inv=buildInvoiceBreakdown(caseId);return inv?inv+nl:'';})()+(function(){var dib=(typeof buildDocIntegrityBlock==='function')?buildDocIntegrityBlock(caseId):'';return dib?dib+nl:'';})()+'ICD CODES: '+(c.icdCodes&&c.icdCodes.length?c.icdCodes.join(', '):'not specified')+nl+'PA NUMBER: '+(liveVals.paNumber||c.paNumber||'none')+' STATUS: '+(liveVals.paStatus||c.paStatus||'not set')+nl+'PA PROCEDURE: '+(c.paProcedure||'not specified')+nl+'PA TREATING DOCTOR: '+(c.paTreatingDoctor||'not specified')+nl+'PA HOSPITAL: '+(c.paHospital||'not specified')+nl+'PA EST. COST: EUR '+(c.paEstCost||'not stated')+nl+(c.preexisting_conditions||c.preexistingConditions?'PRE-EXISTING (from documents): '+(c.preexisting_conditions||c.preexistingConditions||'')+nl:'')+(c.preexistingConditions?'PRE-EXISTING CONDITIONS: '+c.preexistingConditions+nl:'')+(parseFloat(c.reserve||0)>0?'CASE RESERVE: EUR '+c.reserve+nl:'')+nl+(function(){ var lang=localStorage.getItem('mp_eval_lang')||'auto'; if(lang==='el') return 'INSTRUCTION: Write the ENTIRE evaluation in GREEK (Ελληνικά).\n'; if(lang==='en') return 'INSTRUCTION: Write the ENTIRE evaluation in ENGLISH.\n'; return 'INSTRUCTION: Write in ENGLISH by default. Only write in Greek if the policy wording above is in Greek.\n'; })()+'EVALUATION INSTRUCTIONS:\n'
     +'You are evaluating case '+( c.caseNum||'-')+' for patient '+(patient||'unknown')+'.\n'
     +'Provide a DEFINITIVE and FINAL evaluation. This evaluation cannot be changed later.\n'
     +'Base your decision ONLY on the facts provided above and the policy wording.\n'
@@ -6179,7 +6241,8 @@ function renderCD(c) {
   html += '<div style="font-family:Syne,sans-serif;font-size:12px;font-weight:700;color:#fff">🔍 Fraud Indicators</div>';
   html += '<div id="fraud_mini" style="font-size:11px;color:rgba(255,255,255,.7)">Checking...</div>';
   html += '</div>';
-  html += '<div style="padding:14px 16px"><div id="fraud_panel">Loading...</div></div>';
+  html += '<div style="padding:14px 16px"><div id="fraud_panel">Loading...</div>'
+       + '<div id="docfraud_panel" style="margin-top:12px">Loading...</div></div>';
   html += '</div>';
   // Facility Legitimacy Panel
   html += '<div class="card" style="padding:0;overflow:hidden">';
@@ -12200,6 +12263,539 @@ function refreshFraud(id) {
   toast('Fraud check updated');
 }
 
+// ══════════════════════════════════════════════════════════════
+// 6. DOCUMENT & IDENTITY FRAUD DETECTION
+// ══════════════════════════════════════════════════════════════
+//
+// Two layers, deliberately separated by what each is good at:
+//
+//   • The model TRANSCRIBES — it reads an ID's machine-readable zone,
+//     or sees that a figure has been pasted over, which is OCR and
+//     vision work.
+//   • This code DECIDES — check digits, cross-document arithmetic and
+//     date logic are computed here, where the answer is provable and
+//     identical every run.
+//
+// A model asked to "check whether the passport number is valid" will
+// happily say yes. The check digits below cannot be talked round: a
+// single altered character in a document number or date of birth fails
+// the arithmetic, every time.
+
+// ── ICAO Doc 9303 machine-readable zone ──────────────────────
+// Values: digits as themselves, A–Z as 10–35, filler '<' as 0.
+function mrzCharValue(ch) {
+  if(ch === '<') return 0;
+  if(ch >= '0' && ch <= '9') return ch.charCodeAt(0) - 48;
+  if(ch >= 'A' && ch <= 'Z') return ch.charCodeAt(0) - 55;
+  return -1;
+}
+
+// Weighted modulus-10 over the repeating 7-3-1 pattern, per Doc 9303.
+function mrzCheckDigit(str) {
+  var w = [7,3,1], sum = 0;
+  for(var i=0; i<str.length; i++) {
+    var v = mrzCharValue(str[i]);
+    if(v < 0) return null;
+    sum += v * w[i % 3];
+  }
+  return sum % 10;
+}
+
+function _mrzOk(field, expected, actual) {
+  return { field: field, expected: expected, actual: actual, valid: String(expected) === String(actual) };
+}
+
+// Accepts the MRZ lines exactly as printed. Returns the parsed fields and
+// one entry per check digit, or null if the lines are not a recognised format.
+function parseMRZ(lines) {
+  var L = (lines||[]).map(function(l){ return String(l||'').replace(/\s+/g,'').toUpperCase(); }).filter(Boolean);
+  if(L.length === 2 && L[0].length === 44 && L[1].length === 44) return _mrzTD3(L);
+  if(L.length === 2 && L[0].length === 36 && L[1].length === 36) return _mrzTD2(L);
+  if(L.length === 3 && L.every(function(l){ return l.length === 30; })) return _mrzTD1(L);
+  return null;
+}
+
+function _mrzTD3(L) { // passports
+  var l2 = L[1];
+  var docNum = l2.slice(0,9),  docChk = l2[9];
+  var dob    = l2.slice(13,19), dobChk = l2[19];
+  var exp    = l2.slice(21,27), expChk = l2[27];
+  var opt    = l2.slice(28,42), optChk = l2[42];
+  return { format:'TD3 (passport)', documentNumber: docNum.replace(/</g,''),
+    nationality: l2.slice(10,13), dateOfBirth: dob, expiryDate: exp, sex: l2[20],
+    surname: _mrzName(L[0]).surname, givenNames: _mrzName(L[0]).givenNames,
+    checks: [ _mrzOk('document number', mrzCheckDigit(docNum), docChk),
+              _mrzOk('date of birth',   mrzCheckDigit(dob),    dobChk),
+              _mrzOk('expiry date',     mrzCheckDigit(exp),    expChk),
+              _mrzOk('personal number', mrzCheckDigit(opt),    optChk),
+              _mrzOk('composite',       mrzCheckDigit(docNum+docChk+dob+dobChk+exp+expChk+opt+optChk), l2[43]) ] };
+}
+
+function _mrzTD2(L) {
+  var l2 = L[1];
+  var docNum = l2.slice(0,9),  docChk = l2[9];
+  var dob    = l2.slice(13,19), dobChk = l2[19];
+  var exp    = l2.slice(21,27), expChk = l2[27];
+  var opt    = l2.slice(28,35);
+  return { format:'TD2 (ID card)', documentNumber: docNum.replace(/</g,''),
+    nationality: l2.slice(10,13), dateOfBirth: dob, expiryDate: exp, sex: l2[20],
+    surname: _mrzName(L[0]).surname, givenNames: _mrzName(L[0]).givenNames,
+    checks: [ _mrzOk('document number', mrzCheckDigit(docNum), docChk),
+              _mrzOk('date of birth',   mrzCheckDigit(dob),    dobChk),
+              _mrzOk('expiry date',     mrzCheckDigit(exp),    expChk),
+              _mrzOk('composite',       mrzCheckDigit(docNum+docChk+dob+dobChk+exp+expChk+opt), l2[35]) ] };
+}
+
+function _mrzTD1(L) {
+  var l1 = L[0], l2 = L[1];
+  var docNum = l1.slice(5,14), docChk = l1[14], opt1 = l1.slice(15,30);
+  var dob    = l2.slice(0,6),  dobChk = l2[6];
+  var exp    = l2.slice(8,14), expChk = l2[14];
+  var opt2   = l2.slice(18,29);
+  return { format:'TD1 (ID card)', documentNumber: docNum.replace(/</g,''),
+    nationality: l2.slice(15,18), dateOfBirth: dob, expiryDate: exp, sex: l2[7],
+    surname: _mrzName(L[2]).surname, givenNames: _mrzName(L[2]).givenNames,
+    checks: [ _mrzOk('document number', mrzCheckDigit(docNum), docChk),
+              _mrzOk('date of birth',   mrzCheckDigit(dob),    dobChk),
+              _mrzOk('expiry date',     mrzCheckDigit(exp),    expChk),
+              _mrzOk('composite',       mrzCheckDigit(docNum+docChk+opt1+dob+dobChk+exp+expChk+opt2), l2[29]) ] };
+}
+
+// The name field is SURNAME<<GIVEN<NAMES, padded with '<'.
+function _mrzName(line) {
+  var s = String(line||'').replace(/^[A-Z<]{5}/, ''); // strip doc code + issuing state
+  var parts = s.split('<<');
+  return { surname: (parts[0]||'').replace(/</g,' ').trim(),
+           givenNames: (parts[1]||'').replace(/</g,' ').trim() };
+}
+
+// YYMMDD as printed in an MRZ → a Date. The century is inferred: a
+// two-digit year is a birth date if it lands in the past, an expiry if
+// it lands ahead, so the caller says which it is.
+function mrzDate(yymmdd, kind) {
+  if(!/^\d{6}$/.test(yymmdd||'')) return null;
+  var yy = parseInt(yymmdd.slice(0,2),10), mm = parseInt(yymmdd.slice(2,4),10), dd = parseInt(yymmdd.slice(4,6),10);
+  if(mm < 1 || mm > 12 || dd < 1 || dd > 31) return null;
+  var nowYY = new Date().getFullYear() % 100;
+  var century = (kind === 'expiry') ? (yy <= nowYY + 50 ? 2000 : 1900)
+                                    : (yy <= nowYY ? 2000 : 1900);
+  return new Date(Date.UTC(century + yy, mm - 1, dd));
+}
+
+// ── Deterministic document checks ────────────────────────────
+// Everything below is computed from data already extracted from the
+// case's documents. No API call, no cost, same answer every run — so a
+// finding here is something you can put in a letter to an insurer.
+
+function _dfName(s) {
+  // Compare names without being defeated by case, punctuation, titles or
+  // word order: "GRAY, Raymond Mr" and "raymond gray" are the same person.
+  return String(s||'')
+    .toUpperCase()
+    .replace(/\b(MR|MRS|MS|MISS|DR|PROF|SIR|MADAM)\b\.?/g, ' ')
+    .replace(/[^A-ZͰ-Ͽ ]/g, ' ')
+    .split(/\s+/).filter(Boolean).sort().join(' ');
+}
+function _dfNamesAgree(a, b) {
+  var A = _dfName(a), B = _dfName(b);
+  if(!A || !B) return true;              // nothing to compare — not a finding
+  if(A === B) return true;
+  var at = A.split(' '), bt = B.split(' ');
+  // Agreement if every token of the shorter name appears in the longer one:
+  // covers a missing middle name, not a different person.
+  var short = at.length <= bt.length ? at : bt, long = at.length <= bt.length ? bt : at;
+  return short.length >= 2 && short.every(function(t){ return long.indexOf(t) !== -1; });
+}
+function _dfDate(v) { var d = v ? new Date(v) : null; return (d && !isNaN(d.getTime())) ? d : null; }
+function _dfDays(a, b) { return (a.getTime() - b.getTime()) / 86400000; }
+
+// c: the case. Returns {findings, score, riskLevel, checksRun}.
+function runDocumentFraudCheck(c) {
+  var F = [], score = 0, checksRun = 0;
+  var add = function(level, title, detail, evidence) {
+    F.push({level:level, title:title, detail:detail, evidence:evidence||''});
+    score += (level === 'critical' ? 6 : level === 'high' ? 4 : level === 'medium' ? 2 : 1);
+  };
+  if(!c) return { findings:[], score:0, riskLevel:'unknown', checksRun:0 };
+
+  var invoices = (typeof getInvoices === 'function') ? (getInvoices(c.id)||[]) : [];
+  var di = c.docIntegrity || null;   // saved output of the AI examination, if it has been run
+
+  // ── IDENTITY DOCUMENTS ─────────────────────────────────────
+  var mrzResults = [];
+  ((di && di.identity_documents) || []).forEach(function(doc) {
+    if(!doc || !doc.mrz_lines || !doc.mrz_lines.length) return;
+    var parsed = parseMRZ(doc.mrz_lines);
+    if(!parsed) {
+      checksRun++;
+      add('medium', 'Unreadable machine-readable zone',
+        'An identity document was supplied but its MRZ could not be parsed into any ICAO format (TD1/TD2/TD3). Genuine travel documents always conform.',
+        (doc.file_name||'identity document'));
+      return;
+    }
+    mrzResults.push({ file: doc.file_name||'identity document', parsed: parsed });
+    checksRun++;
+
+    var bad = parsed.checks.filter(function(k){ return !k.valid; });
+    if(bad.length) {
+      add('critical', 'Identity document fails its own check digits',
+        'The ' + parsed.format + ' machine-readable zone is internally inconsistent: ' +
+        bad.map(function(k){ return k.field + ' (printed ' + k.actual + ', computed ' + k.expected + ')'; }).join(', ') +
+        '. A genuine document is arithmetically self-consistent, so this indicates the zone has been altered or fabricated.',
+        parsed.documentNumber ? ('document ' + parsed.documentNumber) : '');
+    }
+
+    // Expired on the date of loss.
+    var dol = _dfDate(c.dol), expiry = mrzDate(parsed.expiryDate, 'expiry');
+    if(dol && expiry) {
+      checksRun++;
+      if(expiry < dol) add('high', 'Identity document expired before the date of loss',
+        'The document expired on ' + expiry.toISOString().slice(0,10) + ', which is before the date of loss on ' + dol.toISOString().slice(0,10) + '.', parsed.documentNumber);
+    }
+
+    // The holder is not the patient.
+    var holder = (parsed.givenNames + ' ' + parsed.surname).trim();
+    if(holder && c.patient) {
+      checksRun++;
+      if(!_dfNamesAgree(holder, c.patient))
+        add('critical', 'Identity document is in a different name',
+          'The document is issued to "' + holder + '" but the case patient is "' + c.patient + '".',
+          parsed.documentNumber);
+    }
+  });
+
+  // ── WRONG-PATIENT DOCUMENTS ────────────────────────────────
+  // An invoice naming someone else is either a filing error or another
+  // person's records being used to support this claim. Both need an answer.
+  invoices.forEach(function(inv) {
+    if(!inv || !inv.patient_name || !c.patient) return;
+    checksRun++;
+    if(!_dfNamesAgree(inv.patient_name, c.patient))
+      add('high', 'Document names a different patient',
+        'A document in this case is made out to "' + inv.patient_name + '" while the case patient is "' + c.patient + '".',
+        (inv.provider_name||'') + (inv.invoice_number ? ' · invoice ' + inv.invoice_number : ''));
+  });
+
+  // ── DUPLICATE AND REUSED INVOICE NUMBERS ───────────────────
+  var byNumber = {};
+  invoices.forEach(function(inv) {
+    var n = String((inv&&inv.invoice_number)||'').trim().toUpperCase();
+    if(!n || n === 'null') return;
+    (byNumber[n] = byNumber[n] || []).push(inv);
+  });
+  Object.keys(byNumber).forEach(function(n) {
+    if(byNumber[n].length > 1) {
+      checksRun++;
+      add('medium', 'The same invoice number appears more than once',
+        'Invoice number ' + n + ' is present on ' + byNumber[n].length + ' documents in this case. Either the same invoice has been submitted twice, or two different invoices carry one number.', n);
+    }
+  });
+
+  // The same invoice number on another patient's case is a much stronger
+  // signal than a duplicate within one case.
+  if(typeof CASES !== 'undefined' && CASES && typeof getInvoices === 'function') {
+    Object.keys(byNumber).forEach(function(n) {
+      CASES.forEach(function(other) {
+        if(!other || other.id === c.id) return;
+        var otherInvs = getInvoices(other.id) || [];
+        otherInvs.forEach(function(oi) {
+          var on = String((oi&&oi.invoice_number)||'').trim().toUpperCase();
+          if(on && on === n) {
+            checksRun++;
+            var samePatient = _dfNamesAgree(other.patient, c.patient);
+            add(samePatient ? 'medium' : 'critical',
+              samePatient ? 'Invoice number already claimed on another case'
+                          : 'Invoice number reused across different patients',
+              'Invoice ' + n + ' also appears on case ' + (other.caseNum||other.id) +
+              ' (patient "' + (other.patient||'unknown') + '")' +
+              (samePatient ? '. Check this is not a double submission.'
+                           : '. One invoice cannot belong to two patients — this is a strong indicator of fabricated or recycled documents.'),
+              other.caseNum||other.id);
+          }
+        });
+      });
+    });
+  }
+
+  // ── ARITHMETIC THAT DOES NOT HOLD ──────────────────────────
+  // Altering a figure on an invoice usually breaks its own addition.
+  invoices.forEach(function(inv) {
+    if(!inv || !inv.line_items || inv.line_items.length < 2) return;
+    var printed = parseFloat(inv.total)||0;
+    if(printed <= 0) return;
+    checksRun++;
+    var sum = inv.line_items.reduce(function(a,li){ return a + (parseFloat(li&&li.total)||0); }, 0);
+    sum += (parseFloat(inv.tax)||0) - (parseFloat(inv.discount)||0);
+    var diff = Math.abs(sum - printed);
+    // Tolerate rounding and small omitted charges; flag a real gap.
+    if(diff > Math.max(1, printed * 0.02))
+      add('high', 'Invoice does not add up',
+        'The line items (plus tax, less discount) total ' + sum.toFixed(2) + ' but the invoice states ' +
+        printed.toFixed(2) + ' — a difference of ' + diff.toFixed(2) + ' ' + (inv.currency||'') +
+        '. An altered figure commonly shows up this way.',
+        (inv.provider_name||'') + (inv.invoice_number ? ' · invoice ' + inv.invoice_number : ''));
+  });
+
+  // ── DATES THAT CANNOT BE TRUE ──────────────────────────────
+  var adm = _dfDate(c.admissionDate), dis = _dfDate(c.dischargeDate), today = new Date();
+  invoices.forEach(function(inv) {
+    var invDate = _dfDate(inv && (inv.invoice_date || inv.purchase_date));
+    if(!invDate) return;
+    checksRun++;
+    if(_dfDays(invDate, today) > 1)
+      add('high', 'Document is dated in the future',
+        'A document is dated ' + invDate.toISOString().slice(0,10) + ', which has not yet happened.',
+        (inv.provider_name||'') + (inv.invoice_number ? ' · invoice ' + inv.invoice_number : ''));
+    if(adm && _dfDays(adm, invDate) > 1)
+      add('medium', 'Document pre-dates the admission',
+        'A document is dated ' + invDate.toISOString().slice(0,10) + ', before the admission on ' + adm.toISOString().slice(0,10) + '.',
+        (inv.provider_name||'') + (inv.invoice_number ? ' · invoice ' + inv.invoice_number : ''));
+    if(dis && _dfDays(invDate, dis) > 90)
+      add('low', 'Document issued long after discharge',
+        'A document is dated ' + invDate.toISOString().slice(0,10) + ', more than 90 days after discharge on ' + dis.toISOString().slice(0,10) + '.',
+        (inv.provider_name||'') + (inv.invoice_number ? ' · invoice ' + inv.invoice_number : ''));
+  });
+
+  // ── SHARED PAYMENT CARD ACROSS PATIENTS ────────────────────
+  // Unrelated claimants paying on one card is a recognised organised-fraud pattern.
+  if(typeof CASES !== 'undefined' && CASES && typeof getInvoices === 'function') {
+    var cards = {};
+    invoices.forEach(function(inv){ if(inv && inv.card_last4) cards[String(inv.card_last4)] = true; });
+    Object.keys(cards).forEach(function(last4) {
+      CASES.forEach(function(other) {
+        if(!other || other.id === c.id) return;
+        if(_dfNamesAgree(other.patient, c.patient)) return;
+        (getInvoices(other.id)||[]).forEach(function(oi) {
+          if(oi && String(oi.card_last4||'') === last4) {
+            checksRun++;
+            add('high', 'Payment card shared with an unrelated patient',
+              'A card ending ' + last4 + ' paid for documents on this case and on case ' +
+              (other.caseNum||other.id) + ' for "' + (other.patient||'unknown') + '".',
+              'card ••••' + last4);
+          }
+        });
+      });
+    });
+  }
+
+  // ── WHAT THE EXTRACTOR ITSELF NOTICED ──────────────────────
+  invoices.forEach(function(inv) {
+    var notes = String((inv&&inv.notes)||'') + ' ' + ((inv&&inv.extraction_warnings)||[]).join(' ');
+    if(/handwrit|altered|overwrit|correction|tipp-?ex|white.?out|crossed out|amended|scratch/i.test(notes)) {
+      checksRun++;
+      add('medium', 'Alteration noted on the document itself',
+        'When the document was read, the following was recorded: "' + notes.trim().slice(0,220) + '"',
+        (inv.provider_name||'') + (inv.invoice_number ? ' · invoice ' + inv.invoice_number : ''));
+    }
+  });
+
+  // ── MISSING PROVIDER IDENTIFIERS ON LARGE INVOICES ─────────
+  invoices.forEach(function(inv) {
+    var t = parseFloat(inv && inv.total)||0;
+    if(t >= 5000 && inv && !inv.provider_tax_id) {
+      checksRun++;
+      add('low', 'High-value invoice carries no provider tax number',
+        'An invoice of ' + t.toFixed(2) + ' ' + (inv.currency||'') + ' from "' + (inv.provider_name||'an unnamed provider') +
+        '" shows no tax registration number. Legitimate providers issue tax-registered invoices at this value.',
+        inv.invoice_number||'');
+    }
+  });
+
+  // ── WHAT THE MODEL SAW ON THE PAGE ─────────────────────────
+  // Visual observations are advisory: they come from a model, so they are
+  // reported as something to look at, never as a proven finding.
+  ((di && di.tampering_observations) || []).forEach(function(o) {
+    if(!o || !o.observation) return;
+    checksRun++;
+    var lvl = ({high:'high', medium:'medium', low:'low'})[String(o.confidence||'').toLowerCase()] || 'low';
+    add(lvl, 'Possible tampering seen on the page (AI observation)',
+      o.observation + ' — this is a visual impression from the document image and needs a human to confirm it before it is relied on.',
+      o.file_name||'');
+  });
+
+  // The headline level is driven by the most serious single finding, not by the
+  // running total. A failed identity check digit is the gravest thing this
+  // detector can establish, and it must not be averaged down to "medium"
+  // because it happens to be the only finding on the case. The score still
+  // escalates a pile-up of lesser findings.
+  var worst = F.reduce(function(w, f) {
+    // 'clear' must carry a rank: comparing a number against undefined is
+    // always false, which would leave the worst level stuck at 'clear'.
+    var rank = {clear:0, low:1, medium:2, high:3, critical:4};
+    return (rank[f.level]||0) > (rank[w]||0) ? f.level : w;
+  }, 'clear');
+  var byScore = score === 0 ? 'clear' : score <= 2 ? 'low' : score <= 6 ? 'medium' : score <= 12 ? 'high' : 'critical';
+  var order = ['clear','low','medium','high','critical'];
+  var riskLevel = order[Math.max(order.indexOf(worst), order.indexOf(byScore))];
+
+  return { findings: F, score: score, riskLevel: riskLevel, checksRun: checksRun,
+           mrz: mrzResults, aiRun: !!di, aiRunAt: (di && di.ranAt) || null };
+}
+
+// ── AI document examination ──────────────────────────────────
+// The model is asked for two things only: what it can SEE on the page,
+// and a verbatim transcription of any machine-readable zone. It is
+// explicitly told not to judge authenticity — that judgement is made by
+// the arithmetic above, and by a person.
+var DOC_INTEGRITY_PROMPT =
+  'You are a document examiner supporting a medical insurance claims team. You are looking at the documents '
++ 'submitted with one claim. Report ONLY what is visibly present. You are not deciding whether anything is '
++ 'genuine — a human and a set of arithmetic checks do that.\n\n'
++ 'TASK 1 — IDENTITY DOCUMENTS\n'
++ 'For every passport, national ID card or travel document: transcribe the machine-readable zone (the two or '
++ 'three lines of monospaced text with < characters) EXACTLY, character for character, one array entry per line. '
++ 'Copy < as <, never as a space or a letter. Do not correct, complete, tidy or guess any character: if a '
++ 'character is unreadable, stop and set mrz_lines to [] rather than supply a repaired line. A single wrong '
++ 'character makes the result worthless, and a guessed one produces a false accusation of forgery.\n\n'
++ 'TASK 2 — VISIBLE IRREGULARITIES\n'
++ 'Report only things you can actually see on the page, for example: a figure in a different font or alignment '
++ 'from the rest of its column; text sitting on a different baseline; a digit that overlaps its neighbour; a '
++ 'rectangle of different background behind an amount; a stamp or signature that is pixel-identical in two '
++ 'places; a logo at a different resolution from the surrounding page; a total that disagrees with the column '
++ 'above it; two documents from supposedly different providers sharing a layout, font and spacing.\n'
++ 'For each, give the file, what you see, where on the page, and your confidence (high/medium/low).\n'
++ 'Scans are often poor. Compression artefacts, skew, shadow, moiré and low resolution are NOT irregularities. '
++ 'If a document simply looks like an ordinary photocopy, report nothing for it. An empty list is the correct '
++ 'and expected answer for honest documents, and is far more useful than a speculative one.\n\n'
++ 'TASK 3 — CROSS-DOCUMENT CONSISTENCY\n'
++ 'Note where documents disagree with each other on patient name, dates of treatment, provider identity or amounts.\n\n'
++ 'Return ONLY raw JSON, no markdown:\n'
++ '{"identity_documents":[{"file_name":"","document_type":"passport|national_id|residence_permit|driving_licence|other",'
++ '"mrz_lines":[],"name_as_printed":null,"document_number_as_printed":null,"notes":null}],'
++ '"tampering_observations":[{"file_name":"","observation":"","location_on_page":"","confidence":"high|medium|low"}],'
++ '"cross_document_inconsistencies":[{"field":"","values_seen":[],"files":[]}],'
++ '"documents_examined":0,"summary":"one sentence"}';
+
+async function runDocumentIntegrityAI(caseId) {
+  var c = getC(caseId);
+  if(!c) { toast('Case not found'); return; }
+  if(!getKey()) { toast('Add your API key in Settings first'); return; }
+
+  var btn = document.getElementById('docfraud_run');
+  if(btn) { btn.disabled = true; btn.textContent = 'Examining documents…'; }
+
+  try {
+    // Only this case's files, and never the generated evaluation reports.
+    var files = (_filesForCaseId === caseId ? FILES : []).filter(function(f) {
+      return f && f.data && f.data.length > 100 && !f._isEvalReport
+        && ['pdf','img','heic','doc'].indexOf(f.ext) !== -1;
+    });
+    if(!files.length) {
+      toast('No examinable documents are loaded for this case', 5000);
+      return;
+    }
+
+    var blocks = [];
+    for(var i=0; i<files.length; i++) {
+      var f = files[i];
+      var b64 = String(f.data||'').split(',')[1];
+      if(!b64) continue;
+      blocks.push({type:'text', text:'=== FILE: ' + f.name + ' ==='});
+      if(f.ext === 'pdf') {
+        blocks.push({type:'document', source:{type:'base64', media_type:'application/pdf', data:b64}, title:f.name});
+      } else if(f.ext === 'img' || f.ext === 'heic') {
+        var mt = (String(f.data).match(/^data:([^;]+);/)||[])[1] || 'image/jpeg';
+        if(['image/jpeg','image/png','image/gif','image/webp'].indexOf(mt) === -1) continue;
+        blocks.push({type:'image', source:{type:'base64', media_type:mt, data:b64}});
+      }
+    }
+    if(!blocks.length) { toast('No document could be prepared for examination', 5000); return; }
+
+    blocks.push({type:'text', text:'The case patient is recorded as: ' + (c.patient||'not stated') +
+      '. Examine every document above and return the JSON described in your instructions.'});
+
+    var raw = await apiCall([{role:'user', content:blocks}], DOC_INTEGRITY_PROMPT, 4000);
+    var data = null;
+    try {
+      var m = String(raw||'').match(/\{[\s\S]*\}/);
+      data = m ? JSON.parse(m[0]) : null;
+    } catch(pe) {
+      console.warn('[docIntegrity] Could not parse response:', pe.message);
+    }
+    if(!data) { toast('The examination returned nothing readable — try again', 6000); return; }
+
+    data.ranAt = new Date().toISOString();
+    data.filesExamined = files.map(function(f){ return f.name; });
+    updC(caseId, { docIntegrity: data });
+    if(typeof addTL === 'function') addTL(caseId, 'Document integrity examination run on ' + files.length + ' document(s)');
+
+    refreshDocFraud(caseId);
+
+    var res = runDocumentFraudCheck(getC(caseId));
+    var crit = res.findings.filter(function(f){ return f.level === 'critical'; }).length;
+    toast(crit ? ('🚨 ' + crit + ' critical document finding(s) — review before deciding')
+               : ('✓ Examined ' + files.length + ' document(s) — ' + res.findings.length + ' finding(s)'), 7000);
+  } catch(e) {
+    console.error('[docIntegrity]', e);
+    toast('Document examination failed: ' + (e.message||'unknown error'), 8000);
+  } finally {
+    if(btn) { btn.disabled = false; btn.textContent = '🔬 Examine Documents & ID'; }
+  }
+}
+
+// ── Panel ────────────────────────────────────────────────────
+function renderDocFraudPanel(c) {
+  var r = runDocumentFraudCheck(c);
+  var colors = { clear:'#059669', low:'#d97706', medium:'#ea580c', high:'#dc2626', critical:'#7f1d1d', unknown:'#8090b0' };
+  var labels = { clear:'✅ Nothing found', low:'⚠ Low', medium:'🚩 Medium', high:'🚨 High', critical:'⛔ Critical', unknown:'—' };
+  var col = colors[r.riskLevel], lbl = labels[r.riskLevel];
+
+  var h = '<div style="background:#fff;border:2px solid '+col+'44;border-radius:8px;padding:14px 16px">';
+  h += '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">';
+  h += '<div style="font-size:12px;font-weight:700;color:var(--navy)">Document &amp; Identity Integrity</div>';
+  h += '<span style="padding:3px 10px;border-radius:20px;font-size:11px;font-weight:700;color:'+col+';background:'+col+'18;border:1px solid '+col+'44">'+lbl+'</span>';
+  h += '</div>';
+  h += '<div style="font-size:10px;color:var(--tx3);margin-bottom:10px">'+r.checksRun+' check'+(r.checksRun===1?'':'s')+' run on this case’s documents'
+     + (r.aiRun ? ' · page examination done '+new Date(r.aiRunAt).toLocaleDateString('en-GB') : ' · page examination not yet run')+'</div>';
+
+  // Identity documents and their check digits.
+  (r.mrz||[]).forEach(function(m) {
+    var p = m.parsed, allOk = p.checks.every(function(k){ return k.valid; });
+    var ic = allOk ? '#059669' : '#7f1d1d';
+    h += '<div style="border:1px solid '+ic+'44;background:'+ic+'0d;border-radius:6px;padding:9px 11px;margin-bottom:8px">';
+    h += '<div style="font-size:11px;font-weight:700;color:'+ic+';margin-bottom:4px">'
+       + (allOk ? '✅ ' : '⛔ ') + esc(p.format) + ' — ' + (allOk ? 'check digits valid' : 'CHECK DIGITS FAIL') + '</div>';
+    h += '<div style="font-size:10px;color:var(--tx2);line-height:1.6">';
+    if(p.documentNumber) h += 'Document ' + esc(p.documentNumber) + ' · ';
+    if(p.nationality)    h += esc(p.nationality) + ' · ';
+    if(p.surname || p.givenNames) h += esc((p.givenNames+' '+p.surname).trim()) + '<br>';
+    h += p.checks.map(function(k){
+      return '<span style="color:'+(k.valid?'#059669':'#dc2626')+'">'+(k.valid?'✓':'✗')+' '+esc(k.field)+'</span>';
+    }).join(' &nbsp; ');
+    h += '</div><div style="font-size:9px;color:var(--tx3);margin-top:4px">'+esc(m.file)+'</div></div>';
+  });
+
+  if(!r.findings.length) {
+    h += '<div style="text-align:center;padding:12px;color:#059669;font-size:12px">'
+       + (r.checksRun ? 'No document or identity irregularities found' : 'No documents to check yet') + '</div>';
+  } else {
+    r.findings.forEach(function(f) {
+      var fc = colors[f.level] || '#8090b0';
+      var ico = {critical:'⛔',high:'🚨',medium:'🚩',low:'⚠'}[f.level] || '•';
+      h += '<div style="padding:8px 10px;border-radius:6px;background:'+fc+'10;border:1px solid '+fc+'33;margin-bottom:7px">';
+      h += '<div style="font-size:11px;font-weight:700;color:'+fc+';margin-bottom:3px">'+ico+' '+esc(f.title)+'</div>';
+      h += '<div style="font-size:11px;color:var(--navy);line-height:1.5">'+esc(f.detail)+'</div>';
+      if(f.evidence) h += '<div style="font-size:10px;color:var(--tx3);margin-top:4px">'+esc(f.evidence)+'</div>';
+      h += '</div>';
+    });
+  }
+
+  h += '<button type="button" id="docfraud_run" onclick="runDocumentIntegrityAI(CURID)" '
+     + 'style="margin-top:8px;width:100%;padding:8px;background:var(--navy);color:#fff;border:none;border-radius:6px;'
+     + 'font-size:12px;font-weight:700;cursor:pointer">🔬 Examine Documents &amp; ID</button>';
+  h += '<div style="font-size:9px;color:var(--tx3);margin-top:6px;line-height:1.5">'
+     + 'Check digits and cross-document arithmetic are computed here and are exact. Anything labelled an AI '
+     + 'observation is a visual impression and must be confirmed by a person before it is acted on.</div>';
+  h += '</div>';
+  return h;
+}
+
+function refreshDocFraud(id) {
+  var panel = document.getElementById('docfraud_panel');
+  if(panel) panel.innerHTML = renderDocFraudPanel(getC(id)||{});
+}
+
+
 // ── UPDATE renderCD TO INCLUDE NEW PANELS ────────────────────
 // These panels are injected into the existing renderCD card structure
 // via a post-render hook called from wiring section
@@ -12224,9 +12820,13 @@ function injectStandardsPanels(c, cid) {
   // Fraud panel
   var fraudEl = document.getElementById('fraud_panel');
   if(fraudEl) fraudEl.innerHTML = renderFraudPanel(c);
+
+  // Document & identity integrity panel
+  var dfEl = document.getElementById('docfraud_panel');
+  if(dfEl) dfEl.innerHTML = renderDocFraudPanel(c);
 }
 
-console.log('[Standards] IPMI enhancements loaded: SLA/TAT, PA, Repatriation, Reserves, Fraud');
+console.log('[Standards] IPMI enhancements loaded: SLA/TAT, PA, Repatriation, Reserves, Fraud, Document & ID integrity');
 
 </script>
 

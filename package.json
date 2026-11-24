@@ -10,7 +10,9 @@
     "eval:self": "node tests/golden/self-test.mjs",
     "eval:record": "node tests/golden/run-eval.mjs --record",
     "test": "npm run check && npm run eval:self && npm run eval:dry",
-    "test:auth": "node tests/auth/gate-closed.test.mjs && node tests/auth/sign-in.test.mjs"
+    "test:auth": "node tests/auth/gate-closed.test.mjs && node tests/auth/sign-in.test.mjs",
+    "test:fraud": "node tests/fraud/document-fraud.test.mjs",
+    "test:browser": "npm run test:auth && npm run test:fraud"
   },
   "engines": {
     "node": ">=18"
