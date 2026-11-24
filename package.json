@@ -12,7 +12,8 @@
     "test": "npm run check && npm run eval:self && npm run eval:dry",
     "test:auth": "node tests/auth/gate-closed.test.mjs && node tests/auth/sign-in.test.mjs",
     "test:fraud": "node tests/fraud/document-fraud.test.mjs",
-    "test:browser": "npm run test:auth && npm run test:fraud"
+    "test:browser": "npm run test:auth && npm run test:fraud && npm run test:files",
+    "test:files": "node tests/files/duplicate-files.test.mjs"
   },
   "engines": {
     "node": ">=18"

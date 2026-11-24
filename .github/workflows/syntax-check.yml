@@ -56,3 +56,8 @@ jobs:
       # or a missing middle name gets ignored, and then catches nothing.
       - name: Document & ID fraud detection
         run: npm run test:fraud
+
+      # Case isolation and duplicate handling. One patient's document showing
+      # under another patient's claim is a confidentiality failure.
+      - name: Case file isolation & duplicate handling
+        run: npm run test:files
